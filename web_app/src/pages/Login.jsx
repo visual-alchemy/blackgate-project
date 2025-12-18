@@ -102,7 +102,7 @@ const Login = () => {
           <div style={styles.logo}>
             <LoginOutlined />
           </div>
-          <Title level={2}>Welcome to BlackGate-SRT</Title>
+          <Title level={2}>Welcome to Blackgate</Title>
           <Text type="secondary">
             Please sign in to access your account
           </Text>

@@ -67,6 +67,28 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   ];
 
   const handleValuesChange = (changedValues, allValues) => {
+    // Auto-fill Local Address when mode is set to listener or rendezvous
+    if (changedValues?.schema_options?.mode) {
+      const mode = changedValues.schema_options.mode;
+      if (mode === 'listener' || mode === 'rendezvous') {
+        // Set to 0.0.0.0 to bind to all interfaces (common for listeners)
+        form.setFieldsValue({
+          schema_options: {
+            ...allValues.schema_options,
+            localaddress: '0.0.0.0'
+          }
+        });
+      } else if (mode === 'caller') {
+        // Clear the address for caller mode (user needs to enter remote address)
+        form.setFieldsValue({
+          schema_options: {
+            ...allValues.schema_options,
+            localaddress: ''
+          }
+        });
+      }
+    }
+
     if (onChange) {
       onChange(allValues);
     }
@@ -126,7 +148,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       </Title>
 
       {id === 'new' && (
-        <Card 
+        <Card
           style={{ marginBottom: '24px', backgroundColor: '#141414', border: '1px solid #303030' }}
           size="small"
         >
@@ -417,7 +439,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
               </Space>
 
               {id === 'new' && (
-                <Card 
+                <Card
                   style={{ marginTop: '24px', backgroundColor: '#141414', border: '1px solid #303030' }}
                   size="small"
                 >
