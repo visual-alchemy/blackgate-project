@@ -20,7 +20,7 @@ defmodule Mix.Tasks.CompileCApp do
     end
 
     # Verify the binary was created
-    binary_path = Path.join(["native", "build", "hydra_srt_pipeline"])
+    binary_path = Path.join(["native", "build", "blackgate_pipeline"])
 
     unless File.exists?(binary_path) do
       Mix.raise("C application binary was not created at #{binary_path}")

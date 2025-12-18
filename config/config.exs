@@ -7,19 +7,19 @@
 # General application configuration
 import Config
 
-config :hydra_srt,
-  ecto_repos: [HydraSrt.Repo],
+config :blackgate,
+  ecto_repos: [Blackgate.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
 # Configures the endpoint
-config :hydra_srt, HydraSrtWeb.Endpoint,
+config :blackgate, BlackgateWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Phoenix.Endpoint.Cowboy2Adapter,
   render_errors: [
-    formats: [json: HydraSrtWeb.ErrorJSON],
+    formats: [json: BlackgateWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: HydraSrt.PubSub,
+  pubsub_server: Blackgate.PubSub,
   live_view: [signing_salt: "+CT93K1p"],
   server: true
 

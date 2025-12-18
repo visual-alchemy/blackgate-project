@@ -1,2 +1,2 @@
 ExUnit.start()
-Ecto.Adapters.SQL.Sandbox.mode(HydraSrt.Repo, :manual)
+Ecto.Adapters.SQL.Sandbox.mode(Blackgate.Repo, :manual)

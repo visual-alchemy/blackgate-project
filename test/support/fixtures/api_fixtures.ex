@@ -1,7 +1,7 @@
-defmodule HydraSrt.ApiFixtures do
+defmodule Blackgate.ApiFixtures do
   @moduledoc """
   This module defines test helpers for creating
-  entities via the `HydraSrt.Api` context.
+  entities via the `Blackgate.Api` context.
   """
 
   @doc """
@@ -20,7 +20,7 @@ defmodule HydraSrt.ApiFixtures do
         status: "some status",
         stopped_at: ~U[2025-02-18 14:51:00Z]
       })
-      |> HydraSrt.Api.create_route()
+      |> Blackgate.Api.create_route()
 
     route
   end
@@ -39,7 +39,7 @@ defmodule HydraSrt.ApiFixtures do
         status: "some status",
         stopped_at: ~U[2025-02-19 16:24:00Z]
       })
-      |> HydraSrt.Api.create_destination()
+      |> Blackgate.Api.create_destination()
 
     destination
   end

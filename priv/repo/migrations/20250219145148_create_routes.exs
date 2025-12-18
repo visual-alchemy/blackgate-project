@@ -1,4 +1,4 @@
-defmodule HydraSrt.Repo.Migrations.CreateRoutes do
+defmodule Blackgate.Repo.Migrations.CreateRoutes do
   use Ecto.Migration
 
   def change do

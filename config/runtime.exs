@@ -22,19 +22,19 @@ import Config
 # If you use `mix release`, you need to explicitly enable the server
 # by passing the PHX_SERVER=true when you start it:
 #
-#     PHX_SERVER=true bin/hydra_srt start
+#     PHX_SERVER=true bin/blackgate start
 #
 # Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
 # script that automatically sets the env var above.
 if System.get_env("PHX_SERVER") do
-  config :hydra_srt, HydraSrtWeb.Endpoint, server: true
+  config :blackgate, BlackgateWeb.Endpoint, server: true
 end
 
 if config_env() != :test do
   export_metrics? =
     !!(System.get_env("VICTORIOMETRICS_HOST") && System.get_env("VICTORIOMETRICS_PORT"))
 
-  config :hydra_srt,
+  config :blackgate,
     export_metrics?: export_metrics?,
     api_auth_username:
       System.get_env("API_AUTH_USERNAME") || raise("API_AUTH_USERNAME is not set"),
@@ -45,10 +45,10 @@ if config_env() != :test do
   #   System.get_env("DATABASE_PATH") ||
   #     raise """
   #     environment variable DATABASE_PATH is missing.
-  #     For example: /etc/hydra_srt/hydra_srt.db
+  #     For example: /etc/blackgate/blackgate.db
   #     """
 
-  # config :hydra_srt, HydraSrt.Repo,
+  # config :blackgate, Blackgate.Repo,
   #   database: database_path,
   #   pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
 
@@ -67,9 +67,9 @@ if config_env() != :test do
   host = System.get_env("PHX_HOST") || "example.com"
   port = String.to_integer(System.get_env("PORT") || "4000")
 
-  # config :hydra_srt, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  # config :blackgate, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
-  config :hydra_srt, HydraSrtWeb.Endpoint,
+  config :blackgate, BlackgateWeb.Endpoint,
     url: [host: host, port: port, scheme: "http"],
     http: [
       # Always bind to all IPv4 interfaces (0.0.0.0) in Docker
@@ -79,7 +79,7 @@ if config_env() != :test do
     secret_key_base: nil
 
   if export_metrics? do
-    config :hydra_srt, HydraSrt.Metrics.Connection,
+    config :blackgate, Blackgate.Metrics.Connection,
       host: System.get_env("VICTORIOMETRICS_HOST"),
       port: System.get_env("VICTORIOMETRICS_PORT"),
       version: :v2

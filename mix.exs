@@ -1,9 +1,9 @@
-defmodule HydraSrt.MixProject do
+defmodule Blackgate.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :hydra_srt,
+      app: :blackgate,
       version: "0.1.0",
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -19,7 +19,7 @@ defmodule HydraSrt.MixProject do
   # Type `mix help compile.app` for more information.
   def application do
     [
-      mod: {HydraSrt.Application, []},
+      mod: {Blackgate.Application, []},
       extra_applications:
         [:logger, :os_mon, :ssl, :runtime_tools] ++ extra_applications(Mix.env())
     ]
@@ -76,7 +76,7 @@ defmodule HydraSrt.MixProject do
 
   defp releases do
     [
-      hydra_srt: [
+      blackgate: [
         steps: [:assemble, &copy_c_app/1, &copy_web_app/1],
         cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
       ]
@@ -93,17 +93,17 @@ defmodule HydraSrt.MixProject do
       raise "Failed to compile C application"
     end
 
-    source_path = Path.join(["native", "build", "hydra_srt_pipeline"])
+    source_path = Path.join(["native", "build", "blackgate_pipeline"])
 
     unless File.exists?(source_path) do
       raise "C application binary was not created at #{source_path}"
     end
 
-    app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
+    app_dir = Path.join([release.path, "lib", "blackgate-#{release.version}"])
     priv_dest_dir = Path.join(app_dir, "priv/native/build")
     File.mkdir_p!(priv_dest_dir)
 
-    priv_dest_path = Path.join(priv_dest_dir, "hydra_srt_pipeline")
+    priv_dest_path = Path.join(priv_dest_dir, "blackgate_pipeline")
     File.cp!(source_path, priv_dest_path)
     File.chmod!(priv_dest_path, 0o755)
 
@@ -131,7 +131,7 @@ defmodule HydraSrt.MixProject do
       raise "Web app dist directory not found at #{web_app_source} after build. Build may have failed."
     end
 
-    app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
+    app_dir = Path.join([release.path, "lib", "blackgate-#{release.version}"])
     web_app_dest = Path.join(app_dir, "priv/static")
 
     File.mkdir_p!(web_app_dest)

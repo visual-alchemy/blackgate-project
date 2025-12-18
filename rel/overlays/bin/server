@@ -2,4 +2,4 @@
 set -eu
 
 cd -P -- "$(dirname -- "$0")"
-PHX_SERVER=true exec ./hydra_srt start
+PHX_SERVER=true exec ./blackgate start

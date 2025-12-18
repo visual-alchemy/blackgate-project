@@ -1,1 +1,1 @@
-call "%~dp0\hydra_srt" eval HydraSrt.Release.migrate
+call "%~dp0\blackgate" eval Blackgate.Release.migrate
