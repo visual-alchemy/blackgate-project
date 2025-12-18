@@ -1,0 +1,50 @@
+# === Elixir / Mix ===
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+/tmp/
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# === Web Build Output ===
+/web_app/dist/
+/priv/static/
+
+# === Native C Build ===
+/native/build/
+
+# === Database / Data ===
+*.db
+*.db-*
+/khepri#*
+/data/backup/*
+!/data/backup/.gitkeep
+/data/khepri/*
+!/data/khepri/.gitkeep
+
+# === Environment ===
+.env
+.env.local
+.env.*.local
+
+# === IDE / Editor ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# === Logs ===
+*.log
+logs/
