@@ -15,7 +15,7 @@ TEST_OBJS := $(patsubst $(TEST_DIR)/%.c, $(BUILD_DIR)/%.o, $(TESTS))
 
 OBJS_NO_MAIN := $(filter-out $(BUILD_DIR)/main.o, $(OBJS))
 
-MAIN_EXEC := $(BUILD_DIR)/hydra_srt_pipeline
+MAIN_EXEC := $(BUILD_DIR)/blackgate_pipeline
 TEST_EXEC := $(BUILD_DIR)/test_runner
 
 all: $(MAIN_EXEC)
