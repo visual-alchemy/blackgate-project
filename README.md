@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="/web_app/public/blackgate-logo.png" alt="Blackgate" width="500"/>
+  <img src="/web_app/public/blackgate-logo-white.png" alt="Blackgate" width="500"/>
 </p>
 
 <p align="center">
