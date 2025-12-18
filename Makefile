@@ -12,11 +12,11 @@ dev:
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
-	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
+	iex --name blackgate@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
 
 .PHONY: dev-all
 dev-all:
-	@echo "Starting HydraSRT (Backend + Frontend)..."
+	@echo "Starting Blackgate (Backend + Frontend)..."
 	@echo "Backend: http://localhost:4000"
 	@echo "Frontend: http://localhost:5173"
 	@npx concurrently -n "backend,frontend" -c "blue,green" \
@@ -49,7 +49,7 @@ docker_restart:
 	docker-compose down && docker-compose up -d
 
 docker_ssh:
-	docker compose exec hydra_srt bash
+	docker compose exec blackgate bash
 
 docker_logs:
 	docker compose logs -f
@@ -61,4 +61,4 @@ docker_start:
 	docker compose up -d
 
 docker_clean:
-	docker compose down && docker compose rm -f hydra_srt
+	docker compose down && docker compose rm -f blackgate
