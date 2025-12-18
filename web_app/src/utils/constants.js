@@ -2,8 +2,8 @@
  * Application constants
  */
 
-// API base URL
-export const API_BASE_URL = 'http://127.0.0.1:4000';
+// API base URL - dynamically uses current hostname for network access
+export const API_BASE_URL = `http://${window.location.hostname}:4000`;
 
 // Authentication
 export const AUTH_TOKEN_KEY = 'token';
