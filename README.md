@@ -97,7 +97,7 @@ Monitor your streams with live statistics including:
 ```bash
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libcjson-dev libsrt-dev libcmocka-dev libgio2.0-dev pkg-config
+  libcjson-dev libsrt-dev libcmocka-dev libgio2.0-dev pkg-config build-essential
 ```
 </details>
 
@@ -108,6 +108,41 @@ sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
   cjson srt cmocka pkg-config
 ```
+</details>
+
+<details>
+<summary><strong>Windows (WSL2)</strong></summary>
+
+WSL2 is fully supported. Use Ubuntu/Debian instructions inside WSL:
+
+```bash
+# Install WSL2 with Ubuntu (run in PowerShell as Admin)
+wsl --install -d Ubuntu
+
+# Then inside WSL, install dependencies
+sudo apt-get update
+sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  libcjson-dev libsrt-dev libcmocka-dev libgio2.0-dev pkg-config build-essential
+```
+
+**Tips:**
+- Use **WSL2** (not WSL1) for better performance
+- Store project in WSL filesystem (`~/projects/`) not Windows (`/mnt/c/`)
+- Use Docker Desktop with WSL2 backend for production
+</details>
+
+<details>
+<summary><strong>Windows (Native) ⚠️</strong></summary>
+
+> ⚠️ **Not officially supported.** Native Windows requires manual compilation of GStreamer and SRT libraries which is complex. We recommend using **WSL2** or **Docker Desktop** instead.
+
+If you must run natively:
+1. Install [MSYS2](https://www.msys2.org/)
+2. Build GStreamer from source with SRT support
+3. Build the native C pipeline with MinGW
+
+For production on Windows, use **Docker Desktop** which handles all dependencies.
 </details>
 
 **Also requires:** Elixir 1.17+, Erlang/OTP 27+, Node.js 18+
