@@ -1,5 +1,5 @@
 services:
-  hydra_srt:
+  blackgate:
     build:
       context: .
       dockerfile: Dockerfile
