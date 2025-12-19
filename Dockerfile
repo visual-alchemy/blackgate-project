@@ -121,7 +121,7 @@ RUN mkdir -p /app/khepri /app/backup && \
     chmod -R 777 /app/khepri /app/backup
 
 # Copy the release from the builder stage
-COPY --from=builder /app/_build/prod/rel/hydra_srt ./
+COPY --from=builder /app/_build/prod/rel/blackgate ./
 
 COPY run.sh run.sh
 RUN chmod +x run.sh
