@@ -123,9 +123,11 @@ RUN mkdir -p /app/khepri /app/backup && \
 # Copy the release from the builder stage
 COPY --from=builder /app/_build/prod/rel/blackgate ./
 
+# Fix Windows line endings (CRLF -> LF) for all shell scripts
 COPY run.sh run.sh
-# Fix Windows line endings (CRLF -> LF)
-RUN sed -i 's/\r$//' run.sh && chmod +x run.sh
+RUN sed -i 's/\r$//' run.sh && chmod +x run.sh && \
+    find /app/bin -type f -exec sed -i 's/\r$//' {} \; && \
+    chmod +x /app/bin/*
 
 # Set the entrypoint
 ENTRYPOINT ["/usr/bin/tini", "-s", "-g", "--", "/app/run.sh"]
