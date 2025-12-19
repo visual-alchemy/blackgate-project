@@ -3,109 +3,190 @@
 </p>
 
 <p align="center">
-  <strong>Open-source SRT Video Gateway</strong><br>
+  <strong>🎬 Open-source SRT Video Gateway</strong><br>
   <em>High-performance video routing with secure, reliable transport</em>
 </p>
 
 <p align="center">
-  <a href="#features">Features</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#docker">Docker</a>
+  <a href="#-features">Features</a> •
+  <a href="#-quick-start">Quick Start</a> •
+  <a href="#-architecture">Architecture</a> •
+  <a href="#-docker">Docker</a> •
+  <a href="#-api">API</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Elixir-1.17+-purple?style=flat-square&logo=elixir" alt="Elixir">
+  <img src="https://img.shields.io/badge/GStreamer-1.0-green?style=flat-square" alt="GStreamer">
+  <img src="https://img.shields.io/badge/React-18-blue?style=flat-square&logo=react" alt="React">
+  <img src="https://img.shields.io/badge/SRT-Secure_Reliable_Transport-orange?style=flat-square" alt="SRT">
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
 </p>
 
 ---
 
 > ⚠️ **Pre-Alpha**: Early development stage. Features may be incomplete and breaking changes are expected.
 
-## Features
+## ✨ Features
 
-### ✅ Current Features
+### Core Capabilities
 
 | Category | Features |
 |----------|----------|
-| **SRT** | Listener, Caller, Rendezvous modes with authentication |
-| **UDP** | Source and Destination support |
-| **Dashboard** | Real-time system metrics (CPU, RAM, Load) |
-| **Routes** | Create, edit, start, stop, delete with multiple destinations |
-| **API** | Full REST API for programmatic control |
-| **Deployment** | Docker support with backup/restore |
+| **🔌 SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
+| **📡 UDP Support** | Source and Destination for local network streaming |
+| **📊 Live Statistics** | Real-time bitrate, RTT, packet loss, bandwidth monitoring |
+| **🖥️ Dashboard** | System metrics (CPU, RAM, Load) with auto-refresh |
+| **🛣️ Route Management** | Create, edit, start, stop, delete routes with multiple destinations |
+| **🔧 REST API** | Full programmatic control for automation |
+| **🐳 Docker Ready** | One-command deployment with backup/restore |
 
-### 🚧 Planned
+### 📈 Real-time Stream Statistics
 
-- Stream Statistics Display (bitrate, RTT, packet loss)
-- SRT Destination Statistics
-- Cluster Mode
-- Dynamic Routing
-- RTSP / RTMP / HLS / WebRTC
+Monitor your streams with live statistics including:
+- **Bitrate** - Current receiving rate (Mbps)
+- **RTT** - Round-trip time for connection quality
+- **Packet Loss** - Percentage of lost packets
+- **Bandwidth** - Available connection bandwidth
+- **Connected Callers** - Active client connections
 
-## Architecture
+### 🚧 Roadmap
+
+- [ ] SRT Destination Statistics
+- [ ] Cluster Mode for high availability
+- [ ] Dynamic Routing rules
+- [ ] RTSP / RTMP / HLS / WebRTC support
+
+---
+
+## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    User Interface (React)                   │
-│              Vite + Ant Design • Real-time Dashboard        │
+│                    🖥️  User Interface                       │
+│              React + Vite + Ant Design                      │
+│         Real-time Dashboard • Route Management              │
 └─────────────────────────────────────────────────────────────┘
-                              │
+                              ▼
                          REST API
-                              │
+                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                 Control Layer (Elixir)                      │
-│        Route Management • Khepri Database • Metrics         │
+│                  ⚙️  Control Layer                          │
+│                  Elixir / Phoenix                           │
+│    Route Management • Khepri Database • Stats Registry      │
 └─────────────────────────────────────────────────────────────┘
-                              │
-                       Unix Socket
-                              │
+                              ▼
+                        Unix Socket
+                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              Streaming Layer (C + GStreamer)                │
-│         High-performance Video Routing • SRT/UDP            │
+│                 🎬 Streaming Layer                          │
+│                   C + GStreamer                             │
+│      High-performance Video Routing • SRT/UDP Transport     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
+<details>
+<summary><strong>Ubuntu/Debian</strong></summary>
+
 ```bash
-# Ubuntu/Debian
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   libcjson-dev libsrt-dev libcmocka-dev libgio2.0-dev pkg-config
+```
+</details>
 
-# macOS
+<details>
+<summary><strong>macOS</strong></summary>
+
+```bash
 brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
   cjson srt cmocka pkg-config
 ```
+</details>
 
-Also requires: **Elixir** 1.17+, **Erlang/OTP** 27+, **Node.js** 18+
+**Also requires:** Elixir 1.17+, Erlang/OTP 27+, Node.js 18+
 
 ### Development
 
 ```bash
-# Start backend + frontend
+# Clone the repository
+git clone https://github.com/visual-alchemy/blackgate-project.git
+cd blackgate-project
+
+# Install dependencies
+mix deps.get
+cd web_app && yarn install && cd ..
+
+# Start development servers
 make dev-all
 ```
 
-Access: `http://localhost:5173` • Login: `admin` / `password123`
+🌐 **Access:** http://localhost:5173  
+🔐 **Login:** `admin` / `password123`
 
-## Docker
+---
+
+## 🐳 Docker
 
 ```bash
+# Build and run
 docker-compose build
-docker-compose up
+docker-compose up -d
 ```
 
-Access: `http://localhost:4000`
+🌐 **Access:** http://localhost:4000
 
-## Environment Variables
+---
+
+## 🔌 API
+
+### Routes
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/routes` | List all routes |
+| `POST` | `/api/routes` | Create a route |
+| `GET` | `/api/routes/:id` | Get route details |
+| `PUT` | `/api/routes/:id` | Update a route |
+| `DELETE` | `/api/routes/:id` | Delete a route |
+| `GET` | `/api/routes/:id/start` | Start a route |
+| `GET` | `/api/routes/:id/stop` | Stop a route |
+| `GET` | `/api/routes/:id/stats` | Get live statistics |
+
+### Destinations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/routes/:id/destinations` | List destinations |
+| `POST` | `/api/routes/:id/destinations` | Add destination |
+| `PUT` | `/api/routes/:id/destinations/:dest_id` | Update destination |
+| `DELETE` | `/api/routes/:id/destinations/:dest_id` | Remove destination |
+
+---
+
+## ⚙️ Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `API_AUTH_USERNAME` | Auth username | (required) |
-| `API_AUTH_PASSWORD` | Auth password | (required) |
-| `PORT` | API port | 4000 |
-| `DATABASE_DATA_DIR` | Database path | ./khepri |
+| `API_AUTH_USERNAME` | Auth username | *(required)* |
+| `API_AUTH_PASSWORD` | Auth password | *(required)* |
+| `PORT` | API port | `4000` |
+| `DATABASE_DATA_DIR` | Database path | `./khepri` |
 
-## License
+---
 
-MIT
+## 📄 License
+
+MIT License - feel free to use in personal and commercial projects.
+
+---
+
+<p align="center">
+  Made with ❤️ by <a href="https://github.com/visual-alchemy">Visual Alchemy</a>
+</p>
