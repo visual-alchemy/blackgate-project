@@ -144,6 +144,51 @@ docker-compose up -d
 
 ---
 
+## 🚢 Production Deployment
+
+### Option 1: Docker (Recommended)
+
+```bash
+# Build production image
+docker-compose build
+
+# Start in background
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+### Option 2: Elixir Release
+
+```bash
+# Build frontend for production
+cd web_app && npm run build && cd ..
+
+# Build native pipeline
+cd native && make clean && make && cd ..
+
+# Create Elixir release
+MIX_ENV=prod mix release
+
+# Run the release
+_build/prod/rel/blackgate/bin/blackgate start
+```
+
+### Commands Reference
+
+| Command | Purpose |
+|---------|---------|
+| `make dev-all` | Development (hot-reload, debug) |
+| `docker compose up -d` | Production (Docker) |
+| `docker compose logs -f` | View production logs |
+| `MIX_ENV=prod mix release` | Build production release |
+
+---
+
 ## 🔌 API
 
 ### Routes
