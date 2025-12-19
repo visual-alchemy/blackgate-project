@@ -39,6 +39,33 @@ static void *print_stats(void *src)
         gst_structure_get_uint64(stats, "bytes-received-total", &bytes_total);
         cJSON_AddNumberToObject(root, "total-bytes-received", (double)bytes_total);
 
+        // Extract top-level stats (available in caller mode and as aggregate in listener mode)
+        gint64 packets_received = 0, packets_lost = 0, packets_dropped = 0;
+        gint64 packets_retransmitted = 0, bytes_received = 0;
+        gdouble rtt_ms = 0.0, receive_rate_mbps = 0.0, bandwidth_mbps = 0.0;
+        gint negotiated_latency_ms = 0;
+
+        gst_structure_get_int64(stats, "packets-received", &packets_received);
+        gst_structure_get_int64(stats, "packets-received-lost", &packets_lost);
+        gst_structure_get_int64(stats, "packets-received-dropped", &packets_dropped);
+        gst_structure_get_int64(stats, "packets-received-retransmitted", &packets_retransmitted);
+        gst_structure_get_int64(stats, "bytes-received", &bytes_received);
+        gst_structure_get_double(stats, "rtt-ms", &rtt_ms);
+        gst_structure_get_double(stats, "receive-rate-mbps", &receive_rate_mbps);
+        gst_structure_get_double(stats, "bandwidth-mbps", &bandwidth_mbps);
+        gst_structure_get_int(stats, "negotiated-latency-ms", &negotiated_latency_ms);
+
+        // Add top-level stats to JSON
+        cJSON_AddNumberToObject(root, "packets-received", (double)packets_received);
+        cJSON_AddNumberToObject(root, "packets-received-lost", (double)packets_lost);
+        cJSON_AddNumberToObject(root, "packets-received-dropped", (double)packets_dropped);
+        cJSON_AddNumberToObject(root, "packets-received-retransmitted", (double)packets_retransmitted);
+        cJSON_AddNumberToObject(root, "bytes-received", (double)bytes_received);
+        cJSON_AddNumberToObject(root, "rtt-ms", rtt_ms);
+        cJSON_AddNumberToObject(root, "receive-rate-mbps", receive_rate_mbps);
+        cJSON_AddNumberToObject(root, "bandwidth-mbps", bandwidth_mbps);
+        cJSON_AddNumberToObject(root, "negotiated-latency-ms", negotiated_latency_ms);
+
         const GValue *callers_val = gst_structure_get_value(stats, "callers");
         if (!callers_val) {
             cJSON_AddNumberToObject(root, "connected-callers", 0);
@@ -274,15 +301,7 @@ GstElement *create_pipeline(cJSON *json)
     g_print("Set do-timestamp=TRUE for source element\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
-        // Set wait-for-connection to true for listener mode
-        g_object_set(source, "wait-for-connection", TRUE, NULL);
-        g_print("Set wait-for-connection=TRUE for srtsrc element\n");
-
-        // Set longer poll-timeout for better OBS compatibility (5 seconds)
-        g_object_set(source, "poll-timeout", 5000, NULL);
-        g_print("Set poll-timeout=5000 for srtsrc element\n");
-
-        // Connect signal for logging incoming connections
+        // Signal for logging incoming connections (no authentication required)
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 

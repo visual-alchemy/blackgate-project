@@ -40,6 +40,7 @@ defmodule Blackgate.Application do
     Logger.info("Ranch listener: #{inspect(ranch_listener)}")
 
     children = [
+      Blackgate.RouteStatsRegistry,
       Blackgate.ErlSysMon,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},

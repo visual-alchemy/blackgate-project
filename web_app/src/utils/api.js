@@ -11,13 +11,13 @@ export const systemPipelinesApi = {
     const response = await authFetch('/api/system/pipelines');
     return response.json();
   },
-  
+
   // Get detailed pipeline information
   getDetailed: async () => {
     const response = await authFetch('/api/system/pipelines/detailed');
     return response.json();
   },
-  
+
   // Kill a pipeline process
   kill: async (pid) => {
     const response = await authFetch(`/api/system/pipelines/${pid}/kill`, {
@@ -34,7 +34,7 @@ export const nodesApi = {
     const response = await authFetch('/api/nodes');
     return response.json();
   },
-  
+
   // Get a single node by ID
   getById: async (id) => {
     const response = await authFetch(`/api/nodes/${id}`);
@@ -104,6 +104,12 @@ export const routesApi = {
     const response = await authFetch(`/api/routes/${id}/restart`);
     return response.json();
   },
+
+  // Get route statistics
+  getStats: async (id) => {
+    const response = await authFetch(`/api/routes/${id}/stats`);
+    return response.json();
+  },
 };
 
 export const backupApi = {
@@ -111,21 +117,21 @@ export const backupApi = {
     const response = await authFetch('/api/backup/export');
     return response.json();
   },
-  
+
   getDownloadLink: async () => {
     const response = await authFetch('/api/backup/create-download-link');
     return response.json();
   },
-  
+
   getBackupDownloadLink: async () => {
     const response = await authFetch('/api/backup/create-backup-download-link');
     return response.json();
   },
-  
+
   download: async () => {
     try {
       const { download_link } = await backupApi.getDownloadLink();
-      
+
       window.open(`${API_BASE_URL}${download_link}`, '_blank');
       return true;
     } catch (error) {
@@ -133,11 +139,11 @@ export const backupApi = {
       throw error;
     }
   },
-  
+
   downloadBackup: async () => {
     try {
       const { download_link } = await backupApi.getBackupDownloadLink();
-      
+
       window.open(`${API_BASE_URL}${download_link}`, '_blank');
       return true;
     } catch (error) {
@@ -145,15 +151,15 @@ export const backupApi = {
       throw error;
     }
   },
-  
+
   restore: async (file) => {
     try {
       // Read the file as an ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
-      
+
       // Convert ArrayBuffer to Blob with the correct MIME type
       const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
-      
+
       console.log('Sending file as binary data with Content-Type: application/octet-stream');
       const response = await authFetch('/api/restore', {
         method: 'POST',
@@ -162,12 +168,12 @@ export const backupApi = {
         },
         body: blob,
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to restore backup');
       }
-      
+
       return response.json();
     } catch (error) {
       console.error('Error in restore API call:', error);

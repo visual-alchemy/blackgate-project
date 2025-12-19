@@ -9,6 +9,7 @@ defmodule Blackgate.UnixSockHandler do
   alias Blackgate.Helpers
   alias Blackgate.Metrics
   alias Blackgate.Db
+  alias Blackgate.RouteStatsRegistry
   @impl true
   def start_link(ref, transport, opts) do
     Logger.debug(
@@ -82,6 +83,9 @@ defmodule Blackgate.UnixSockHandler do
       ) do
     case Jason.decode(json) do
       {:ok, stats} ->
+        # Store stats in registry for API access
+        RouteStatsRegistry.put_stats(data.route_id, stats)
+        
         try do
           stats_to_metrics(stats, data)
         rescue
@@ -96,8 +100,18 @@ defmodule Blackgate.UnixSockHandler do
     :keep_state_and_data
   end
 
+  def handle_event(:info, {:tcp, _port, "{" <> _ = json}, _, %{route_id: route_id} = _data)
+      when is_binary(route_id) do
+    # Store stats in registry even if exportStats is disabled
+    case Jason.decode(json) do
+      {:ok, stats} -> RouteStatsRegistry.put_stats(route_id, stats)
+      _ -> :ok
+    end
+    :keep_state_and_data
+  end
+
   def handle_event(:info, {:tcp, _port, "{" <> _}, _, _) do
-    # ignore stats
+    # ignore stats when no route_id
     :keep_state_and_data
   end
 

@@ -27,6 +27,7 @@ import {
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
+import RouteStats from '../../components/RouteStats';
 
 const { Title, Text } = Typography;
 
@@ -474,15 +475,15 @@ const RouteItem = () => {
               {routeData.schema}
             </Tag>
             {' '}
-            {routeData.schema === 'SRT' ? 
+            {routeData.schema === 'SRT' ?
               `${routeData.schema_options?.localaddress || 'N/A'}:${routeData.schema_options?.localport || 'N/A'}:${routeData.schema_options?.mode || 'N/A'}` :
               routeData.schema === 'UDP' ?
-              `${routeData.schema_options?.address || 'N/A'}:${routeData.schema_options?.port || 'N/A'}` :
-              'N/A'
+                `${routeData.schema_options?.address || 'N/A'}:${routeData.schema_options?.port || 'N/A'}` :
+                'N/A'
             }
           </Descriptions.Item>
           <Descriptions.Item label="Node">{routeData.node}</Descriptions.Item>
-          
+
           {routeData.schema === 'SRT' && (
             <>
               <Descriptions.Item label="Latency">{routeData.schema_options?.latency ? `${routeData.schema_options.latency}ms` : 'Default (125ms)'}</Descriptions.Item>
@@ -508,7 +509,7 @@ const RouteItem = () => {
               )}
             </>
           )}
-          
+
           {routeData.schema === 'UDP' && (
             <>
               <Descriptions.Item label="Address">{routeData.schema_options?.address || '0.0.0.0 (Default)'}</Descriptions.Item>
@@ -517,25 +518,15 @@ const RouteItem = () => {
               <Descriptions.Item label="MTU">{routeData.schema_options?.mtu || '1492 (Default)'}</Descriptions.Item>
             </>
           )}
-          
-          <Descriptions.Item label="Enabled">
-            <Tag color={routeData.enabled ? 'green' : 'red'}>
-              {routeData.enabled ? 'Yes' : 'No'}
-            </Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Export Stats">
-            <Tag color={(routeData.exportStats || routeData.export_stats) ? 'green' : 'red'}>
-              {(routeData.exportStats || routeData.export_stats) ? 'Yes' : 'No'}
-            </Tag>
-            {(routeData.exportStats || routeData.export_stats) && <span style={{marginLeft: '8px'}}></span>}
-          </Descriptions.Item>
-          {routeData.gstDebug && (
-            <Descriptions.Item label="GST_DEBUG" span={2}>
-              {routeData.gstDebug}
-            </Descriptions.Item>
-          )}
+
         </Descriptions>
       </Card>
+
+      {/* Source Statistics - Show when route is running */}
+      <RouteStats
+        routeId={id}
+        isRunning={routeData?.status?.toLowerCase() === 'started'}
+      />
 
       {/* Destinations Table */}
       <Card
@@ -566,7 +557,7 @@ const RouteItem = () => {
             showSizeChanger: true,
             showTotal: (total) => `Total ${total} destinations`,
           }}
-          scroll={{ x: true }}  // Enable horizontal scrolling on small screens
+          scroll={{ x: true }}
           expandable={{
             expandedRowRender: record => {
               if (record.schema !== 'SRT' || !record.schema_options || !record.schema_options.authentication) {
