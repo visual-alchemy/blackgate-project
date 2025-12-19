@@ -236,7 +236,7 @@ const MainLayout = ({ children }) => {
             }}
             onClick={() => navigate('/')}
           >
-            <img src="/logo.png" alt="Blackgate Logo" style={{ width: '24px', height: '24px', marginRight: '10px' }} />
+            <img src="/favicon.png" alt="Blackgate Logo" style={{ width: '24px', height: '24px', marginRight: '10px' }} />
             {!collapsed && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                 <span style={{ fontSize: '16px', fontWeight: 600, lineHeight: 1.2, color: '#fff' }}>Blackgate</span>

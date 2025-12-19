@@ -100,7 +100,7 @@ const Login = () => {
       <Card style={styles.card}>
         <div style={styles.header}>
           <div style={styles.logo}>
-            <LoginOutlined />
+            <img src="/favicon.png" alt="Blackgate Logo" style={{ width: '48px', height: '48px' }} />
           </div>
           <Title level={2}>Welcome to Blackgate</Title>
           <Text type="secondary">
