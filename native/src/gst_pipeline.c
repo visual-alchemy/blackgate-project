@@ -177,15 +177,26 @@ static void on_caller_connecting(GstElement *element, GSocketAddress *addr, cons
 
 static void set_srt_mode_property(GstElement *element, const char *mode_str, const char *element_desc)
 {
+    // GStreamer SRT mode values: 0=none, 1=caller, 2=listener, 3=rendezvous
+    gint mode_value = 0;
+
     if (strcmp(mode_str, "listener") == 0) {
+        mode_value = 2;
         g_print("Set mode=listener (2) for %s\n", element_desc);
     } else if (strcmp(mode_str, "caller") == 0) {
+        mode_value = 1;
         g_print("Set mode=caller (1) for %s\n", element_desc);
     } else if (strcmp(mode_str, "rendezvous") == 0) {
+        mode_value = 3;
         g_print("Set mode=rendezvous (3) for %s\n", element_desc);
     } else {
         g_printerr("Unknown SRT mode: %s\n", mode_str);
+        return;
     }
+
+    // Actually set the mode property on the element!
+    // Note: mode is set via the URI query param, not as a direct property
+    // The URI already contains mode=X, so this is just for logging
 }
 
 static void set_element_properties(GstElement *element, cJSON *config, const char *element_type,
@@ -263,8 +274,15 @@ GstElement *create_pipeline(cJSON *json)
     g_print("Set do-timestamp=TRUE for source element\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
-        // Only enable authentication if passphrase is configured (handled via set_element_properties)
-        // The caller-connecting signal is still connected for logging purposes
+        // Set wait-for-connection to true for listener mode
+        g_object_set(source, "wait-for-connection", TRUE, NULL);
+        g_print("Set wait-for-connection=TRUE for srtsrc element\n");
+
+        // Set longer poll-timeout for better OBS compatibility (5 seconds)
+        g_object_set(source, "poll-timeout", 5000, NULL);
+        g_print("Set poll-timeout=5000 for srtsrc element\n");
+
+        // Connect signal for logging incoming connections
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
