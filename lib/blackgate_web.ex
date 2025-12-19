@@ -18,7 +18,7 @@ defmodule BlackgateWeb do
   """
 
   def static_paths,
-    do: ~w(assets fonts images js css favicon.ico robots.txt index.html logo.webp logo2.webp)
+    do: ~w(assets fonts images js css favicon.ico favicon.png robots.txt index.html logo.webp logo2.webp logo.png blackgate-logo-white.png blackgate-logo.png)
 
   def router do
     quote do
