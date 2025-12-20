@@ -485,8 +485,13 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         return FALSE;
     }
 
-    g_object_set(queue, "max-size-buffers", 200, NULL);
-    g_object_set(queue, "max-size-time", 0, NULL);
+    // Configure queue for smooth streaming without artifacts
+    // - Unlimited buffers/bytes, max 3 seconds of data
+    // - leaky=2 (downstream): if full, drop OLD data to show latest frames
+    g_object_set(queue, "max-size-buffers", 0, NULL);
+    g_object_set(queue, "max-size-bytes", 0, NULL);
+    g_object_set(queue, "max-size-time", (guint64)3000000000, NULL); // 3 seconds
+    g_object_set(queue, "leaky", 2, NULL);                           // Downstream leaky
 
     set_element_properties(sink_element, sink_config, sink_type->valuestring, "type");
 
