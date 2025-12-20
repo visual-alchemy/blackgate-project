@@ -72,7 +72,10 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
     }
 
     // Filter to only show SRT destinations (they're the only ones with stats)
-    const srtDestinations = destinations.filter(d => d.type === 'srt');
+    // Type can be 'srt' or 'srtsink' depending on source
+    const srtDestinations = destinations.filter(d =>
+        d.type === 'srt' || d.type === 'srtsink'
+    );
 
     if (srtDestinations.length === 0) {
         return null;
