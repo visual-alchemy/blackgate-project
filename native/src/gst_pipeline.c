@@ -495,13 +495,12 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         return FALSE;
     }
 
-    // Configure queue2 for low-latency real-time streaming
-    // - ring-buffer-max-size: fixed memory buffer for predictable latency
-    // - max-size-time: limit buffering to 1 second to reduce delay
+    // Configure queue2 for high-bitrate streaming (up to 50Mbps)
+    // At 20Mbps: 50MB = ~20 seconds buffer, 3s time limit controls actual latency
     g_object_set(queue, "use-buffering", FALSE, NULL);               // Don't pause for buffering
     g_object_set(queue, "max-size-buffers", 0, NULL);                // Unlimited buffer count
-    g_object_set(queue, "max-size-bytes", 10 * 1024 * 1024, NULL);   // 10MB max
-    g_object_set(queue, "max-size-time", (guint64)1000000000, NULL); // 1 second max
+    g_object_set(queue, "max-size-bytes", 50 * 1024 * 1024, NULL);   // 50MB max (handles 20Mbps+)
+    g_object_set(queue, "max-size-time", (guint64)3000000000, NULL); // 3 seconds max
 
     set_element_properties(sink_element, sink_config, sink_type->valuestring, "type");
 
