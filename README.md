@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="/web_app/public/blackgate-logo-white.png" alt="Blackgate" width="500"/>
+  <img src="./blackgate-logo.png" alt="Blackgate" width="300"/>
 </p>
 
 <p align="center">
@@ -35,27 +35,38 @@
 |----------|----------|
 | **🔌 SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
 | **📡 UDP Support** | Source and Destination for local network streaming |
-| **📊 Live Statistics** | Real-time bitrate, RTT, packet loss, bandwidth monitoring |
+| **📊 Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
+| **📈 Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
 | **🖥️ Dashboard** | System metrics (CPU, RAM, Load) with auto-refresh |
 | **🛣️ Route Management** | Create, edit, start, stop, delete routes with multiple destinations |
 | **🔧 REST API** | Full programmatic control for automation |
 | **🐳 Docker Ready** | One-command deployment with backup/restore |
 
-### 📈 Real-time Stream Statistics
+### 📈 Real-time Statistics
 
-Monitor your streams with live statistics including:
+#### Source Statistics
+Monitor your input streams with live metrics:
 - **Bitrate** - Current receiving rate (Mbps)
 - **RTT** - Round-trip time for connection quality
 - **Packet Loss** - Percentage of lost packets
 - **Bandwidth** - Available connection bandwidth
-- **Connected Callers** - Active client connections
+- **Connected Callers** - Active source connections (listener mode)
+
+#### Destination Statistics
+Track each SRT output destination:
+- **Send Rate** - Current bitrate per destination
+- **RTT** - Round-trip time to destination
+- **Bytes Sent** - Total data transmitted
+- **Connected Clients** - Clients pulling streams (listener mode)
+- **Per-client details** - IP address, bitrate, RTT, packets sent
 
 ### 🚧 Roadmap
 
-- [ ] SRT Destination Statistics
+- [x] ~~SRT Destination Statistics~~ ✅
 - [ ] Cluster Mode for high availability
 - [ ] Dynamic Routing rules
 - [ ] RTSP / RTMP / HLS / WebRTC support
+- [ ] Stream health monitoring & alerts
 
 ---
 
@@ -237,7 +248,8 @@ _build/prod/rel/blackgate/bin/blackgate start
 | `DELETE` | `/api/routes/:id` | Delete a route |
 | `GET` | `/api/routes/:id/start` | Start a route |
 | `GET` | `/api/routes/:id/stop` | Stop a route |
-| `GET` | `/api/routes/:id/stats` | Get live statistics |
+| `GET` | `/api/routes/:id/stats` | Get source statistics |
+| `GET` | `/api/routes/:id/destination-stats` | Get destination statistics |
 
 ### Destinations
 
