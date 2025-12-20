@@ -196,13 +196,17 @@ const RouteItem = () => {
     },
     {
       title: 'Latency',
-      dataIndex: 'latency',
       key: 'latency',
-      render: (latency) => latency ? `${latency}ms` : 'N/A',
+      render: (_, record) => {
+        const latency = record.schema_options?.latency || record.latency;
+        return latency ? `${latency}ms` : 'N/A';
+      },
       sorter: (a, b) => {
-        if (!a.latency) return 1;
-        if (!b.latency) return -1;
-        return a.latency - b.latency;
+        const aLatency = a.schema_options?.latency || a.latency;
+        const bLatency = b.schema_options?.latency || b.latency;
+        if (!aLatency) return 1;
+        if (!bLatency) return -1;
+        return aLatency - bLatency;
       },
     },
     {
