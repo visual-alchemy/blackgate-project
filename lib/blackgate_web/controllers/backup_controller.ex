@@ -52,7 +52,7 @@ defmodule BlackgateWeb.BackupController do
 
           now = DateTime.utc_now()
           formatted_time = Calendar.strftime(now, "%m-%d-%y-%H:%M:%S")
-          filename = "hydra-routes-#{formatted_time}.json"
+          filename = "blackgate-routes-#{formatted_time}.json"
 
           conn
           |> put_resp_content_type("application/json")
@@ -83,7 +83,7 @@ defmodule BlackgateWeb.BackupController do
 
           now = DateTime.utc_now()
           formatted_time = Calendar.strftime(now, "%m-%d-%y-%H:%M:%S")
-          filename = "hydra-srt-#{formatted_time}.backup"
+          filename = "blackgate-#{formatted_time}.backup"
 
           conn
           |> put_resp_content_type("application/octet-stream")
