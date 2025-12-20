@@ -72,9 +72,9 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
     }
 
     // Filter to only show SRT destinations (they're the only ones with stats)
-    // Type can be 'srt' or 'srtsink' depending on source
+    // schema is 'SRT' (uppercase) from the backend
     const srtDestinations = destinations.filter(d =>
-        d.type === 'srt' || d.type === 'srtsink'
+        d.schema?.toLowerCase() === 'srt' || d.type === 'srt' || d.type === 'srtsink'
     );
 
     if (srtDestinations.length === 0) {
@@ -118,11 +118,17 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
         const rtt = destStats['rtt-ms'] || 0;
         const bytesSent = destStats['bytes-sent-total'] || 0;
 
-        const destLabel = dest.localaddress
-            ? `${dest.localaddress}:${dest.localport}`
-            : `Port ${dest.localport}`;
+        // Access schema_options for nested properties
+        const schemaOpts = dest.schema_options || {};
+        const localaddress = schemaOpts.localaddress || dest.localaddress;
+        const localport = schemaOpts.localport || dest.localport;
+        const mode = schemaOpts.mode || dest.mode;
 
-        const modeTag = dest.mode === 'listener' ? (
+        const destLabel = localaddress && localaddress !== '0.0.0.0'
+            ? `${localaddress}:${localport}`
+            : `Port ${localport}`;
+
+        const modeTag = mode === 'listener' ? (
             <Tag color="blue">Listener</Tag>
         ) : (
             <Tag color="green">Caller</Tag>
@@ -135,7 +141,7 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
                     <WifiOutlined />
                     <span>Destination {index + 1}: <Text strong>{destLabel}</Text></span>
                     {modeTag}
-                    {dest.mode === 'listener' && (
+                    {mode === 'listener' && (
                         <Badge
                             count={connectedCallers}
                             showZero
@@ -166,7 +172,7 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
                                 <Text>{formatBytes(bytesSent)}</Text>
                             </Space>
                         </Tooltip>
-                        {dest.mode === 'listener' && (
+                        {mode === 'listener' && (
                             <Tooltip title="Connected clients">
                                 <Space>
                                     <TeamOutlined />
@@ -177,7 +183,7 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
                     </Space>
 
                     {/* Connected Callers Table (for listener mode) */}
-                    {dest.mode === 'listener' && callers.length > 0 && (
+                    {mode === 'listener' && callers.length > 0 && (
                         <Card size="small" title="Connected Clients" style={{ marginTop: 8 }}>
                             <Table
                                 columns={callerColumns}
@@ -188,7 +194,7 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
                         </Card>
                     )}
 
-                    {dest.mode === 'listener' && callers.length === 0 && (
+                    {mode === 'listener' && callers.length === 0 && (
                         <Empty
                             image={Empty.PRESENTED_IMAGE_SIMPLE}
                             description="No clients connected"
