@@ -72,29 +72,123 @@ Track each SRT output destination:
 
 ## 🏗️ Architecture
 
+### 🌐 Network Topology
+
+#### 📥 SRT Listener Source Workflow
+
+```mermaid
+graph TB
+    subgraph "External Network"
+        A["📹 SRT Source<br/>(Encoder/Camera)<br/>Mode: Caller"]
+    end
+    
+    subgraph "Blackgate Server"
+        subgraph "Web Interface"
+            B["🌐 React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
+        end
+        
+        subgraph "Elixir Backend"
+            C["⚙️ Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
+            D["📊 Stats Registry<br/>(ETS + Real-time)"]
+            E["🗄️ Khepri DB<br/>(Persistent Storage)"]
+        end
+        
+        subgraph "Streaming Layer"
+            F["🎬 GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+        end
+    end
+    
+    subgraph "External Destinations"
+        G["📺 SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
+        H["📺 SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
+    end
+    
+    %% Data Flow
+    A -->|"SRT Stream<br/>(Listener Mode)"| F
+    F -->|"SRT Stream<br/>(Listener Mode)"| G
+    F -->|"SRT Stream<br/>(Listener Mode)"| H
+    
+    %% Control Flow
+    B <-->|"HTTP/REST API"| C
+    C <-->|"Database Ops"| E
+    C <-->|"Stats Updates"| D
+    C -->|"Unix Socket"| F
+    F -->|"Live Stats"| D
+    
+    %% Styling
+    classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
+    classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
+    classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
+    classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
+    
+    class A,G,H external
+    class B ui
+    class C,D,E backend
+    class F streaming
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    🖥️  User Interface                       │
-│              React + Vite + Ant Design                      │
-│         Real-time Dashboard • Route Management              │
-└─────────────────────────────────────────────────────────────┘
-                              ▼
-                         REST API
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  ⚙️  Control Layer                          │
-│                  Elixir / Phoenix                           │
-│    Route Management • Khepri Database • Stats Registry      │
-└─────────────────────────────────────────────────────────────┘
-                              ▼
-                        Unix Socket
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                 🎬 Streaming Layer                          │
-│                   C + GStreamer                             │
-│      High-performance Video Routing • SRT/UDP Transport     │
-└─────────────────────────────────────────────────────────────┘
+
+#### 📤 SRT Caller Source Workflow
+
+```mermaid
+graph TB
+    subgraph "Blackgate Server"
+        subgraph "Web Interface"
+            A["🌐 React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
+        end
+        
+        subgraph "Elixir Backend"
+            B["⚙️ Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
+            C["📊 Stats Registry<br/>(ETS + Real-time)"]
+            D["🗄️ Khepri DB<br/>(Persistent Storage)"]
+        end
+        
+        subgraph "Streaming Layer"
+            E["🎬 GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+        end
+    end
+    
+    subgraph "External Network"
+        F["📹 SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
+        G["📺 SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
+        H["📺 SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
+    end
+    
+    %% Data Flow
+    E -->|"SRT Connection<br/>(Caller Mode)"| F
+    F -->|"SRT Stream"| E
+    E -->|"SRT Connection<br/>(Caller Mode)"| G
+    E -->|"SRT Connection<br/>(Caller Mode)"| H
+    
+    %% Control Flow
+    A <-->|"HTTP/REST API"| B
+    B <-->|"Database Ops"| D
+    B <-->|"Stats Updates"| C
+    B -->|"Unix Socket"| E
+    E -->|"Live Stats"| C
+    
+    %% Styling
+    classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
+    classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
+    classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
+    classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
+    
+    class F,G,H external
+    class A ui
+    class B,C,D backend
+    class E streaming
 ```
+
+### 🛠️ Technology Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| **Frontend** | React 18 + Vite + Ant Design | Real-time dashboard & route management |
+| **Backend** | Elixir / Phoenix | REST API, WebSocket, route orchestration |
+| **Database** | Khepri (Raft consensus) | Persistent configuration storage |
+| **Stats** | ETS + Registry | In-memory real-time statistics |
+| **Streaming** | C + GStreamer | High-performance video processing |
+| **Transport** | Haivision SRT | Secure, reliable UDP-based streaming |
+| **IPC** | Unix Socket | Low-latency backend ↔ pipeline communication |
 
 ---
 
