@@ -411,7 +411,10 @@ GstElement *create_pipeline(cJSON *json)
     source = gst_element_factory_make(source_type->valuestring, "source");
     tee = gst_element_factory_make("tee", "tee");
 
-    if (!pipeline || !source || !tee) {
+    // Add tsparse for proper MPEG-TS stream handling and timing
+    GstElement *tsparse = gst_element_factory_make("tsparse", "tsparse");
+
+    if (!pipeline || !source || !tee || !tsparse) {
         g_printerr("Failed to create elements\n");
         return NULL;
     }
@@ -419,20 +422,26 @@ GstElement *create_pipeline(cJSON *json)
     g_object_set(tee, "allow-not-linked", TRUE, NULL);
     g_print("Set allow-not-linked=TRUE for tee element\n");
 
+    // Configure tsparse for smooth passthrough
+    g_object_set(tsparse, "set-timestamps", TRUE, NULL);
+    g_object_set(tsparse, "smoothing-latency", (guint64)1000000, NULL); // 1ms smoothing
+    g_print("Configured tsparse for MPEG-TS handling\n");
+
     g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(source), G_OBJECT_TYPE_NAME(source));
 
     set_element_properties(source, source_obj, source_type->valuestring, "type");
 
-    g_object_set(source, "do-timestamp", TRUE, NULL);
-    g_print("Set do-timestamp=TRUE for source element\n");
+    // Don't regenerate timestamps - use original from source
+    g_object_set(source, "do-timestamp", FALSE, NULL);
+    g_print("Set do-timestamp=FALSE for source element (using original timestamps)\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
         // Signal for logging incoming connections (no authentication required)
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
-    if (!gst_element_link(source, tee)) {
+    gst_bin_add_many(GST_BIN(pipeline), source, tsparse, tee, NULL);
+    if (!gst_element_link_many(source, tsparse, tee, NULL)) {
         g_printerr("Elements could not be linked.\n");
         gst_object_unref(pipeline);
         return NULL;
