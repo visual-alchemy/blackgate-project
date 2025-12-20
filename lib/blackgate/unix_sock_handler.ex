@@ -77,36 +77,64 @@ defmodule Blackgate.UnixSockHandler do
 
   def handle_event(
         :info,
-        {:tcp, _port, "{" <> _ = json},
+        {:tcp, _port, "{" <> _ = message},
         _,
         %{route_record: %{"exportStats" => true}} = data
       ) do
-    case Jason.decode(json) do
-      {:ok, stats} ->
-        # Store stats in registry for API access
-        RouteStatsRegistry.put_stats(data.route_id, stats)
-        
-        try do
-          stats_to_metrics(stats, data)
-        rescue
-          error ->
-            Logger.error("Error processing stats: #{inspect(error)} #{inspect(json)}")
-        end
-
-      {error, _} ->
-        Logger.error("Error decoding stats: #{inspect(error)} #{inspect(json)}")
+    # Handle potentially concatenated source + sink stats messages
+    {source_json, sink_json} = split_stats_message(message)
+    
+    # Process source stats
+    if source_json do
+      case Jason.decode(source_json) do
+        {:ok, stats} ->
+          RouteStatsRegistry.put_stats(data.route_id, stats)
+          try do
+            stats_to_metrics(stats, data)
+          rescue
+            error ->
+              Logger.error("Error processing stats: #{inspect(error)}")
+          end
+        _ -> :ok
+      end
+    end
+    
+    # Process sink stats if present
+    if sink_json do
+      case Jason.decode(sink_json) do
+        {:ok, stats} ->
+          sink_index = stats["sink-index"] || 0
+          RouteStatsRegistry.put_sink_stats(data.route_id, sink_index, stats)
+        _ -> :ok
+      end
     end
 
     :keep_state_and_data
   end
 
-  def handle_event(:info, {:tcp, _port, "{" <> _ = json}, _, %{route_id: route_id} = _data)
+  def handle_event(:info, {:tcp, _port, "{" <> _ = message}, _, %{route_id: route_id} = _data)
       when is_binary(route_id) do
-    # Store stats in registry even if exportStats is disabled
-    case Jason.decode(json) do
-      {:ok, stats} -> RouteStatsRegistry.put_stats(route_id, stats)
-      _ -> :ok
+    # Handle potentially concatenated source + sink stats messages
+    {source_json, sink_json} = split_stats_message(message)
+    
+    # Store source stats
+    if source_json do
+      case Jason.decode(source_json) do
+        {:ok, stats} -> RouteStatsRegistry.put_stats(route_id, stats)
+        _ -> :ok
+      end
     end
+    
+    # Store sink stats
+    if sink_json do
+      case Jason.decode(sink_json) do
+        {:ok, stats} ->
+          sink_index = stats["sink-index"] || 0
+          RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
+        _ -> :ok
+      end
+    end
+    
     :keep_state_and_data
   end
 
@@ -189,4 +217,17 @@ defmodule Blackgate.UnixSockHandler do
   end
 
   ## Internal functions
+
+  # Split a potentially concatenated message containing both source and sink stats
+  # Format: "{source_json}stats_sink:{sink_json}"
+  defp split_stats_message(message) do
+    case String.split(message, "stats_sink:", parts: 2) do
+      [source_json, sink_json] ->
+        # Both source and sink stats in one message
+        {String.trim(source_json), String.trim(sink_json)}
+      [source_json] ->
+        # Only source stats
+        {String.trim(source_json), nil}
+    end
+  end
 end
