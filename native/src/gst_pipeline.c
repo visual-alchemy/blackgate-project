@@ -477,7 +477,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         return FALSE;
     }
 
-    GstElement *queue = gst_element_factory_make("queue", NULL);
+    // Use queue2 for better streaming performance (supports ring buffer mode)
+    GstElement *queue = gst_element_factory_make("queue2", NULL);
     GstElement *sink_element = gst_element_factory_make(sink_type->valuestring, NULL);
 
     if (!queue || !sink_element) {
@@ -485,13 +486,13 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         return FALSE;
     }
 
-    // Configure queue for smooth streaming without artifacts
-    // - Unlimited buffers/bytes, max 3 seconds of data
-    // - leaky=2 (downstream): if full, drop OLD data to show latest frames
-    g_object_set(queue, "max-size-buffers", 0, NULL);
-    g_object_set(queue, "max-size-bytes", 0, NULL);
-    g_object_set(queue, "max-size-time", (guint64)3000000000, NULL); // 3 seconds
-    g_object_set(queue, "leaky", 2, NULL);                           // Downstream leaky
+    // Configure queue2 for low-latency real-time streaming
+    // - ring-buffer-max-size: fixed memory buffer for predictable latency
+    // - max-size-time: limit buffering to 1 second to reduce delay
+    g_object_set(queue, "use-buffering", FALSE, NULL);               // Don't pause for buffering
+    g_object_set(queue, "max-size-buffers", 0, NULL);                // Unlimited buffer count
+    g_object_set(queue, "max-size-bytes", 10 * 1024 * 1024, NULL);   // 10MB max
+    g_object_set(queue, "max-size-time", (guint64)1000000000, NULL); // 1 second max
 
     set_element_properties(sink_element, sink_config, sink_type->valuestring, "type");
 
