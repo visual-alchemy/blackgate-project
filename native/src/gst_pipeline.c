@@ -132,6 +132,7 @@ static void *print_stats(void *src)
         char *json_str = cJSON_PrintUnformatted(root);
         if (json_str) {
             send_message_to_unix_socket(json_str);
+            send_message_to_unix_socket("\n"); // Newline separator
             free(json_str);
         }
 
@@ -251,6 +252,7 @@ static void collect_sink_stats(void)
             // Send with sink prefix so Elixir can distinguish from source stats
             send_message_to_unix_socket("stats_sink:");
             send_message_to_unix_socket(json_str);
+            send_message_to_unix_socket("\n"); // Newline separator
             free(json_str);
         }
 
