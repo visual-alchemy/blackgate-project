@@ -114,8 +114,17 @@ const Settings = () => {
 
           const result = await backupApi.importRoutes(file);
 
+          // Check for error response
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          const imported = result.imported ?? 0;
+          const failed = result.failed ?? 0;
+          const msg = result.message ?? 'Import completed';
+
           messageApi.success({
-            content: `${result.message}: ${result.imported} imported, ${result.failed} failed`,
+            content: `${msg}: ${imported} imported, ${failed} failed`,
             icon: <CheckCircleOutlined />,
             key: 'importOperation',
             duration: 5
