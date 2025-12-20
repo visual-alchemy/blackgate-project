@@ -10,7 +10,9 @@ const Settings = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
+  const [isImportingRoutes, setIsImportingRoutes] = useState(false);
   const fileInputRef = useRef(null);
+  const routesFileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
 
@@ -71,6 +73,74 @@ const Settings = () => {
     } finally {
       setIsDownloadingRoutes(false);
     }
+  };
+
+  const handleRoutesImportChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.json')) {
+      messageApi.error({
+        content: 'You can only upload .json files!',
+        icon: <CloseCircleOutlined />,
+        duration: 5
+      });
+      if (routesFileInputRef.current) {
+        routesFileInputRef.current.value = '';
+      }
+      return;
+    }
+
+    modal.confirm({
+      title: 'Confirm Import',
+      icon: <ExclamationCircleOutlined />,
+      content: (
+        <>
+          <p>Are you sure you want to import routes from this file?</p>
+          <p>This will create new routes based on the JSON file.</p>
+          <p>Selected file: {file.name}</p>
+        </>
+      ),
+      okText: 'Yes, Import',
+      cancelText: 'No, Cancel',
+      onOk: async () => {
+        setIsImportingRoutes(true);
+        try {
+          messageApi.loading({
+            content: `Importing routes from: ${file.name}...`,
+            key: 'importOperation',
+            duration: 0
+          });
+
+          const result = await backupApi.importRoutes(file);
+
+          messageApi.success({
+            content: `${result.message}: ${result.imported} imported, ${result.failed} failed`,
+            icon: <CheckCircleOutlined />,
+            key: 'importOperation',
+            duration: 5
+          });
+        } catch (error) {
+          console.error('Error importing routes:', error);
+          messageApi.error({
+            content: `Failed to import routes: ${error.message}`,
+            icon: <CloseCircleOutlined />,
+            key: 'importOperation',
+            duration: 5
+          });
+        } finally {
+          setIsImportingRoutes(false);
+          if (routesFileInputRef.current) {
+            routesFileInputRef.current.value = '';
+          }
+        }
+      },
+      onCancel: () => {
+        if (routesFileInputRef.current) {
+          routesFileInputRef.current.value = '';
+        }
+      }
+    });
   };
 
   const handleFileChange = async (e) => {
@@ -224,7 +294,7 @@ const Settings = () => {
   const RoutesTabContent = () => {
     return (
       <div>
-        <Card title="Export Routes">
+        <Card title="Export Routes" style={{ marginBottom: '16px' }}>
           <p>Export all routes and their destinations as a JSON file.</p>
           <Space direction="vertical" style={{ width: '100%' }}>
             <Button
@@ -237,6 +307,30 @@ const Settings = () => {
             </Button>
             <p style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.45)' }}>
               This will export a JSON file containing all routes with their destinations.
+            </p>
+          </Space>
+        </Card>
+
+        <Card title="Import Routes">
+          <p>Import routes from a previously exported JSON file.</p>
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <input
+              type="file"
+              ref={routesFileInputRef}
+              onChange={handleRoutesImportChange}
+              style={{ display: 'none' }}
+              accept=".json"
+              name="routes-import"
+            />
+            <Button
+              icon={<UploadOutlined />}
+              onClick={() => routesFileInputRef.current.click()}
+              loading={isImportingRoutes}
+            >
+              Select JSON File
+            </Button>
+            <p style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.45)' }}>
+              This will create new routes based on the imported JSON file.
             </p>
           </Space>
         </Card>

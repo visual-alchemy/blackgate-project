@@ -158,6 +158,23 @@ export const backupApi = {
     }
   },
 
+  importRoutes: async (file) => {
+    try {
+      const text = await file.text();
+      const response = await authFetch('/api/backup/import-routes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: text,
+      });
+      return response.json();
+    } catch (error) {
+      console.error('Error importing routes:', error);
+      throw error;
+    }
+  },
+
   restore: async (file) => {
     try {
       // Read the file as an ArrayBuffer

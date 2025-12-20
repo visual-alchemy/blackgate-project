@@ -131,4 +131,85 @@ defmodule BlackgateWeb.BackupController do
         |> json(%{error: "Failed to process backup: #{inspect(e)}"})
     end
   end
+
+  def import_routes(conn, _params) do
+    try do
+      {:ok, body, _conn} = Plug.Conn.read_body(conn)
+      
+      case Jason.decode(body) do
+        {:ok, routes_data} when is_list(routes_data) ->
+          # Import each route
+          results = Enum.map(routes_data, fn route_data ->
+            import_single_route(route_data)
+          end)
+          
+          successful = Enum.count(results, fn r -> match?({:ok, _}, r) end)
+          failed = Enum.count(results, fn r -> match?({:error, _}, r) end)
+          
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            message: "Import completed",
+            imported: successful,
+            failed: failed
+          })
+          
+        {:ok, %{"data" => routes_data}} when is_list(routes_data) ->
+          # Handle wrapped format from export
+          results = Enum.map(routes_data, fn route_data ->
+            import_single_route(route_data)
+          end)
+          
+          successful = Enum.count(results, fn r -> match?({:ok, _}, r) end)
+          failed = Enum.count(results, fn r -> match?({:error, _}, r) end)
+          
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            message: "Import completed",
+            imported: successful,
+            failed: failed
+          })
+          
+        {:ok, _} ->
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "Invalid format: expected array of routes or {data: [routes]}"})
+          
+        {:error, reason} ->
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "Failed to parse JSON: #{inspect(reason)}"})
+      end
+    rescue
+      e ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to import routes: #{inspect(e)}"})
+    end
+  end
+
+  defp import_single_route(route_data) do
+    # Extract route fields (remove id to create new)
+    route_params = route_data
+      |> Map.drop(["id", "destinations", "inserted_at", "updated_at", "status"])
+    
+    # Create the route
+    case Db.create_route(route_params) do
+      {:ok, new_route} ->
+        # Import destinations if present
+        destinations = Map.get(route_data, "destinations", [])
+        Enum.each(destinations, fn dest_data ->
+          dest_params = dest_data
+            |> Map.drop(["id", "route_id", "inserted_at", "updated_at"])
+          
+          Db.create_destination(new_route["id"], dest_params)
+        end)
+        
+        {:ok, new_route}
+        
+      error ->
+        error
+    end
+  end
 end
