@@ -28,6 +28,7 @@ import {
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
 import RouteStats from '../../components/RouteStats';
+import DestinationStats from '../../components/DestinationStats';
 
 const { Title, Text } = Typography;
 
@@ -526,6 +527,13 @@ const RouteItem = () => {
       <RouteStats
         routeId={id}
         isRunning={routeData?.status?.toLowerCase() === 'started'}
+      />
+
+      {/* Destination Statistics - Show when route is running and has SRT destinations */}
+      <DestinationStats
+        routeId={id}
+        isRunning={routeData?.status?.toLowerCase() === 'started'}
+        destinations={routeData?.destinations || []}
       />
 
       {/* Destinations Table */}

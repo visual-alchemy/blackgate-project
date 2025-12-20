@@ -8,15 +8,22 @@
 
 #include "unix_socket.h"
 
-static gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink_config);
+#define MAX_SINKS 32
+
+static gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink_config, int sink_index);
 static void set_element_properties(GstElement *element, cJSON *config, const char *element_type,
                                    const char *skip_property);
 static void set_srt_mode_property(GstElement *element, const char *mode_str, const char *element_desc);
+static void collect_sink_stats(void);
 
 static pthread_t stats_thread;
 static GstElement *source_element = NULL;
 static gboolean running = TRUE;
 static GMainLoop *loop = NULL;
+
+// Store SRT sink elements for stats collection
+static GstElement *sink_elements[MAX_SINKS];
+static int sink_count = 0;
 
 static void *print_stats(void *src)
 {
@@ -130,9 +137,126 @@ static void *print_stats(void *src)
 
         cJSON_Delete(root);
         gst_structure_free(stats);
+
+        // Also collect and send sink stats
+        collect_sink_stats();
     }
 
     return NULL;
+}
+
+// Collect stats from all SRT sink elements (destinations)
+static void collect_sink_stats(void)
+{
+    for (int i = 0; i < sink_count; i++) {
+        GstElement *sink = sink_elements[i];
+        if (!sink) continue;
+
+        GstStructure *stats = NULL;
+        g_object_get(sink, "stats", &stats, NULL);
+
+        if (!stats) {
+            continue;
+        }
+
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddNumberToObject(root, "sink-index", i);
+
+        // Extract sink stats (bytes sent, send rate, etc.)
+        guint64 bytes_sent_total = 0;
+        gint64 packets_sent = 0, packets_lost = 0, packets_dropped = 0;
+        gint64 packets_retransmitted = 0;
+        gdouble rtt_ms = 0.0, send_rate_mbps = 0.0, bandwidth_mbps = 0.0;
+        gint negotiated_latency_ms = 0;
+
+        gst_structure_get_uint64(stats, "bytes-sent-total", &bytes_sent_total);
+        gst_structure_get_int64(stats, "packets-sent", &packets_sent);
+        gst_structure_get_int64(stats, "packets-sent-lost", &packets_lost);
+        gst_structure_get_int64(stats, "packets-sent-dropped", &packets_dropped);
+        gst_structure_get_int64(stats, "packets-sent-retransmitted", &packets_retransmitted);
+        gst_structure_get_double(stats, "rtt-ms", &rtt_ms);
+        gst_structure_get_double(stats, "send-rate-mbps", &send_rate_mbps);
+        gst_structure_get_double(stats, "bandwidth-mbps", &bandwidth_mbps);
+        gst_structure_get_int(stats, "negotiated-latency-ms", &negotiated_latency_ms);
+
+        cJSON_AddNumberToObject(root, "bytes-sent-total", (double)bytes_sent_total);
+        cJSON_AddNumberToObject(root, "packets-sent", (double)packets_sent);
+        cJSON_AddNumberToObject(root, "packets-sent-lost", (double)packets_lost);
+        cJSON_AddNumberToObject(root, "packets-sent-dropped", (double)packets_dropped);
+        cJSON_AddNumberToObject(root, "packets-sent-retransmitted", (double)packets_retransmitted);
+        cJSON_AddNumberToObject(root, "rtt-ms", rtt_ms);
+        cJSON_AddNumberToObject(root, "send-rate-mbps", send_rate_mbps);
+        cJSON_AddNumberToObject(root, "bandwidth-mbps", bandwidth_mbps);
+        cJSON_AddNumberToObject(root, "negotiated-latency-ms", negotiated_latency_ms);
+
+        // Check for connected callers (clients pulling from this sink in listener mode)
+        const GValue *callers_val = gst_structure_get_value(stats, "callers");
+        if (!callers_val) {
+            cJSON_AddNumberToObject(root, "connected-callers", 0);
+            cJSON_AddArrayToObject(root, "callers");
+        } else if (G_VALUE_HOLDS(callers_val, G_TYPE_VALUE_ARRAY)) {
+            GValueArray *callers_array = g_value_get_boxed(callers_val);
+            gint num_callers = callers_array ? callers_array->n_values : 0;
+
+            cJSON_AddNumberToObject(root, "connected-callers", num_callers);
+            cJSON *callers = cJSON_AddArrayToObject(root, "callers");
+
+            for (gint j = 0; j < num_callers; j++) {
+                GValue *caller_val = &callers_array->values[j];
+                if (!G_VALUE_HOLDS(caller_val, GST_TYPE_STRUCTURE)) {
+                    continue;
+                }
+
+                const GstStructure *caller_stats = g_value_get_boxed(caller_val);
+                if (!caller_stats) {
+                    continue;
+                }
+
+                cJSON *caller = cJSON_CreateObject();
+
+                gint n_fields = gst_structure_n_fields(caller_stats);
+                for (gint k = 0; k < n_fields; k++) {
+                    const gchar *field_name = gst_structure_nth_field_name(caller_stats, k);
+                    const GValue *value = gst_structure_get_value(caller_stats, field_name);
+
+                    if (G_VALUE_HOLDS(value, G_TYPE_INT64)) {
+                        cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_int64(value));
+                    } else if (G_VALUE_HOLDS(value, G_TYPE_INT)) {
+                        cJSON_AddNumberToObject(caller, field_name, g_value_get_int(value));
+                    } else if (G_VALUE_HOLDS(value, G_TYPE_UINT64)) {
+                        cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_uint64(value));
+                    } else if (G_VALUE_HOLDS(value, G_TYPE_DOUBLE)) {
+                        cJSON_AddNumberToObject(caller, field_name, g_value_get_double(value));
+                    } else if (G_VALUE_HOLDS(value, G_TYPE_OBJECT) && g_strcmp0(field_name, "caller-address") == 0) {
+                        GObject *addr_obj = g_value_get_object(value);
+                        if (G_IS_INET_SOCKET_ADDRESS(addr_obj)) {
+                            GInetSocketAddress *addr = G_INET_SOCKET_ADDRESS(addr_obj);
+                            GInetAddress *inet_addr = g_inet_socket_address_get_address(addr);
+                            guint16 port = g_inet_socket_address_get_port(addr);
+                            gchar *ip = g_inet_address_to_string(inet_addr);
+                            gchar *addr_str = g_strdup_printf("%s:%d", ip, port);
+                            cJSON_AddStringToObject(caller, field_name, addr_str);
+                            g_free(ip);
+                            g_free(addr_str);
+                        }
+                    }
+                }
+
+                cJSON_AddItemToArray(callers, caller);
+            }
+        }
+
+        char *json_str = cJSON_PrintUnformatted(root);
+        if (json_str) {
+            // Send with sink prefix so Elixir can distinguish from source stats
+            send_message_to_unix_socket("stats_sink:");
+            send_message_to_unix_socket(json_str);
+            free(json_str);
+        }
+
+        cJSON_Delete(root);
+        gst_structure_free(stats);
+    }
 }
 
 static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
@@ -312,13 +436,18 @@ GstElement *create_pipeline(cJSON *json)
         return NULL;
     }
 
+    // Reset sink counter
+    sink_count = 0;
+
     cJSON *sink;
+    int sink_idx = 0;
     cJSON_ArrayForEach(sink, sinks_array)
     {
-        if (!add_sink_to_pipeline(pipeline, tee, sink)) {
+        if (!add_sink_to_pipeline(pipeline, tee, sink, sink_idx)) {
             gst_object_unref(pipeline);
             return NULL;
         }
+        sink_idx++;
     }
 
     loop = g_main_loop_new(NULL, FALSE);
@@ -337,7 +466,7 @@ GstElement *create_pipeline(cJSON *json)
     return pipeline;
 }
 
-gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink_config)
+gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink_config, int sink_index)
 {
     cJSON *sink_type = cJSON_GetObjectItem(sink_config, "type");
 
@@ -370,6 +499,13 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         g_object_set(sink_element, "sync", FALSE, NULL);
         g_object_set(sink_element, "wait-for-connection", FALSE, NULL);
         g_print("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE\n");
+
+        // Store this SRT sink element for stats collection
+        if (sink_count < MAX_SINKS) {
+            sink_elements[sink_count] = sink_element;
+            sink_count++;
+            g_print("Stored SRT sink element at index %d for stats collection\n", sink_index);
+        }
     }
 
     gst_bin_add_many(GST_BIN(pipeline), queue, sink_element, NULL);

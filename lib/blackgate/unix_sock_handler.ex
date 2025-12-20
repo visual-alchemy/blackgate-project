@@ -115,6 +115,23 @@ defmodule Blackgate.UnixSockHandler do
     :keep_state_and_data
   end
 
+  def handle_event(:info, {:tcp, _port, "stats_sink:" <> json}, _state, %{route_id: route_id} = _data)
+      when is_binary(route_id) do
+    case Jason.decode(json) do
+      {:ok, stats} ->
+        sink_index = stats["sink-index"] || 0
+        RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
+      _ ->
+        :ok
+    end
+    :keep_state_and_data
+  end
+
+  def handle_event(:info, {:tcp, _port, "stats_sink:" <> _}, _, _) do
+    # ignore sink stats when no route_id
+    :keep_state_and_data
+  end
+
   def handle_event(:info, {:tcp, _port, "stats_source_stream_id:" <> stream_id}, _state, data) do
     Logger.info("stats_source_stream_id: #{stream_id}")
     {:keep_state, %{data | source_stream_id: stream_id}}

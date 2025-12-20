@@ -98,5 +98,13 @@ defmodule BlackgateWeb.RouteController do
     end
   end
 
+  def destination_stats(conn, %{"route_id" => route_id}) do
+    sink_stats = Blackgate.RouteStatsRegistry.get_all_sink_stats(route_id)
+
+    conn
+    |> put_status(:ok)
+    |> json(%{data: sink_stats})
+  end
+
   defp data(conn, data), do: json(conn, %{data: data})
 end

@@ -110,6 +110,12 @@ export const routesApi = {
     const response = await authFetch(`/api/routes/${id}/stats`);
     return response.json();
   },
+
+  // Get destination statistics (per-sink stats)
+  getDestinationStats: async (id) => {
+    const response = await authFetch(`/api/routes/${id}/destination-stats`);
+    return response.json();
+  },
 };
 
 export const backupApi = {
