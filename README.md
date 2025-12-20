@@ -25,7 +25,7 @@
 
 ---
 
-> ⚠️ **Pre-Alpha**: Early development stage. Features may be incomplete and breaking changes are expected.
+> 🚀 **Alpha**: Core features functional. Actively improving based on real-world usage.
 
 ## ✨ Features
 
@@ -41,6 +41,7 @@
 | **🛣️ Route Management** | Create, edit, start, stop, delete routes with multiple destinations |
 | **🔧 REST API** | Full programmatic control for automation |
 | **🐳 Docker Ready** | One-command deployment with backup/restore |
+| **⚡ High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
 
 ### 📈 Real-time Statistics
 
