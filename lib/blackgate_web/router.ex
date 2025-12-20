@@ -45,6 +45,7 @@ defmodule BlackgateWeb.Router do
     get "/backup/export", BackupController, :export
     get "/backup/create-download-link", BackupController, :create_download_link
     get "/backup/create-backup-download-link", BackupController, :create_backup_download_link
+    post "/backup/import-routes", BackupController, :import_routes
 
     get "/system/pipelines", SystemController, :list_pipelines
     get "/system/pipelines/detailed", SystemController, :list_pipelines_detailed
@@ -58,7 +59,6 @@ defmodule BlackgateWeb.Router do
   scope "/api", BlackgateWeb do
     pipe_through [:api_no_parse]
     post "/restore", BackupController, :restore
-    post "/backup/import-routes", BackupController, :import_routes
   end
 
   scope "/backup", BlackgateWeb do
