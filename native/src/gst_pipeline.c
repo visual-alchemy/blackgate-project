@@ -414,7 +414,10 @@ GstElement *create_pipeline(cJSON *json)
     // Add input queue to buffer incoming data and smooth out network hiccups
     GstElement *input_queue = gst_element_factory_make("queue2", "input-queue");
 
-    if (!pipeline || !source || !tee || !input_queue) {
+    // Add tsparse for MPEG-TS packet alignment and error recovery
+    GstElement *tsparse = gst_element_factory_make("tsparse", "tsparse");
+
+    if (!pipeline || !source || !tee || !input_queue || !tsparse) {
         g_printerr("Failed to create elements\n");
         return NULL;
     }
@@ -429,6 +432,13 @@ GstElement *create_pipeline(cJSON *json)
     g_object_set(input_queue, "max-size-bytes", 30 * 1024 * 1024, NULL);   // 30MB input buffer
     g_object_set(input_queue, "max-size-time", (guint64)2000000000, NULL); // 2 seconds max
     g_print("Configured input queue: 30MB buffer, 2s max time\n");
+
+    // Configure tsparse for MPEG-TS alignment
+    // set-timestamps=FALSE: Don't regenerate timestamps, preserve original
+    // smoothing-latency: High value to avoid timing issues (2 seconds in ns)
+    g_object_set(tsparse, "set-timestamps", FALSE, NULL);
+    g_object_set(tsparse, "smoothing-latency", (guint64)2000000000, NULL); // 2 seconds
+    g_print("Configured tsparse: set-timestamps=FALSE, smoothing-latency=2s\n");
 
     g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(source), G_OBJECT_TYPE_NAME(source));
 
@@ -451,13 +461,13 @@ GstElement *create_pipeline(cJSON *json)
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), source, input_queue, tee, NULL);
-    if (!gst_element_link_many(source, input_queue, tee, NULL)) {
+    gst_bin_add_many(GST_BIN(pipeline), source, input_queue, tsparse, tee, NULL);
+    if (!gst_element_link_many(source, input_queue, tsparse, tee, NULL)) {
         g_printerr("Elements could not be linked.\n");
         gst_object_unref(pipeline);
         return NULL;
     }
-    g_print("Pipeline: source -> input_queue -> tee\n");
+    g_print("Pipeline: source -> input_queue -> tsparse -> tee\n");
 
     // Reset sink counter
     sink_count = 0;
