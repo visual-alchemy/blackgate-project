@@ -411,13 +411,24 @@ GstElement *create_pipeline(cJSON *json)
     source = gst_element_factory_make(source_type->valuestring, "source");
     tee = gst_element_factory_make("tee", "tee");
 
-    if (!pipeline || !source || !tee) {
+    // Add input queue to buffer incoming data and smooth out network hiccups
+    GstElement *input_queue = gst_element_factory_make("queue2", "input-queue");
+
+    if (!pipeline || !source || !tee || !input_queue) {
         g_printerr("Failed to create elements\n");
         return NULL;
     }
 
     g_object_set(tee, "allow-not-linked", TRUE, NULL);
     g_print("Set allow-not-linked=TRUE for tee element\n");
+
+    // Configure input queue for buffering incoming stream
+    // This helps smooth out network jitter and brief hiccups from source
+    g_object_set(input_queue, "use-buffering", FALSE, NULL);
+    g_object_set(input_queue, "max-size-buffers", 0, NULL);                // Unlimited buffer count
+    g_object_set(input_queue, "max-size-bytes", 30 * 1024 * 1024, NULL);   // 30MB input buffer
+    g_object_set(input_queue, "max-size-time", (guint64)2000000000, NULL); // 2 seconds max
+    g_print("Configured input queue: 30MB buffer, 2s max time\n");
 
     g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(source), G_OBJECT_TYPE_NAME(source));
 
@@ -433,12 +444,13 @@ GstElement *create_pipeline(cJSON *json)
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
-    if (!gst_element_link(source, tee)) {
+    gst_bin_add_many(GST_BIN(pipeline), source, input_queue, tee, NULL);
+    if (!gst_element_link_many(source, input_queue, tee, NULL)) {
         g_printerr("Elements could not be linked.\n");
         gst_object_unref(pipeline);
         return NULL;
     }
+    g_print("Pipeline: source -> input_queue -> tee\n");
 
     // Reset sink counter
     sink_count = 0;
