@@ -369,6 +369,64 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               )
                             }
                           </Form.Item>
+
+                          {/* Advanced SRT Settings */}
+                          <Card
+                            title="Advanced SRT Settings"
+                            size="small"
+                            style={{ marginTop: '16px', backgroundColor: '#1a1a1a' }}
+                            extra={<Typography.Text type="secondary" style={{ fontSize: '12px' }}>For problematic sources with packet loss</Typography.Text>}
+                          >
+                            <Typography.Paragraph type="secondary" style={{ marginBottom: '16px', fontSize: '13px' }}>
+                              These settings help recover from network jitter and packet loss. Only adjust if experiencing stream quality issues.
+                            </Typography.Paragraph>
+
+                            <Form.Item
+                              label="Receive Buffer (rcvbuf)"
+                              name={['schema_options', 'rcvbuf']}
+                              tooltip="Size of the receive buffer in bytes"
+                              extra="Larger buffer helps with high bitrate streams and network jitter. Default: ~8MB (calculated by SRT)"
+                            >
+                              <InputNumber
+                                style={{ width: '200px' }}
+                                min={0}
+                                step={1000000}
+                                placeholder="e.g., 50000000 (50MB)"
+                                formatter={(value) => value ? `${value} bytes` : ''}
+                                parser={(value) => value.replace(' bytes', '')}
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label="Loss Max TTL (lossmaxttl)"
+                              name={['schema_options', 'lossmaxttl']}
+                              tooltip="Tolerance for out-of-order packets"
+                              extra="Number of packets to wait before declaring loss. Higher values help with jittery networks. Default: 0 (disabled)"
+                            >
+                              <InputNumber
+                                style={{ width: '150px' }}
+                                min={0}
+                                max={1000}
+                                placeholder="e.g., 10"
+                              />
+                            </Form.Item>
+
+                            <Form.Item
+                              label="Overhead Bandwidth % (oheadbw)"
+                              name={['schema_options', 'oheadbw']}
+                              tooltip="Extra bandwidth for retransmissions"
+                              extra="Percentage of extra bandwidth reserved for packet recovery. Default: 25%"
+                            >
+                              <InputNumber
+                                style={{ width: '150px' }}
+                                min={5}
+                                max={100}
+                                placeholder="e.g., 50"
+                                formatter={(value) => value ? `${value}%` : ''}
+                                parser={(value) => value.replace('%', '')}
+                              />
+                            </Form.Item>
+                          </Card>
                         </>
                       )
                     }

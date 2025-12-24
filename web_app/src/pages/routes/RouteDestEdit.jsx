@@ -88,7 +88,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
     const availableNodes = [
         { label: 'self', value: 'self' }
-      ];
+    ];
 
     const handleValuesChange = (changedValues, allValues) => {
         if (onChange) {
@@ -138,12 +138,12 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
         <div>
             {contextHolder}
             {/* Page Title */}
-            <Title 
-                level={3} 
-                style={{ 
-                    margin: '0 0 24px 0', 
-                    fontSize: '1.75rem', 
-                    fontWeight: 600 
+            <Title
+                level={3}
+                style={{
+                    margin: '0 0 24px 0',
+                    fontSize: '1.75rem',
+                    fontWeight: 600
                 }}
             >
                 {destId === 'new' ? 'Add Destination' : 'Edit Destination'}
@@ -218,12 +218,12 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             },
                                                         ]}
                                                     >
-                                                        <InputNumber 
-                                                            style={{ width: '150px' }} 
-                                                            placeholder="Enter port number" 
+                                                        <InputNumber
+                                                            style={{ width: '150px' }}
+                                                            placeholder="Enter port number"
                                                         />
                                                     </Form.Item>
-                                                    
+
                                                     <Form.Item
                                                         label="Mode"
                                                         name={['schema_options', 'mode']}
@@ -293,6 +293,64 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             )
                                                         }
                                                     </Form.Item>
+
+                                                    {/* Advanced SRT Settings for Destination */}
+                                                    <Card
+                                                        title="Advanced SRT Settings"
+                                                        size="small"
+                                                        style={{ marginTop: '16px', backgroundColor: '#1a1a1a' }}
+                                                        extra={<Typography.Text type="secondary" style={{ fontSize: '12px' }}>For output tuning</Typography.Text>}
+                                                    >
+                                                        <Typography.Paragraph type="secondary" style={{ marginBottom: '16px', fontSize: '13px' }}>
+                                                            These settings help optimize output stream delivery. Only adjust if experiencing issues.
+                                                        </Typography.Paragraph>
+
+                                                        <Form.Item
+                                                            label="Send Buffer (sndbuf)"
+                                                            name={['schema_options', 'sndbuf']}
+                                                            tooltip="Size of the send buffer in bytes"
+                                                            extra="Larger buffer helps with high bitrate streams. Default: ~8MB (calculated by SRT)"
+                                                        >
+                                                            <InputNumber
+                                                                style={{ width: '200px' }}
+                                                                min={0}
+                                                                step={1000000}
+                                                                placeholder="e.g., 50000000 (50MB)"
+                                                                formatter={(value) => value ? `${value} bytes` : ''}
+                                                                parser={(value) => value.replace(' bytes', '')}
+                                                            />
+                                                        </Form.Item>
+
+                                                        <Form.Item
+                                                            label="Overhead Bandwidth % (oheadbw)"
+                                                            name={['schema_options', 'oheadbw']}
+                                                            tooltip="Extra bandwidth for retransmissions"
+                                                            extra="Percentage of extra bandwidth for packet recovery. Default: 25%"
+                                                        >
+                                                            <InputNumber
+                                                                style={{ width: '150px' }}
+                                                                min={5}
+                                                                max={100}
+                                                                placeholder="e.g., 50"
+                                                                formatter={(value) => value ? `${value}%` : ''}
+                                                                parser={(value) => value.replace('%', '')}
+                                                            />
+                                                        </Form.Item>
+
+                                                        <Form.Item
+                                                            label="Max Bandwidth (maxbw)"
+                                                            name={['schema_options', 'maxbw']}
+                                                            tooltip="Maximum bandwidth in bytes per second"
+                                                            extra="Limit maximum sending rate. 0 = unlimited. Default: 0"
+                                                        >
+                                                            <InputNumber
+                                                                style={{ width: '200px' }}
+                                                                min={0}
+                                                                step={1000000}
+                                                                placeholder="e.g., 50000000 (50MB/s)"
+                                                            />
+                                                        </Form.Item>
+                                                    </Card>
                                                 </>
                                             )
                                         }
@@ -326,9 +384,9 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             },
                                                         ]}
                                                     >
-                                                        <InputNumber 
-                                                            style={{ width: '150px' }} 
-                                                            placeholder="Enter port number" 
+                                                        <InputNumber
+                                                            style={{ width: '150px' }}
+                                                            placeholder="Enter port number"
                                                         />
                                                     </Form.Item>
                                                 </>
@@ -340,15 +398,15 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                             <Row justify="end" style={{ marginTop: '24px' }}>
                                 <Space>
-                                    <Button 
-                                        icon={<CloseOutlined />} 
+                                    <Button
+                                        icon={<CloseOutlined />}
                                         onClick={handleCancel}
                                     >
                                         Cancel
                                     </Button>
-                                    <Button 
-                                        type="primary" 
-                                        icon={<SaveOutlined />} 
+                                    <Button
+                                        type="primary"
+                                        icon={<SaveOutlined />}
                                         onClick={handleSave}
                                     >
                                         Save
