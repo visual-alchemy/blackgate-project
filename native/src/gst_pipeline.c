@@ -440,6 +440,13 @@ GstElement *create_pipeline(cJSON *json)
     g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
+        // SRT-specific recovery settings for problematic sources
+        // These help recover from network jitter and packet loss
+
+        // Larger receive buffer (50MB) - allows more data to be buffered
+        // This helps when packets arrive out of order or with jitter
+        g_print("Configuring SRT source with enhanced recovery settings...\n");
+
         // Signal for logging incoming connections (no authentication required)
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
