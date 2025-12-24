@@ -423,10 +423,10 @@ GstElement *create_pipeline(cJSON *json)
 
     set_element_properties(source, source_obj, source_type->valuestring, "type");
 
-    // Use do-timestamp=TRUE to ensure proper pipeline timing
-    // This regenerates timestamps based on arrival time which is crucial for SRT
-    g_object_set(source, "do-timestamp", TRUE, NULL);
-    g_print("Set do-timestamp=TRUE for source element\n");
+    // Use do-timestamp=FALSE for pure MPEG-TS passthrough
+    // Regenerating timestamps corrupts PES packet structure causing artifacts
+    g_object_set(source, "do-timestamp", FALSE, NULL);
+    g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
         // Signal for logging incoming connections (no authentication required)
