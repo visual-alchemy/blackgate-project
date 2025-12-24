@@ -411,34 +411,13 @@ GstElement *create_pipeline(cJSON *json)
     source = gst_element_factory_make(source_type->valuestring, "source");
     tee = gst_element_factory_make("tee", "tee");
 
-    // Add input queue to buffer incoming data and smooth out network hiccups
-    GstElement *input_queue = gst_element_factory_make("queue2", "input-queue");
-
-    // Add tsparse for MPEG-TS packet alignment and error recovery
-    GstElement *tsparse = gst_element_factory_make("tsparse", "tsparse");
-
-    if (!pipeline || !source || !tee || !input_queue || !tsparse) {
+    if (!pipeline || !source || !tee) {
         g_printerr("Failed to create elements\n");
         return NULL;
     }
 
     g_object_set(tee, "allow-not-linked", TRUE, NULL);
     g_print("Set allow-not-linked=TRUE for tee element\n");
-
-    // Configure input queue for buffering incoming stream
-    // This helps smooth out network jitter and brief hiccups from source
-    g_object_set(input_queue, "use-buffering", FALSE, NULL);
-    g_object_set(input_queue, "max-size-buffers", 0, NULL);                // Unlimited buffer count
-    g_object_set(input_queue, "max-size-bytes", 30 * 1024 * 1024, NULL);   // 30MB input buffer
-    g_object_set(input_queue, "max-size-time", (guint64)2000000000, NULL); // 2 seconds max
-    g_print("Configured input queue: 30MB buffer, 2s max time\n");
-
-    // Configure tsparse for MPEG-TS alignment
-    // set-timestamps=FALSE: Don't regenerate timestamps, preserve original
-    // smoothing-latency: High value to avoid timing issues (2 seconds in ns)
-    g_object_set(tsparse, "set-timestamps", FALSE, NULL);
-    g_object_set(tsparse, "smoothing-latency", (guint64)2000000000, NULL); // 2 seconds
-    g_print("Configured tsparse: set-timestamps=FALSE, smoothing-latency=2s\n");
 
     g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(source), G_OBJECT_TYPE_NAME(source));
 
@@ -450,24 +429,18 @@ GstElement *create_pipeline(cJSON *json)
     g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
-        // SRT-specific recovery settings for problematic sources
-        // These help recover from network jitter and packet loss
-
-        // Larger receive buffer (50MB) - allows more data to be buffered
-        // This helps when packets arrive out of order or with jitter
-        g_print("Configuring SRT source with enhanced recovery settings...\n");
-
-        // Signal for logging incoming connections (no authentication required)
+        // Signal for logging incoming connections
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), source, input_queue, tsparse, tee, NULL);
-    if (!gst_element_link_many(source, input_queue, tsparse, tee, NULL)) {
+    // ULTRA-SIMPLE PIPELINE: source -> tee (no queues, no processing)
+    gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
+    if (!gst_element_link(source, tee)) {
         g_printerr("Elements could not be linked.\n");
         gst_object_unref(pipeline);
         return NULL;
     }
-    g_print("Pipeline: source -> input_queue -> tsparse -> tee\n");
+    g_print("ULTRA-SIMPLE Pipeline: source -> tee (no intermediate processing)\n");
 
     // Reset sink counter
     sink_count = 0;
