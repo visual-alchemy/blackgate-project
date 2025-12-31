@@ -205,7 +205,7 @@ sudo add-apt-repository universe
 sudo apt-get update
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libcjson-dev libsrt-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
+  libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
 ```
 </details>
 
@@ -232,7 +232,7 @@ sudo add-apt-repository universe
 sudo apt-get update
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libcjson-dev libsrt-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
+  libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
 ```
 
 **Tips:**
