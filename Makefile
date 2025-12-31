@@ -26,6 +26,14 @@ dev-all:
 clean:
 	rm -rf _build && rm -rf deps
 
+setup:
+	@echo "Installing Backend Dependencies..."
+	mix local.hex --force
+	mix local.rebar --force
+	mix deps.get
+	@echo "Installing Frontend Dependencies..."
+	cd web_app && yarn install
+
 dev_udp0:
 	ffmpeg -f lavfi -re -i smptebars=duration=6000:size=1280x720:rate=25 -f lavfi -re -i sine=frequency=1000:duration=6000:sample_rate=44100 \
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \

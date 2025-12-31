@@ -201,16 +201,30 @@ graph TB
 <summary><strong>Ubuntu/Debian</strong></summary>
 
 ```bash
+# 1. Enable Universe Repo & Update
 sudo add-apt-repository universe
 sudo apt-get update
+
+# 2. Install System Libraries
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
+  libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential git curl wget
 
-# Install Node.js 18+ and Yarn
+# 3. Install Node.js 18+ and Yarn
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
 sudo npm install --global yarn --force
+
+# 4. Install Elixir 1.17+ & Erlang 27+
+wget https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb && sudo dpkg -i erlang-solutions_2.0_all.deb
+sudo apt-get update
+sudo apt-get install -y esl-erlang elixir
+
+# 5. Project Setup (Run these inside the project folder)
+# mix local.hex --force
+# mix local.rebar --force
+# mix deps.get
+# cd web_app && yarn install
 ```
 </details>
 
@@ -273,9 +287,8 @@ For production on Windows, use **Docker Desktop** which handles all dependencies
 git clone https://github.com/visual-alchemy/blackgate-project.git
 cd blackgate-project
 
-# Install dependencies
-mix deps.get
-cd web_app && yarn install && cd ..
+# Install dependencies for both Backend and Frontend
+make setup
 
 # Start development servers
 make dev-all
