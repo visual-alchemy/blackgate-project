@@ -206,6 +206,11 @@ sudo apt-get update
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
+
+# Install Node.js 18+ and Yarn
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install --global yarn
 ```
 </details>
 
@@ -233,6 +238,11 @@ sudo apt-get update
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
+
+# Install Node.js 18+ and Yarn
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install --global yarn
 ```
 
 **Tips:**
