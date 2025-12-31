@@ -201,6 +201,7 @@ graph TB
 <summary><strong>Ubuntu/Debian</strong></summary>
 
 ```bash
+sudo add-apt-repository universe
 sudo apt-get update
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
@@ -227,6 +228,7 @@ WSL2 is fully supported. Use Ubuntu/Debian instructions inside WSL:
 wsl --install -d Ubuntu
 
 # Then inside WSL, install dependencies
+sudo add-apt-repository universe
 sudo apt-get update
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
