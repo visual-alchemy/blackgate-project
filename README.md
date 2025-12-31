@@ -210,7 +210,7 @@ sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 # Install Node.js 18+ and Yarn
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm install --global yarn
+sudo npm install --global yarn --force
 ```
 </details>
 
@@ -242,7 +242,7 @@ sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 # Install Node.js 18+ and Yarn
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
-sudo npm install --global yarn
+sudo npm install --global yarn --force
 ```
 
 **Tips:**
