@@ -303,8 +303,8 @@ make dev-all
 
 ```bash
 # Build and run
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 🌐 **Access:** http://localhost:4000
@@ -317,7 +317,7 @@ docker-compose up -d
 
 ```bash
 # Build production image
-docker-compose build
+docker compose build
 
 # Start in background
 docker compose up -d

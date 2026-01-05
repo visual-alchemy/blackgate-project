@@ -54,7 +54,7 @@ dev_udp1:
 	ffmpeg -i "srt://127.0.0.1:4201?mode=caller" -f mpegts udp://239.0.0.1:1234?pkt_size=1316		
 
 docker_restart:
-	docker-compose down && docker-compose up -d
+	docker compose down && docker compose up -d
 
 docker_ssh:
 	docker compose exec blackgate bash
