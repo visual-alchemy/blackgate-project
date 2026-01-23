@@ -8,20 +8,20 @@ help:
 .PHONY: install
 install:
 	@echo "=============================================="
-	@echo "Installing System Dependencies..."
+	@echo "Step 1: Installing System Libraries..."
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
 		if command -v apt-get > /dev/null; then \
 			echo "Detected Debian/Ubuntu..."; \
 			sudo add-apt-repository -y universe || true; \
 			sudo apt-get update; \
-			sudo apt-get install -y build-essential pkg-config \
+			sudo apt-get install -y build-essential pkg-config git curl wget \
 				libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 				gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
 				libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev; \
 		elif command -v dnf > /dev/null; then \
 			echo "Detected Fedora/RHEL..."; \
-			sudo dnf install -y gcc make pkgconfig \
+			sudo dnf install -y gcc make pkgconfig git curl wget \
 				gstreamer1-devel gstreamer1-plugins-base-devel \
 				gstreamer1-plugins-good gstreamer1-plugins-bad-free \
 				cjson-devel srt-devel cmocka-devel glib2-devel; \
@@ -38,14 +38,57 @@ install:
 	fi
 	@echo ""
 	@echo "=============================================="
-	@echo "Installing Elixir Dependencies..."
+	@echo "Step 2: Installing Node.js & Yarn..."
+	@echo "=============================================="
+	@if [ "$$(uname)" = "Linux" ]; then \
+		if ! command -v node > /dev/null; then \
+			echo "Installing Node.js..."; \
+			curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - || true; \
+			sudo apt-get install -y nodejs || sudo dnf install -y nodejs; \
+		else \
+			echo "Node.js already installed: $$(node --version)"; \
+		fi; \
+		if ! command -v yarn > /dev/null; then \
+			echo "Installing Yarn..."; \
+			sudo npm install --global yarn --force; \
+		else \
+			echo "Yarn already installed: $$(yarn --version)"; \
+		fi; \
+	elif [ "$$(uname)" = "Darwin" ]; then \
+		brew install node yarn || true; \
+	fi
+	@echo ""
+	@echo "=============================================="
+	@echo "Step 3: Installing Elixir & Erlang..."
+	@echo "=============================================="
+	@if [ "$$(uname)" = "Linux" ]; then \
+		if ! command -v elixir > /dev/null; then \
+			echo "Installing Elixir and Erlang..."; \
+			if command -v apt-get > /dev/null; then \
+				wget -q https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb && \
+				sudo dpkg -i erlang-solutions_2.0_all.deb && \
+				rm erlang-solutions_2.0_all.deb && \
+				sudo apt-get update && \
+				sudo apt-get install -y esl-erlang elixir; \
+			elif command -v dnf > /dev/null; then \
+				sudo dnf install -y erlang elixir; \
+			fi; \
+		else \
+			echo "Elixir already installed: $$(elixir --version | head -1)"; \
+		fi; \
+	elif [ "$$(uname)" = "Darwin" ]; then \
+		brew install elixir || true; \
+	fi
+	@echo ""
+	@echo "=============================================="
+	@echo "Step 4: Installing Elixir Dependencies..."
 	@echo "=============================================="
 	mix local.hex --force
 	mix local.rebar --force
 	mix deps.get
 	@echo ""
 	@echo "=============================================="
-	@echo "Installing Frontend Dependencies..."
+	@echo "Step 5: Installing Frontend Dependencies..."
 	@echo "=============================================="
 	cd web_app && yarn install
 	@echo ""
@@ -55,6 +98,7 @@ install:
 	@echo "Next steps:"
 	@echo "  Development: make dev-all"
 	@echo "  Production:  make build && make start"
+
 
 .PHONY: build
 build:
