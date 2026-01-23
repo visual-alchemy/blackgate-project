@@ -65,11 +65,22 @@ install:
 		if ! command -v elixir > /dev/null; then \
 			echo "Installing Elixir and Erlang..."; \
 			if command -v apt-get > /dev/null; then \
-				wget -q https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb && \
-				sudo dpkg -i erlang-solutions_2.0_all.deb && \
-				rm erlang-solutions_2.0_all.deb && \
-				sudo apt-get update && \
-				sudo apt-get install -y esl-erlang elixir; \
+				echo "Trying Ubuntu/Debian native packages first..."; \
+				sudo apt-get install -y erlang elixir 2>/dev/null || \
+				( \
+					echo "Native packages failed, trying erlang-solutions repo..."; \
+					wget -q https://binaries2.erlang-solutions.com/ubuntu/pool/contrib/e/esl-erlang/esl-erlang_26.2.5.2-1~ubuntu~jammy_amd64.deb -O /tmp/erlang.deb && \
+					sudo dpkg -i /tmp/erlang.deb || sudo apt-get install -f -y && \
+					sudo apt-get install -y elixir && \
+					rm -f /tmp/erlang.deb \
+				) || \
+				( \
+					echo "Falling back to apt repository..."; \
+					sudo apt-get install -y software-properties-common && \
+					sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang && \
+					sudo apt-get update && \
+					sudo apt-get install -y erlang elixir \
+				); \
 			elif command -v dnf > /dev/null; then \
 				sudo dnf install -y erlang elixir; \
 			fi; \
