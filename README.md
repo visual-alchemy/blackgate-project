@@ -195,10 +195,27 @@ graph TB
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### One-Command Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/visual-alchemy/blackgate-project.git
+cd blackgate-project
+
+# Install everything (system libs + elixir + frontend)
+make install
+
+# Start development servers
+make dev-all
+```
+
+🌐 **Access:** http://localhost:5173  
+🔐 **Login:** `admin` / `password123`
 
 <details>
-<summary><strong>Ubuntu/Debian</strong></summary>
+<summary><strong>Manual Installation (if make install fails)</strong></summary>
+
+#### Ubuntu/Debian
 
 ```bash
 # 1. Enable Universe Repo & Update
@@ -219,83 +236,15 @@ sudo npm install --global yarn --force
 wget https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb && sudo dpkg -i erlang-solutions_2.0_all.deb
 sudo apt-get update
 sudo apt-get install -y esl-erlang elixir
-
-# 5. Project Setup (Run these inside the project folder)
-# mix local.hex --force
-# mix local.rebar --force
-# mix deps.get
-# cd web_app && yarn install
 ```
-</details>
 
-<details>
-<summary><strong>macOS</strong></summary>
+#### macOS
 
 ```bash
-brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-  cjson srt cmocka pkg-config
-```
-</details>
-
-<details>
-<summary><strong>Windows (WSL2)</strong></summary>
-
-WSL2 is fully supported. Use Ubuntu/Debian instructions inside WSL:
-
-```bash
-# Install WSL2 with Ubuntu (run in PowerShell as Admin)
-wsl --install -d Ubuntu
-
-# Then inside WSL, install dependencies
-sudo add-apt-repository universe
-sudo apt-get update
-sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential
-
-# Install Node.js 18+ and Yarn
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install --global yarn --force
+brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
 ```
 
-**Tips:**
-- Use **WSL2** (not WSL1) for better performance
-- Store project in WSL filesystem (`~/projects/`) not Windows (`/mnt/c/`)
-- Use Docker Desktop with WSL2 backend for production
 </details>
-
-<details>
-<summary><strong>Windows (Native) ⚠️</strong></summary>
-
-> ⚠️ **Not officially supported.** Native Windows requires manual compilation of GStreamer and SRT libraries which is complex. We recommend using **WSL2** or **Docker Desktop** instead.
-
-If you must run natively:
-1. Install [MSYS2](https://www.msys2.org/)
-2. Build GStreamer from source with SRT support
-3. Build the native C pipeline with MinGW
-
-For production on Windows, use **Docker Desktop** which handles all dependencies.
-</details>
-
-**Also requires:** Elixir 1.17+, Erlang/OTP 27+, Node.js 18+
-
-### Development
-
-```bash
-# Clone the repository
-git clone https://github.com/visual-alchemy/blackgate-project.git
-cd blackgate-project
-
-# Install dependencies for both Backend and Frontend
-make setup
-
-# Start development servers
-make dev-all
-```
-
-🌐 **Access:** http://localhost:5173  
-🔐 **Login:** `admin` / `password123`
 
 ---
 
@@ -329,30 +278,35 @@ docker compose logs -f
 docker compose down
 ```
 
-### Option 2: Elixir Release
+### Option 2: Baremetal (Linux/macOS)
 
 ```bash
-# Build frontend for production
-cd web_app && npm run build && cd ..
+# 1. Install dependencies
+make install
 
-# Build native pipeline
-cd native && make clean && make && cd ..
+# 2. Build production release
+make build
 
-# Create Elixir release
-MIX_ENV=prod mix release
+# 3. Start production server
+make start
 
-# Run the release
-_build/prod/rel/blackgate/bin/blackgate start
+# Other commands
+make stop      # Stop the server
+make restart   # Restart the server
+make status    # Check if running
 ```
 
 ### Commands Reference
 
 | Command | Purpose |
 |---------|---------|
+| `make install` | Install all dependencies (system + elixir + frontend) |
 | `make dev-all` | Development (hot-reload, debug) |
+| `make build` | Build production release |
+| `make start` | Start production server |
+| `make stop` | Stop production server |
+| `make status` | Check server status |
 | `docker compose up -d` | Production (Docker) |
-| `docker compose logs -f` | View production logs |
-| `MIX_ENV=prod mix release` | Build production release |
 
 ---
 

@@ -1,6 +1,109 @@
 help:
 	@make -qpRr | egrep -e '^[a-z].*:$$' | sed -e 's~:~~g' | sort
 
+# =============================================================================
+# BAREMETAL INSTALLATION TARGETS
+# =============================================================================
+
+.PHONY: install
+install:
+	@echo "=============================================="
+	@echo "Installing System Dependencies..."
+	@echo "=============================================="
+	@if [ "$$(uname)" = "Linux" ]; then \
+		if command -v apt-get > /dev/null; then \
+			echo "Detected Debian/Ubuntu..."; \
+			sudo add-apt-repository -y universe || true; \
+			sudo apt-get update; \
+			sudo apt-get install -y build-essential pkg-config \
+				libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+				gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+				libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev; \
+		elif command -v dnf > /dev/null; then \
+			echo "Detected Fedora/RHEL..."; \
+			sudo dnf install -y gcc make pkgconfig \
+				gstreamer1-devel gstreamer1-plugins-base-devel \
+				gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+				cjson-devel srt-devel cmocka-devel glib2-devel; \
+		else \
+			echo "Unsupported Linux distribution. Please install dependencies manually."; \
+			exit 1; \
+		fi; \
+	elif [ "$$(uname)" = "Darwin" ]; then \
+		echo "Detected macOS..."; \
+		brew install gstreamer cjson srt cmocka glib pkg-config || true; \
+	else \
+		echo "Unsupported OS. Please install dependencies manually."; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "=============================================="
+	@echo "Installing Elixir Dependencies..."
+	@echo "=============================================="
+	mix local.hex --force
+	mix local.rebar --force
+	mix deps.get
+	@echo ""
+	@echo "=============================================="
+	@echo "Installing Frontend Dependencies..."
+	@echo "=============================================="
+	cd web_app && yarn install
+	@echo ""
+	@echo "=============================================="
+	@echo "Installation Complete!"
+	@echo "=============================================="
+	@echo "Next steps:"
+	@echo "  Development: make dev-all"
+	@echo "  Production:  make build && make start"
+
+.PHONY: build
+build:
+	@echo "=============================================="
+	@echo "Building Production Release..."
+	@echo "=============================================="
+	@echo ""
+	@echo "Step 1: Building Frontend..."
+	cd web_app && yarn build
+	@echo ""
+	@echo "Step 2: Copying Frontend to Phoenix..."
+	rm -rf priv/static/assets
+	cp -r web_app/dist/* priv/static/
+	@echo ""
+	@echo "Step 3: Building Elixir Release..."
+	MIX_ENV=prod mix assets.deploy
+	MIX_ENV=prod mix release --overwrite
+	@echo ""
+	@echo "=============================================="
+	@echo "Build Complete!"
+	@echo "=============================================="
+	@echo "Start with: make start"
+
+.PHONY: start
+start:
+	@echo "Starting Blackgate in Production Mode..."
+	PHX_SERVER=true \
+	PORT=4000 \
+	PHX_HOST=0.0.0.0 \
+	API_AUTH_USERNAME=admin \
+	API_AUTH_PASSWORD=password123 \
+	_build/prod/rel/blackgate/bin/blackgate start
+
+.PHONY: stop
+stop:
+	@echo "Stopping Blackgate..."
+	_build/prod/rel/blackgate/bin/blackgate stop || true
+
+.PHONY: restart
+restart: stop start
+
+.PHONY: status
+status:
+	@_build/prod/rel/blackgate/bin/blackgate pid > /dev/null 2>&1 && echo "Blackgate is running" || echo "Blackgate is not running"
+
+# =============================================================================
+# DEVELOPMENT TARGETS
+# =============================================================================
+
 .PHONY: dev
 dev:
 	MIX_ENV=dev \
@@ -34,6 +137,10 @@ setup:
 	@echo "Installing Frontend Dependencies..."
 	cd web_app && yarn install
 
+# =============================================================================
+# TEST TARGETS
+# =============================================================================
+
 dev_udp0:
 	ffmpeg -f lavfi -re -i smptebars=duration=6000:size=1280x720:rate=25 -f lavfi -re -i sine=frequency=1000:duration=6000:sample_rate=44100 \
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \
@@ -52,6 +159,10 @@ dev_play1:
 
 dev_udp1:
 	ffmpeg -i "srt://127.0.0.1:4201?mode=caller" -f mpegts udp://239.0.0.1:1234?pkt_size=1316		
+
+# =============================================================================
+# DOCKER TARGETS
+# =============================================================================
 
 docker_restart:
 	docker compose down && docker compose up -d

@@ -249,4 +249,13 @@ export const destinationsApi = {
     }
     return { success: true };
   },
+};
+
+// Network API
+export const networkApi = {
+  // Get all network interfaces
+  getInterfaces: async () => {
+    const response = await authFetch('/api/network/interfaces');
+    return response.json();
+  },
 }; 

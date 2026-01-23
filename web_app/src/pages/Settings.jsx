@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
-import { backupApi } from '../utils/api';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin } from 'antd';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined } from '@ant-design/icons';
+import { backupApi, networkApi } from '../utils/api';
 
 const { Title } = Typography;
 
@@ -11,6 +11,8 @@ const Settings = () => {
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
   const [isImportingRoutes, setIsImportingRoutes] = useState(false);
+  const [interfaces, setInterfaces] = useState([]);
+  const [loadingInterfaces, setLoadingInterfaces] = useState(false);
   const fileInputRef = useRef(null);
   const routesFileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
@@ -32,6 +34,30 @@ const Settings = () => {
       ]);
     }
   }, []);
+
+  // Fetch network interfaces when Network tab is active
+  useEffect(() => {
+    if (activeTab === 'network') {
+      fetchInterfaces();
+    }
+  }, [activeTab]);
+
+  const fetchInterfaces = async () => {
+    setLoadingInterfaces(true);
+    try {
+      const response = await networkApi.getInterfaces();
+      setInterfaces(response.interfaces || []);
+    } catch (error) {
+      console.error('Error fetching network interfaces:', error);
+      messageApi.error({
+        content: 'Failed to fetch network interfaces',
+        icon: <CloseCircleOutlined />,
+        duration: 5
+      });
+    } finally {
+      setLoadingInterfaces(false);
+    }
+  };
 
   const handleBackupDownload = async () => {
     setIsDownloading(true);
@@ -347,6 +373,85 @@ const Settings = () => {
     );
   };
 
+  // Network tab content
+  const NetworkTabContent = () => {
+    const columns = [
+      {
+        title: 'Interface',
+        dataIndex: 'name',
+        key: 'name',
+        render: (name) => <code>{name}</code>,
+      },
+      {
+        title: 'IP Address',
+        dataIndex: 'address',
+        key: 'address',
+        render: (address) => address || '-',
+      },
+      {
+        title: 'Netmask',
+        dataIndex: 'netmask',
+        key: 'netmask',
+        render: (netmask) => netmask || '-',
+      },
+      {
+        title: 'MAC Address',
+        dataIndex: 'mac',
+        key: 'mac',
+        render: (mac) => mac ? <code style={{ fontSize: '12px' }}>{mac}</code> : '-',
+      },
+      {
+        title: 'Status',
+        dataIndex: 'up',
+        key: 'up',
+        render: (up) => (
+          <Tag color={up ? 'green' : 'red'}>
+            {up ? 'UP' : 'DOWN'}
+          </Tag>
+        ),
+      },
+    ];
+
+    return (
+      <div>
+        <Card
+          title={
+            <Space>
+              <WifiOutlined />
+              <span>Network Interfaces</span>
+            </Space>
+          }
+          extra={
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={fetchInterfaces}
+              loading={loadingInterfaces}
+            >
+              Refresh
+            </Button>
+          }
+        >
+          <p style={{ marginBottom: '16px' }}>
+            Detected network interfaces on this server. Use these when configuring UDP routes to bind traffic to a specific interface.
+          </p>
+          {loadingInterfaces ? (
+            <div style={{ textAlign: 'center', padding: '40px' }}>
+              <Spin tip="Loading interfaces..." />
+            </div>
+          ) : (
+            <Table
+              columns={columns}
+              dataSource={interfaces}
+              rowKey="name"
+              pagination={false}
+              size="small"
+            />
+          )}
+        </Card>
+      </div>
+    );
+  };
+
   const items = [
     {
       key: 'backup',
@@ -357,6 +462,11 @@ const Settings = () => {
       key: 'routes',
       label: 'Routes',
       children: <RoutesTabContent />,
+    },
+    {
+      key: 'network',
+      label: 'Network',
+      children: <NetworkTabContent />,
     },
   ];
 

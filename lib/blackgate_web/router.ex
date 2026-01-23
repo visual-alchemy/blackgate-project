@@ -53,6 +53,8 @@ defmodule BlackgateWeb.Router do
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show
+
+    get "/network/interfaces", NetworkController, :index
   end
 
   # TODO: improve this

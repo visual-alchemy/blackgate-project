@@ -9,7 +9,7 @@ import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingO
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
-import { destinationsApi, routesApi } from '../../utils/api';
+import { destinationsApi, routesApi, networkApi } from '../../utils/api';
 import React from 'react';
 
 const { Title } = Typography;
@@ -24,6 +24,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     const [routeData, setRouteData] = useState(null);
     const [destData, setDestData] = useState(null);
     const [routeLoading, setRouteLoading] = useState(true);
+    const [interfaces, setInterfaces] = useState([]);
 
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
@@ -85,6 +86,17 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 });
         }
     }, [routeId, destId, form, messageApi]);
+
+    // Fetch network interfaces for UDP bind options
+    useEffect(() => {
+        networkApi.getInterfaces()
+            .then(result => {
+                setInterfaces(result.interfaces || []);
+            })
+            .catch(error => {
+                console.error('Error fetching network interfaces:', error);
+            });
+    }, []);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -387,6 +399,46 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         <InputNumber
                                                             style={{ width: '150px' }}
                                                             placeholder="Enter port number"
+                                                        />
+                                                    </Form.Item>
+
+                                                    <Form.Item
+                                                        label="Bind Interface"
+                                                        name={['schema_options', 'bind-address']}
+                                                        extra="Select network interface to bind outgoing UDP traffic (optional)"
+                                                    >
+                                                        <Select
+                                                            allowClear
+                                                            placeholder="Default (any interface)"
+                                                            options={[
+                                                                { label: 'Default (any interface)', value: '' },
+                                                                ...interfaces
+                                                                    .filter(iface => iface.up && iface.address)
+                                                                    .map(iface => ({
+                                                                        label: `${iface.name} (${iface.address})`,
+                                                                        value: iface.address
+                                                                    }))
+                                                            ]}
+                                                        />
+                                                    </Form.Item>
+
+                                                    <Form.Item
+                                                        label="Multicast Interface"
+                                                        name={['schema_options', 'multicast-iface']}
+                                                        extra="Network interface name for multicast traffic (e.g., eth1)"
+                                                    >
+                                                        <Select
+                                                            allowClear
+                                                            placeholder="Default"
+                                                            options={[
+                                                                { label: 'Default', value: '' },
+                                                                ...interfaces
+                                                                    .filter(iface => iface.up)
+                                                                    .map(iface => ({
+                                                                        label: iface.name,
+                                                                        value: iface.name
+                                                                    }))
+                                                            ]}
                                                         />
                                                     </Form.Item>
                                                 </>

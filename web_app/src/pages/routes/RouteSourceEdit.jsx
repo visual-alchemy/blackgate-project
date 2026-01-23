@@ -3,7 +3,7 @@ import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingO
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
-import { routesApi } from '../../utils/api';
+import { routesApi, networkApi } from '../../utils/api';
 import React from 'react';
 
 const { Title } = Typography;
@@ -16,6 +16,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const [loading, setLoading] = useState(id !== 'new');
   const dataFetchedRef = useRef(false);
   const [routeData, setRouteData] = useState(null);
+  const [interfaces, setInterfaces] = useState([]);
 
   // Set breadcrumb items for the RouteSourceEdit page
   useEffect(() => {
@@ -61,6 +62,17 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         });
     }
   }, [id, form, messageApi]);
+
+  // Fetch network interfaces for UDP bind options
+  useEffect(() => {
+    networkApi.getInterfaces()
+      .then(result => {
+        setInterfaces(result.interfaces || []);
+      })
+      .catch(error => {
+        console.error('Error fetching network interfaces:', error);
+      });
+  }, []);
 
   const availableNodes = [
     { label: 'self', value: 'self' }
@@ -487,6 +499,26 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             <InputNumber
                               style={{ width: '100%' }}
                               placeholder="Default: 1492"
+                            />
+                          </Form.Item>
+
+                          <Form.Item
+                            label="Multicast Interface"
+                            name={['schema_options', 'multicast-iface']}
+                            extra="Network interface name for receiving multicast traffic"
+                          >
+                            <Select
+                              allowClear
+                              placeholder="Default"
+                              options={[
+                                { label: 'Default', value: '' },
+                                ...interfaces
+                                  .filter(iface => iface.up)
+                                  .map(iface => ({
+                                    label: `${iface.name} (${iface.address || 'no IP'})`,
+                                    value: iface.name
+                                  }))
+                              ]}
                             />
                           </Form.Item>
                         </>
