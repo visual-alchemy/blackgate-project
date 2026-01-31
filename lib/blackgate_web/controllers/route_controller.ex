@@ -106,5 +106,19 @@ defmodule BlackgateWeb.RouteController do
     |> json(%{data: sink_stats})
   end
 
+  def rtmp_stats(conn, %{"stream_key" => stream_key}) do
+    case Blackgate.RtmpStats.get_stream_stats(stream_key) do
+      nil ->
+        conn
+        |> put_status(:ok)
+        |> json(%{data: nil, message: "Stream not found or not active"})
+
+      stats ->
+        conn
+        |> put_status(:ok)
+        |> json(%{data: stats})
+    end
+  end
+
   defp data(conn, data), do: json(conn, %{data: data})
 end

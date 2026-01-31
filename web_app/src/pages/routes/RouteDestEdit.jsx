@@ -200,6 +200,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
+                                            <Radio.Button value="RTMP">RTMP</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -441,6 +442,42 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             ]}
                                                         />
                                                     </Form.Item>
+                                                </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    {/* RTMP specific options */}
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'RTMP' && (
+                                                <>
+                                                    <Form.Item
+                                                        label="RTMP URL"
+                                                        name={['schema_options', 'url']}
+                                                        required
+                                                        extra="Full RTMP URL including stream key (e.g., rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx-xxxx)"
+                                                    >
+                                                        <Input.Password
+                                                            placeholder="rtmp://a.rtmp.youtube.com/live2/your-stream-key"
+                                                            visibilityToggle
+                                                            style={{ width: '100%' }}
+                                                        />
+                                                    </Form.Item>
+
+                                                    <Card
+                                                        size="small"
+                                                        style={{ marginTop: '16px', backgroundColor: '#1a1a1a' }}
+                                                    >
+                                                        <Typography.Title level={5} style={{ marginTop: 0 }}>Common RTMP Endpoints</Typography.Title>
+                                                        <Typography.Text type="secondary">
+                                                            <ul style={{ paddingLeft: '20px', marginBottom: 0 }}>
+                                                                <li><strong>YouTube:</strong> rtmp://a.rtmp.youtube.com/live2/</li>
+                                                                <li><strong>Twitch:</strong> rtmp://live.twitch.tv/app/</li>
+                                                                <li><strong>Facebook:</strong> rtmps://live-api-s.facebook.com:443/rtmp/</li>
+                                                            </ul>
+                                                        </Typography.Text>
+                                                    </Card>
                                                 </>
                                             )
                                         }

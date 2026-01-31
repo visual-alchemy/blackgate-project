@@ -476,7 +476,7 @@ const RouteItem = () => {
           styles={{ content: { textAlign: 'left' } }}
         >
           <Descriptions.Item label="Source">
-            <Tag color={routeData.schema === 'SRT' ? 'blue' : 'orange'}>
+            <Tag color={routeData.schema === 'SRT' ? 'blue' : routeData.schema === 'RTMP' ? 'orange' : 'green'}>
               {routeData.schema}
             </Tag>
             {' '}
@@ -484,7 +484,9 @@ const RouteItem = () => {
               `${routeData.schema_options?.localaddress || 'N/A'}:${routeData.schema_options?.localport || 'N/A'}:${routeData.schema_options?.mode || 'N/A'}` :
               routeData.schema === 'UDP' ?
                 `${routeData.schema_options?.address || 'N/A'}:${routeData.schema_options?.port || 'N/A'}` :
-                'N/A'
+                routeData.schema === 'RTMP' ?
+                  `Stream Key: ${routeData.schema_options?.stream_key || routeData.schema_options?.url?.split('/').pop() || 'N/A'}` :
+                  'N/A'
             }
           </Descriptions.Item>
           <Descriptions.Item label="Node">{routeData.node}</Descriptions.Item>
@@ -531,6 +533,8 @@ const RouteItem = () => {
       <RouteStats
         routeId={id}
         isRunning={routeData?.status?.toLowerCase() === 'started'}
+        schema={routeData?.schema}
+        schemaOptions={routeData?.schema_options}
       />
 
       {/* Destination Statistics - Show when route is running and has SRT destinations */}

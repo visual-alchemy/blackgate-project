@@ -38,11 +38,19 @@ const calculatePacketLoss = (received, lost) => {
     return ((lost / (received + lost)) * 100).toFixed(2);
 };
 
-const RouteStats = ({ routeId, isRunning }) => {
+const RouteStats = ({ routeId, isRunning, schema, schemaOptions }) => {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
+
+    // Extract stream key from RTMP URL for nginx-rtmp stats
+    const getStreamKeyFromUrl = (url) => {
+        if (!url) return null;
+        // URL format: rtmp://host:port/app/streamkey
+        const parts = url.split('/');
+        return parts[parts.length - 1]; // Last part is the stream key
+    };
 
     const fetchStats = useCallback(async () => {
         if (!routeId || !isRunning) {
@@ -52,13 +60,45 @@ const RouteStats = ({ routeId, isRunning }) => {
         }
 
         try {
-            const result = await routesApi.getStats(routeId);
-            if (result.data) {
-                setStats(result.data);
-                setLastUpdated(new Date());
-                setError(null);
+            let result;
+
+            // For RTMP sources, fetch from nginx-rtmp stats
+            if (schema === 'RTMP') {
+                // Use stream_key directly if available, fallback to extracting from URL
+                const streamKey = schemaOptions?.stream_key || getStreamKeyFromUrl(schemaOptions?.url);
+                if (streamKey) {
+                    result = await routesApi.getRtmpStats(streamKey);
+                    if (result.data) {
+                        // Transform nginx-rtmp stats to match expected format
+                        setStats({
+                            'source-type': 'rtmpsrc',
+                            'receive-rate-mbps': result.data.bw_in || 0,
+                            'bandwidth-mbps': result.data.bw_out || 0,
+                            'total-bytes-received': result.data.bytes_in || 0,
+                            'connected-callers': result.data.clients || 1,
+                            'stream-time': result.data.time || 0,
+                            'video-width': result.data.video_width,
+                            'video-height': result.data.video_height,
+                            'video-codec': result.data.video_codec,
+                            'audio-codec': result.data.audio_codec,
+                            active: result.data.active || true
+                        });
+                        setLastUpdated(new Date());
+                        setError(null);
+                    } else {
+                        setStats({ active: true, 'connected-callers': 1, 'source-type': 'rtmpsrc' });
+                    }
+                }
             } else {
-                setStats(null);
+                // For SRT/UDP sources, use the regular stats endpoint
+                result = await routesApi.getStats(routeId);
+                if (result.data) {
+                    setStats(result.data);
+                    setLastUpdated(new Date());
+                    setError(null);
+                } else {
+                    setStats(null);
+                }
             }
         } catch (err) {
             console.error('Failed to fetch stats:', err);
@@ -66,7 +106,7 @@ const RouteStats = ({ routeId, isRunning }) => {
         } finally {
             setLoading(false);
         }
-    }, [routeId, isRunning]);
+    }, [routeId, isRunning, schema, schemaOptions]);
 
     // Initial fetch and polling
     useEffect(() => {

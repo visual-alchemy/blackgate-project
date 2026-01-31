@@ -116,6 +116,12 @@ export const routesApi = {
     const response = await authFetch(`/api/routes/${id}/destination-stats`);
     return response.json();
   },
+
+  // Get RTMP stream statistics from nginx-rtmp
+  getRtmpStats: async (streamKey) => {
+    const response = await authFetch(`/api/rtmp/stats/${encodeURIComponent(streamKey)}`);
+    return response.json();
+  },
 };
 
 export const backupApi = {

@@ -150,6 +150,8 @@ const Routes = () => {
             return (`${record.schema}:${record?.schema_options?.mode || 'N/A'}:${record?.schema_options?.localport || 'N/A'}`);
           case 'UDP':
             return (`${record.schema}:${record?.schema_options?.address || 'N/A'}:${record?.schema_options?.port || 'N/A'}`);
+          case 'RTMP':
+            return (`${record.schema}:${record?.schema_options?.stream_key || record?.schema_options?.url?.split('/').pop() || 'N/A'}`);
           default:
             return ('Unknown');
         }

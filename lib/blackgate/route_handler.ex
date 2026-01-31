@@ -232,6 +232,17 @@ defmodule Blackgate.RouteHandler do
     ])
   end
 
+  def sink_from_record(%{"schema" => "RTMP", "schema_options" => opts}) do
+    url = Map.get(opts, "url", "")
+
+    props = %{
+      "type" => "rtmp2sink",
+      "location" => url
+    }
+
+    {:ok, props}
+  end
+
   def sink_from_record(_), do: {:error, :invalid_destination}
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
@@ -265,6 +276,22 @@ defmodule Blackgate.RouteHandler do
       "buffer-size",
       "mtu"
     ])
+  end
+
+  def source_from_record(%{"schema" => "RTMP", "schema_options" => opts}) do
+    # Support both stream_key (new) and url (legacy) formats
+    url = case Map.get(opts, "stream_key") do
+      nil -> Map.get(opts, "url", "")
+      "" -> Map.get(opts, "url", "")
+      stream_key -> "rtmp://127.0.0.1:1935/live/#{stream_key}"
+    end
+
+    props = %{
+      "type" => "rtmpsrc",
+      "location" => url
+    }
+
+    {:ok, props}
   end
 
   def source_from_record(_), do: {:error, :invalid_source}

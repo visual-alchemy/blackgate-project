@@ -55,6 +55,9 @@ defmodule BlackgateWeb.Router do
     get "/nodes/:id", NodeController, :show
 
     get "/network/interfaces", NetworkController, :index
+
+    # RTMP stats from nginx-rtmp
+    get "/rtmp/stats/:stream_key", RouteController, :rtmp_stats
   end
 
   # TODO: improve this

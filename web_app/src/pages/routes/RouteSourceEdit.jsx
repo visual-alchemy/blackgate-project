@@ -256,6 +256,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     <Radio.Group buttonStyle="solid">
                       <Radio.Button value="SRT">SRT</Radio.Button>
                       <Radio.Button value="UDP">UDP</Radio.Button>
+                      <Radio.Button value="RTMP">RTMP</Radio.Button>
                     </Radio.Group>
                   </Form.Item>
 
@@ -521,6 +522,43 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               ]}
                             />
                           </Form.Item>
+                        </>
+                      )
+                    }
+                  </Form.Item>
+
+                  {/* RTMP specific options */}
+                  <Form.Item noStyle dependencies={['schema']}>
+                    {({ getFieldValue }) =>
+                      getFieldValue('schema') === 'RTMP' && (
+                        <>
+                          <Form.Item
+                            label="Stream Key"
+                            name={['schema_options', 'stream_key']}
+                            required
+                            extra="Enter the stream key you'll use in OBS. Example: mystream123"
+                            rules={[
+                              { required: true, message: 'Please enter a stream key' },
+                              { pattern: /^[a-zA-Z0-9_-]+$/, message: 'Stream key can only contain letters, numbers, underscores, and hyphens' }
+                            ]}
+                          >
+                            <Input
+                              placeholder="mystream123"
+                              style={{ width: '100%' }}
+                              addonBefore="rtmp://127.0.0.1:1935/live/"
+                            />
+                          </Form.Item>
+
+                          <Card
+                            size="small"
+                            style={{ marginTop: '16px', backgroundColor: '#1a1a1a' }}
+                          >
+                            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                              <strong>OBS Settings:</strong>
+                              <br />• Server: <code>rtmp://127.0.0.1:1935/live</code>
+                              <br />• Stream Key: <code>{getFieldValue(['schema_options', 'stream_key']) || 'your_stream_key'}</code>
+                            </Typography.Paragraph>
+                          </Card>
                         </>
                       )
                     }

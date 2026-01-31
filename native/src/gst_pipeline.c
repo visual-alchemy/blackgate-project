@@ -20,6 +20,7 @@ static pthread_t stats_thread;
 static GstElement *source_element = NULL;
 static gboolean running = TRUE;
 static GMainLoop *loop = NULL;
+static const char *source_type_str = NULL; // Track source type for stats handling
 
 // Store SRT sink elements for stats collection
 static GstElement *sink_elements[MAX_SINKS];
@@ -31,6 +32,27 @@ static void *print_stats(void *src)
 
     while (running) {
         sleep(1);
+
+        // Check if source type supports detailed stats (only SRT does)
+        if (source_type_str && g_strcmp0(source_type_str, "srtsrc") != 0) {
+            // For RTMP/UDP sources, send basic "active" status
+            cJSON *root = cJSON_CreateObject();
+            cJSON_AddStringToObject(root, "source-type", source_type_str);
+            cJSON_AddBoolToObject(root, "active", TRUE);
+            cJSON_AddNumberToObject(root, "connected-callers", 1); // Indicate connection is active
+
+            char *json_str = cJSON_PrintUnformatted(root);
+            if (json_str) {
+                send_message_to_unix_socket(json_str);
+                send_message_to_unix_socket("\n");
+                free(json_str);
+            }
+            cJSON_Delete(root);
+
+            // Still collect sink stats
+            collect_sink_stats();
+            continue;
+        }
 
         GstStructure *stats = NULL;
         g_object_get(source, "stats", &stats, NULL);
@@ -298,6 +320,65 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
     return TRUE;
 }
 
+// Callback for FLV demux dynamic pad linking (RTMP sources)
+static void on_pad_added_rtmp(GstElement *element, GstPad *pad, gpointer data)
+{
+    GstCaps *caps;
+    GstStructure *str;
+    const gchar *name;
+    GstElement **queues = (GstElement **)g_object_get_data(G_OBJECT(element), "queues");
+
+    if (!queues) {
+        g_printerr("RTMP: No queues data found\n");
+        return;
+    }
+
+    caps = gst_pad_get_current_caps(pad);
+    if (!caps) {
+        caps = gst_pad_query_caps(pad, NULL);
+    }
+
+    if (!caps) {
+        g_print("RTMP: Could not get pad caps\n");
+        return;
+    }
+
+    str = gst_caps_get_structure(caps, 0);
+    name = gst_structure_get_name(str);
+
+    g_print("RTMP: New pad '%s' with caps: %s\n", GST_PAD_NAME(pad), name);
+
+    if (g_str_has_prefix(name, "video/")) {
+        // Link to video queue
+        GstPad *sink_pad = gst_element_get_static_pad(queues[0], "sink");
+        if (sink_pad && !gst_pad_is_linked(sink_pad)) {
+            GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+            if (ret == GST_PAD_LINK_OK) {
+                g_print("RTMP: Linked video pad to h264parse chain\n");
+            } else {
+                g_printerr("RTMP: Failed to link video pad: %d\n", ret);
+            }
+        }
+        if (sink_pad) gst_object_unref(sink_pad);
+    } else if (g_str_has_prefix(name, "audio/")) {
+        // Link to audio queue
+        if (queues[1]) {
+            GstPad *sink_pad = gst_element_get_static_pad(queues[1], "sink");
+            if (sink_pad && !gst_pad_is_linked(sink_pad)) {
+                GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+                if (ret == GST_PAD_LINK_OK) {
+                    g_print("RTMP: Linked audio pad to aacparse chain\n");
+                } else {
+                    g_printerr("RTMP: Failed to link audio pad: %d\n", ret);
+                }
+            }
+            if (sink_pad) gst_object_unref(sink_pad);
+        }
+    }
+
+    gst_caps_unref(caps);
+}
+
 static void on_caller_connecting(GstElement *element, GSocketAddress *addr, const gchar *stream_id,
                                  gboolean *authenticated, gpointer user_data)
 {
@@ -421,26 +502,98 @@ GstElement *create_pipeline(cJSON *json)
 
     g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(source), G_OBJECT_TYPE_NAME(source));
 
+    // Store source type for stats handling
+    source_type_str = source_type->valuestring;
+
     set_element_properties(source, source_obj, source_type->valuestring, "type");
 
-    // Use do-timestamp=FALSE for pure MPEG-TS passthrough
-    // Regenerating timestamps corrupts PES packet structure causing artifacts
-    g_object_set(source, "do-timestamp", FALSE, NULL);
-    g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
-
+    // Configure source-specific settings
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
+        // Use do-timestamp=FALSE for pure MPEG-TS passthrough
+        // Regenerating timestamps corrupts PES packet structure causing artifacts
+        g_object_set(source, "do-timestamp", FALSE, NULL);
+        g_print("Set do-timestamp=FALSE for SRT source (pure passthrough)\n");
         // Signal for logging incoming connections
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
+    } else if (g_strcmp0(source_type->valuestring, "udpsrc") == 0) {
+        g_object_set(source, "do-timestamp", FALSE, NULL);
+        g_print("Set do-timestamp=FALSE for UDP source (pure passthrough)\n");
+    } else if (g_strcmp0(source_type->valuestring, "rtmpsrc") == 0) {
+        // RTMP source needs timestamping enabled for proper playback
+        g_object_set(source, "do-timestamp", TRUE, NULL);
+        g_print("Configured RTMP source with do-timestamp=TRUE\n");
     }
 
-    // ULTRA-SIMPLE PIPELINE: source -> tee (no queues, no processing)
-    gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
-    if (!gst_element_link(source, tee)) {
-        g_printerr("Elements could not be linked.\n");
-        gst_object_unref(pipeline);
-        return NULL;
+    // RTMP sources need special handling - FLV must be demuxed and remuxed to MPEG-TS
+    if (g_strcmp0(source_type->valuestring, "rtmpsrc") == 0) {
+        // Create demux and mux elements for FLV -> MPEG-TS conversion
+        GstElement *flvdemux = gst_element_factory_make("flvdemux", "flvdemux");
+        GstElement *h264parse = gst_element_factory_make("h264parse", "h264parse");
+        GstElement *aacparse = gst_element_factory_make("aacparse", "aacparse");
+        GstElement *mpegtsmux = gst_element_factory_make("mpegtsmux", "mpegtsmux");
+        GstElement *video_queue = gst_element_factory_make("queue", "video_queue");
+        GstElement *audio_queue = gst_element_factory_make("queue", "audio_queue");
+
+        if (!flvdemux || !h264parse || !mpegtsmux || !video_queue || !audio_queue) {
+            g_printerr("Failed to create RTMP conversion elements\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        // Configure mpegtsmux for low latency streaming
+        g_object_set(mpegtsmux, "alignment", 7, NULL); // Align to 188*8 = 1504 bytes
+
+        gst_bin_add_many(GST_BIN(pipeline), source, flvdemux, h264parse, video_queue, mpegtsmux, tee, NULL);
+        if (aacparse) {
+            gst_bin_add_many(GST_BIN(pipeline), aacparse, audio_queue, NULL);
+        }
+
+        // Link source to flvdemux
+        if (!gst_element_link(source, flvdemux)) {
+            g_printerr("Failed to link source to flvdemux\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        // Link video_queue -> h264parse -> mpegtsmux and audio_queue -> aacparse -> mpegtsmux
+        if (!gst_element_link_many(video_queue, h264parse, mpegtsmux, NULL)) {
+            g_printerr("Failed to link video processing chain\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        if (aacparse && audio_queue) {
+            if (!gst_element_link_many(audio_queue, aacparse, mpegtsmux, NULL)) {
+                g_print("Warning: Failed to link audio processing chain (audio may be missing)\n");
+            }
+        }
+
+        // Link mpegtsmux to tee
+        if (!gst_element_link(mpegtsmux, tee)) {
+            g_printerr("Failed to link mpegtsmux to tee\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        // Connect flvdemux pads dynamically (FLV demux has dynamic pads)
+        g_signal_connect(flvdemux, "pad-added", G_CALLBACK(on_pad_added_rtmp), g_new0(gpointer, 2));
+        // Store video and audio queue references for pad-added callback
+        GstElement **queues = g_new(GstElement *, 2);
+        queues[0] = video_queue;
+        queues[1] = audio_queue;
+        g_object_set_data(G_OBJECT(flvdemux), "queues", queues);
+
+        g_print("RTMP Pipeline: rtmpsrc -> flvdemux -> (h264parse + aacparse) -> mpegtsmux -> tee\n");
+    } else {
+        // ULTRA-SIMPLE PIPELINE for SRT/UDP: source -> tee (no queues, no processing)
+        gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
+        if (!gst_element_link(source, tee)) {
+            g_printerr("Elements could not be linked.\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+        g_print("ULTRA-SIMPLE Pipeline: source -> tee (no intermediate processing)\n");
     }
-    g_print("ULTRA-SIMPLE Pipeline: source -> tee (no intermediate processing)\n");
 
     // Reset sink counter
     sink_count = 0;
@@ -517,6 +670,12 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             sink_count++;
             g_print("Stored SRT sink element at index %d for stats collection\n", sink_index);
         }
+    }
+
+    if (strcmp(sink_type->valuestring, "rtmp2sink") == 0) {
+        g_object_set(sink_element, "async", FALSE, NULL);
+        g_object_set(sink_element, "sync", FALSE, NULL);
+        g_print("Configured RTMP sink with async=FALSE, sync=FALSE\n");
     }
 
     gst_bin_add_many(GST_BIN(pipeline), queue, sink_element, NULL);

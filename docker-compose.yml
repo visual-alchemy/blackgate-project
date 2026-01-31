@@ -1,4 +1,13 @@
 services:
+  nginx-rtmp:
+    image: tiangolo/nginx-rtmp:latest
+    restart: unless-stopped
+    ports:
+      - "1935:1935"
+      - "8080:8080"
+    volumes:
+      - ./config/nginx-rtmp.conf:/etc/nginx/nginx.conf:ro
+
   blackgate:
     build:
       context: .
