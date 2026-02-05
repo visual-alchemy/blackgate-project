@@ -5,7 +5,9 @@ import {
     ArrowDownOutlined,
     WifiOutlined,
     ClockCircleOutlined,
-    SyncOutlined
+    SyncOutlined,
+    VideoCameraOutlined,
+    FieldTimeOutlined
 } from '@ant-design/icons'
 import { routesApi } from '../utils/api';
 
@@ -36,6 +38,37 @@ const formatMbps = (mbps) => {
 const calculatePacketLoss = (received, lost) => {
     if (!received || received === 0) return '0';
     return ((lost / (received + lost)) * 100).toFixed(2);
+};
+
+/**
+ * Format resolution (width x height)
+ */
+const formatResolution = (width, height) => {
+    if (!width || !height) return 'N/A';
+    return `${width}×${height}`;
+};
+
+/**
+ * Format framerate (fps_num / fps_den)
+ */
+const formatFramerate = (num, den) => {
+    if (!num || !den || den === 0) return 'N/A';
+    const fps = num / den;
+    // Round to 2 decimal places, but show as integer if it's a whole number
+    if (Number.isInteger(fps)) return `${fps} fps`;
+    return `${fps.toFixed(2)} fps`;
+};
+
+/**
+ * Format scan type (P for progressive, I for interlaced)
+ */
+const formatScanType = (interlaceMode) => {
+    if (!interlaceMode || interlaceMode === 'progressive') {
+        return { label: 'P', full: 'Progressive', color: 'green' };
+    } else if (interlaceMode === 'interleaved' || interlaceMode === 'mixed') {
+        return { label: 'I', full: 'Interlaced', color: 'orange' };
+    }
+    return { label: '?', full: interlaceMode, color: 'default' };
 };
 
 const RouteStats = ({ routeId, isRunning }) => {
@@ -97,8 +130,17 @@ const RouteStats = ({ routeId, isRunning }) => {
     const rtt = stats?.['rtt-ms'] ?? caller['rtt-ms'] ?? 0;
     const packetsReceived = stats?.['packets-received'] ?? caller['packets-received'] ?? 0;
     const packetsLost = stats?.['packets-received-lost'] ?? caller['packets-received-lost'] ?? 0;
+    const packetsDropped = stats?.['packets-received-dropped'] ?? caller['packets-received-dropped'] ?? 0;
     const bandwidth = stats?.['bandwidth-mbps'] ?? caller['bandwidth-mbps'] ?? 0;
     const packetLoss = calculatePacketLoss(packetsReceived, packetsLost);
+
+    // Video metadata from caps
+    const videoWidth = stats?.['video-width'] ?? null;
+    const videoHeight = stats?.['video-height'] ?? null;
+    const fpsNum = stats?.['video-framerate-num'] ?? null;
+    const fpsDen = stats?.['video-framerate-den'] ?? null;
+    const interlaceMode = stats?.['video-interlace-mode'] ?? null;
+    const scanType = formatScanType(interlaceMode);
 
     // Connected callers table columns
     const callerColumns = [
@@ -226,6 +268,37 @@ const RouteStats = ({ routeId, isRunning }) => {
                                 title="Bandwidth"
                                 value={`${typeof bandwidth === 'number' ? bandwidth.toFixed(1) : bandwidth} Mbps`}
                                 valueStyle={{ color: '#13c2c2', ...statisticStyle }}
+                            />
+                        </Col>
+                        <Col xs={12} sm={8} md={6} lg={4}>
+                            <Statistic
+                                title="Dropped"
+                                value={packetsDropped}
+                                valueStyle={{ color: packetsDropped > 0 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
+                            />
+                        </Col>
+                        <Col xs={12} sm={8} md={6} lg={4}>
+                            <Statistic
+                                title="Resolution"
+                                value={formatResolution(videoWidth, videoHeight)}
+                                prefix={<VideoCameraOutlined style={{ color: '#722ed1' }} />}
+                                valueStyle={{ color: '#722ed1', ...statisticStyle }}
+                            />
+                        </Col>
+                        <Col xs={12} sm={8} md={6} lg={4}>
+                            <Statistic
+                                title="Framerate"
+                                value={formatFramerate(fpsNum, fpsDen)}
+                                prefix={<FieldTimeOutlined style={{ color: '#eb2f96' }} />}
+                                valueStyle={{ color: '#eb2f96', ...statisticStyle }}
+                            />
+                        </Col>
+                        <Col xs={12} sm={8} md={6} lg={4}>
+                            <Statistic
+                                title="Scan"
+                                value={scanType.label}
+                                formatter={(val) => <Tag color={scanType.color}>{val}</Tag>}
+                                valueStyle={statisticStyle}
                             />
                         </Col>
                     </Row>
