@@ -725,6 +725,86 @@ static void parse_mpeg2_sequence(const guint8 *data, gsize size)
     pthread_mutex_unlock(&video_info.mutex);
 }
 
+// Parse HEVC (H.265) SPS for resolution/framerate
+static void parse_hevc_sps(const guint8 *data, gsize size)
+{
+    // HEVC NAL unit header is 2 bytes, SPS starts after that
+    if (size < 20) return;
+
+    // Skip NAL unit header (2 bytes) for HEVC
+    BitReader br = {data + 2, size - 2, 0, 0};
+
+    read_bits(&br, 4);                             // sps_video_parameter_set_id
+    guint8 max_sub_layers = read_bits(&br, 3) + 1; // sps_max_sub_layers_minus1 + 1
+    read_bits(&br, 1);                             // sps_temporal_id_nesting_flag
+
+    // Skip profile_tier_level - simplified approach
+    // This is complex in full spec, but we can skip fixed bits for common profiles
+    read_bits(&br, 2);  // general_profile_space
+    read_bits(&br, 1);  // general_tier_flag
+    read_bits(&br, 5);  // general_profile_idc
+    read_bits(&br, 32); // general_profile_compatibility_flags (32 bits)
+    read_bits(&br, 1);  // general_progressive_source_flag
+    read_bits(&br, 1);  // general_interlaced_source_flag
+    read_bits(&br, 1);  // general_non_packed_constraint_flag
+    read_bits(&br, 1);  // general_frame_only_constraint_flag
+    // Skip remaining constraint flags (44 bits)
+    read_bits(&br, 32);
+    read_bits(&br, 12);
+    read_bits(&br, 8); // general_level_idc
+
+    // Skip sub_layer_profile/level for each sub-layer
+    if (max_sub_layers > 1) {
+        for (int i = 0; i < max_sub_layers - 1; i++) {
+            read_bits(&br, 2); // sub_layer_profile/level_present_flag
+        }
+        // Padding if max_sub_layers < 8
+        for (int i = max_sub_layers - 1; i < 8; i++) {
+            read_bits(&br, 2); // reserved
+        }
+    }
+
+    read_ue(&br); // sps_seq_parameter_set_id
+    guint32 chroma_format_idc = read_ue(&br);
+    if (chroma_format_idc == 3) {
+        read_bits(&br, 1); // separate_colour_plane_flag
+    }
+
+    // The key info we need!
+    guint32 pic_width = read_ue(&br);  // pic_width_in_luma_samples
+    guint32 pic_height = read_ue(&br); // pic_height_in_luma_samples
+
+    // Check for conformance_window_flag
+    if (read_bits(&br, 1)) { // conformance_window_flag
+        guint32 left = read_ue(&br);
+        guint32 right = read_ue(&br);
+        guint32 top = read_ue(&br);
+        guint32 bottom = read_ue(&br);
+        // Adjust for cropping (simplified)
+        pic_width -= (left + right) * 2;
+        pic_height -= (top + bottom) * 2;
+    }
+
+    // Infer framerate based on resolution (similar to H.264 approach)
+    // 4K content is typically 50/60fps progressive
+    gint fps_num = 50, fps_den = 1; // Default to 50fps for UHD
+    if (pic_height >= 2160) {
+        fps_num = 50; // 4K typically 50fps in Europe, 60fps in US
+    } else if (pic_height >= 1080) {
+        fps_num = 50;
+    }
+
+    pthread_mutex_lock(&video_info.mutex);
+    video_info.width = pic_width;
+    video_info.height = pic_height;
+    video_info.fps_num = fps_num;
+    video_info.fps_den = fps_den;
+    video_info.interlaced = FALSE; // HEVC is progressive by design for UHD
+    video_info.info_valid = TRUE;
+    g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: %d (inferred)\n", pic_width, pic_height, fps_num);
+    pthread_mutex_unlock(&video_info.mutex);
+}
+
 // Buffer probe callback to parse MPEG-TS packets
 static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
@@ -779,6 +859,14 @@ static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, g
                                 guint8 nal_type = payload[j + 3] & 0x1F;
                                 if (nal_type == 7) { // SPS
                                     parse_h264_sps(payload + j + 3, payload_size - j - 3);
+                                    break;
+                                }
+                            } else if (video_type == STREAM_TYPE_HEVC) {
+                                // HEVC NAL unit type is in bits 1-6 of first byte after start code
+                                // NAL header is 2 bytes: [F(1) Type(6) LayerId(6) TID(3)]
+                                guint8 nal_type = (payload[j + 3] >> 1) & 0x3F;
+                                if (nal_type == 33) { // SPS (NAL_UNIT_SPS = 33)
+                                    parse_hevc_sps(payload + j + 3, payload_size - j - 3);
                                     break;
                                 }
                             } else if (video_type == STREAM_TYPE_MPEG2_VIDEO) {
