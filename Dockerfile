@@ -75,7 +75,9 @@ RUN mix compile
 
 # Changes to config/runtime.exs don't require recompiling the code
 COPY config/runtime.exs config/
-RUN mix release
+
+# Clean any stale release artifacts and build fresh
+RUN rm -rf _build/prod/rel && mix release --overwrite
 
 # Start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
