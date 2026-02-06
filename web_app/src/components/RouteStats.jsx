@@ -50,13 +50,15 @@ const formatResolution = (width, height) => {
 
 /**
  * Format framerate (fps_num / fps_den)
+ * Shows ~ prefix when framerate is inferred (not detected from stream)
  */
-const formatFramerate = (num, den) => {
+const formatFramerate = (num, den, isInferred = false) => {
     if (!num || !den || den === 0) return 'N/A';
     const fps = num / den;
+    const prefix = isInferred ? '~' : '';
     // Round to 2 decimal places, but show as integer if it's a whole number
-    if (Number.isInteger(fps)) return `${fps} fps`;
-    return `${fps.toFixed(2)} fps`;
+    if (Number.isInteger(fps)) return `${prefix}${fps} fps`;
+    return `${prefix}${fps.toFixed(2)} fps`;
 };
 
 /**
@@ -139,6 +141,7 @@ const RouteStats = ({ routeId, isRunning }) => {
     const videoHeight = stats?.['video-height'] ?? null;
     const fpsNum = stats?.['video-framerate-num'] ?? null;
     const fpsDen = stats?.['video-framerate-den'] ?? null;
+    const fpsInferred = stats?.['video-framerate-inferred'] ?? false;
     const interlaceMode = stats?.['video-interlace-mode'] ?? null;
     const scanType = formatScanType(interlaceMode);
 
@@ -288,7 +291,7 @@ const RouteStats = ({ routeId, isRunning }) => {
                         <Col xs={12} sm={8} md={6} lg={4}>
                             <Statistic
                                 title="Framerate"
-                                value={formatFramerate(fpsNum, fpsDen)}
+                                value={formatFramerate(fpsNum, fpsDen, fpsInferred)}
                                 prefix={<FieldTimeOutlined style={{ color: '#eb2f96' }} />}
                                 valueStyle={{ color: '#eb2f96', ...statisticStyle }}
                             />

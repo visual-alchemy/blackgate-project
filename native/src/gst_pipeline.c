@@ -45,6 +45,7 @@ typedef struct {
     gint fps_num;
     gint fps_den;
     gboolean interlaced;
+    gboolean fps_inferred; // TRUE if framerate was inferred, not detected
     gboolean info_valid;
     guint16 pmt_pid;
     guint16 video_pid;
@@ -52,7 +53,7 @@ typedef struct {
     pthread_mutex_t mutex;
 } VideoInfo;
 
-static VideoInfo video_info = {0, 0, 0, 1, FALSE, FALSE, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+static VideoInfo video_info = {0, 0, 0, 1, FALSE, FALSE, FALSE, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
 
 // Forward declarations for MPEG-TS parsing
 static void parse_pat(const guint8 *data, gsize size);
@@ -172,6 +173,7 @@ static void *print_stats(void *src)
             cJSON_AddNumberToObject(root, "video-height", video_info.height);
             cJSON_AddNumberToObject(root, "video-framerate-num", video_info.fps_num);
             cJSON_AddNumberToObject(root, "video-framerate-den", video_info.fps_den);
+            cJSON_AddBoolToObject(root, "video-framerate-inferred", video_info.fps_inferred);
             cJSON_AddStringToObject(root, "video-interlace-mode",
                                     video_info.interlaced ? "interleaved" : "progressive");
         }
@@ -667,15 +669,19 @@ static void parse_h264_sps(const guint8 *data, gsize size)
 
     // Infer framerate from resolution and interlace mode (common broadcast standards)
     // Note: VUI timing_info parsing is unreliable due to H.264 emulation prevention bytes
-    gint fps_num = 0, fps_den = 1; // Default to unknown (will show N/A)
+    // Default to 25fps (PAL standard, common for Indonesian/European content)
+    gint fps_num = 25, fps_den = 1;
+    gboolean fps_inferred = TRUE; // All H.264 framerates are inferred (VUI unreliable)
+
     if (interlaced) {
         // Interlaced content: typically 25i (PAL) or 30i (NTSC)
-        // We can reasonably assume 25fps for interlaced broadcast content
+        fps_num = 25;
+        fps_den = 1;
+    } else {
+        // Progressive content: 25fps is a reasonable default for broadcast
         fps_num = 25;
         fps_den = 1;
     }
-    // For progressive content, we can't reliably infer framerate without VUI parsing
-    // So we leave it as 0 (N/A) to avoid showing incorrect values
 
     pthread_mutex_lock(&video_info.mutex);
     video_info.width = width;
@@ -683,8 +689,9 @@ static void parse_h264_sps(const guint8 *data, gsize size)
     video_info.interlaced = interlaced;
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
+    video_info.fps_inferred = fps_inferred;
     video_info.info_valid = TRUE;
-    g_print("MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: %d (inferred)\n", width, height,
+    g_print("MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: ~%d (inferred)\n", width, height,
             interlaced ? "yes" : "no", fps_num);
     pthread_mutex_unlock(&video_info.mutex);
 }
@@ -711,6 +718,7 @@ static void parse_mpeg2_sequence(const guint8 *data, gsize size)
     video_info.height = height;
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
+    video_info.fps_inferred = FALSE; // MPEG-2 framerate is detected from stream header
     video_info.info_valid = TRUE;
     g_print("MPEG-TS/MPEG-2: Resolution: %dx%d, FPS: %d/%d\n", width, height, fps_num, fps_den);
     pthread_mutex_unlock(&video_info.mutex);
@@ -777,9 +785,9 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     }
 
     // Infer framerate based on resolution
-    // Only infer for 4K content (typically 50/60fps for UHD broadcast)
-    // For non-4K HEVC, show N/A since we can't reliably determine framerate
-    gint fps_num = 0, fps_den = 1; // Default to unknown (N/A)
+    // All HEVC framerates are inferred since we don't parse VUI
+    gint fps_num = 25, fps_den = 1; // Default 25fps for non-4K
+    gboolean fps_inferred = TRUE;
     if (pic_height >= 2160) {
         fps_num = 50; // 4K typically 50fps in Europe, 60fps in US
         fps_den = 1;
@@ -790,9 +798,10 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     video_info.height = pic_height;
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
+    video_info.fps_inferred = fps_inferred;
     video_info.interlaced = FALSE; // HEVC is progressive by design for UHD
     video_info.info_valid = TRUE;
-    g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: %s\n", pic_width, pic_height, fps_num > 0 ? "50 (inferred)" : "N/A");
+    g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: ~%d (inferred)\n", pic_width, pic_height, fps_num);
     pthread_mutex_unlock(&video_info.mutex);
 }
 
