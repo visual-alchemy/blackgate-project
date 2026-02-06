@@ -776,13 +776,13 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
         pic_height -= (top + bottom) * 2;
     }
 
-    // Infer framerate based on resolution (similar to H.264 approach)
-    // 4K content is typically 50/60fps progressive
-    gint fps_num = 50, fps_den = 1; // Default to 50fps for UHD
+    // Infer framerate based on resolution
+    // Only infer for 4K content (typically 50/60fps for UHD broadcast)
+    // For non-4K HEVC, show N/A since we can't reliably determine framerate
+    gint fps_num = 0, fps_den = 1; // Default to unknown (N/A)
     if (pic_height >= 2160) {
         fps_num = 50; // 4K typically 50fps in Europe, 60fps in US
-    } else if (pic_height >= 1080) {
-        fps_num = 50;
+        fps_den = 1;
     }
 
     pthread_mutex_lock(&video_info.mutex);
@@ -792,7 +792,7 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     video_info.fps_den = fps_den;
     video_info.interlaced = FALSE; // HEVC is progressive by design for UHD
     video_info.info_valid = TRUE;
-    g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: %d (inferred)\n", pic_width, pic_height, fps_num);
+    g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: %s\n", pic_width, pic_height, fps_num > 0 ? "50 (inferred)" : "N/A");
     pthread_mutex_unlock(&video_info.mutex);
 }
 
