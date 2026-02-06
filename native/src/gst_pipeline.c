@@ -667,24 +667,15 @@ static void parse_h264_sps(const guint8 *data, gsize size)
 
     // Infer framerate from resolution and interlace mode (common broadcast standards)
     // Note: VUI timing_info parsing is unreliable due to H.264 emulation prevention bytes
-    gint fps_num = 25, fps_den = 1; // Default to 25fps (PAL)
+    gint fps_num = 0, fps_den = 1; // Default to unknown (will show N/A)
     if (interlaced) {
         // Interlaced content: typically 25i (PAL) or 30i (NTSC)
+        // We can reasonably assume 25fps for interlaced broadcast content
         fps_num = 25;
         fps_den = 1;
-    } else {
-        // Progressive: common rates are 25p, 30p, 50p, 60p
-        if (height >= 1080) {
-            fps_num = 25;
-            fps_den = 1; // 1080p usually 25fps for broadcast
-        } else if (height >= 720) {
-            fps_num = 50;
-            fps_den = 1; // 720p usually 50fps
-        } else {
-            fps_num = 25;
-            fps_den = 1;
-        }
     }
+    // For progressive content, we can't reliably infer framerate without VUI parsing
+    // So we leave it as 0 (N/A) to avoid showing incorrect values
 
     pthread_mutex_lock(&video_info.mutex);
     video_info.width = width;
