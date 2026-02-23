@@ -90,7 +90,7 @@ jobs:
             -w /workspace \
             -e VERSION=${{ steps.version.outputs.version }} \
             -e SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE || 'default_secret_key_base_for_build_only_change_in_production_1234567890abcdef' }} \
-            debian:bookworm bash -c "apt-get update && apt-get install -y sudo && ./iso-builder/build.sh"
+            debian:bookworm bash -c "apt-get update && apt-get install -y sudo make gcc pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libsrt-openssl-dev libcjson-dev erlang elixir nodejs npm && npm install -g yarn && ./iso-builder/build.sh"
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
