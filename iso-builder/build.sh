@@ -82,8 +82,7 @@ lb config \
     --iso-application "Blackgate SRT Gateway" \
     --iso-preparer "Visual Alchemy" \
     --iso-publisher "Visual Alchemy" \
-    --iso-volume "BLACKGATE-${VERSION}" \
-    --image-name "$OUTPUT_NAME"
+    --iso-volume "BLACKGATE-${VERSION}"
 
 # ─── Step 4: Copy configuration files ──────────────────────────────────
 
