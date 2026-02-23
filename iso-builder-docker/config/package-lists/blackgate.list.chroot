@@ -3,7 +3,6 @@
 
 # Docker runtime
 docker.io
-docker-compose-plugin
 
 # System essentials
 openssh-server

@@ -23,6 +23,15 @@ fi
 chown -R blackgate:blackgate /opt/blackgate
 chown -R blackgate:blackgate /var/lib/blackgate
 
+# Install docker-compose v2 plugin manually since it's missing from Bookworm apt repos
+echo "Installing Docker Compose v2..."
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -sSL "https://github.com/docker/compose/releases/download/v2.26.1/docker-compose-linux-x86_64" -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# Also make it available globally as docker-compose
+ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+
 # Create Khepri database directory
 mkdir -p /var/lib/blackgate/khepri
 chown -R blackgate:blackgate /var/lib/blackgate/khepri
