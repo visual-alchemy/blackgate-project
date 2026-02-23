@@ -52,7 +52,6 @@ lb config \
     --debian-installer live \
     --debian-installer-gui false \
     --archive-areas "main restricted universe multiverse" \
-    --apt-recommends false \
     --memtest none \
     --iso-application "Blackgate Server" \
     --iso-preparer "Visual Alchemy" \

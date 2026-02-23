@@ -1,3 +1,8 @@
+# Boot essentials (Ubuntu requires these to make the ISO bootable)
+linux-image-generic
+initramfs-tools
+casper
+
 # Docker runtime
 docker.io
 docker-compose-v2
