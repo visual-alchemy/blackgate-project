@@ -21,7 +21,7 @@ echo ""
 
 echo "📦 Step 1: Installing live-build..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso docker.io debian-archive-keyring
+sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso debian-archive-keyring
 
 # ─── Step 2: Build Blackgate Docker Image ───────────────────────────────
 
