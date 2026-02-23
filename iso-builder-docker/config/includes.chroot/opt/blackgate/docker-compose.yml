@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  blackgate:
+    image: blackgate/app:latest
+    container_name: blackgate
+    restart: always
+    network_mode: "host"
+    privileged: true
+    volumes:
+      - /var/lib/blackgate/khepri:/app/data/khepri
+      - /tmp:/tmp
+    environment:
+      - MIX_ENV=prod
+      - PORT=4000
