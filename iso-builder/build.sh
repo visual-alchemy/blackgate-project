@@ -77,7 +77,6 @@ lb config \
     --mirror-chroot "http://deb.debian.org/debian/" \
     --mirror-binary "http://deb.debian.org/debian/" \
     --security false \
-    --updates false \
     --distribution bookworm \
     --architectures amd64 \
     --binary-images iso-hybrid \
