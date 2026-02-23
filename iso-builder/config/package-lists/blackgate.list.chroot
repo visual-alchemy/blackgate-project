@@ -1,17 +1,6 @@
-# Blackgate SRT Gateway - Required System Packages
-# These are installed into the ISO filesystem
-
-# GStreamer (streaming engine)
-libgstreamer1.0-0
-gstreamer1.0-plugins-base
-gstreamer1.0-plugins-good
-gstreamer1.0-plugins-bad
-
-# SRT transport
-libsrt1.5-openssl
-
-# JSON parsing (C pipeline)
-libcjson1
+# Docker runtime
+docker.io
+docker-compose-v2
 
 # System essentials
 openssh-server
@@ -22,13 +11,6 @@ htop
 net-tools
 iputils-ping
 dnsutils
-tini
-openssl
 ca-certificates
 locales
 iptables
-
-# Erlang/OTP runtime (for Blackgate Elixir release)
-libssl3
-libncurses6
-libsctp1

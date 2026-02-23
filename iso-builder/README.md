@@ -1,6 +1,6 @@
-# Blackgate Server (Baremetal Edition)
+# Blackgate Server (Docker Appliance)
 
-Builds a bootable Debian 12 ISO appliance that natively auto-starts Blackgate.
+Builds a bootable **Ubuntu 22.04 (Jammy) Server** ISO appliance that natively auto-starts Blackgate securely inside a Docker container using host networking.
 
 ## How to Build
 
@@ -12,7 +12,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-### Option 2: Build Locally (requires Debian/Ubuntu)
+### Option 2: Build Locally (requires Linux with Docker)
 ```bash
 chmod +x build.sh
 VERSION=1.0.0 ./build.sh
@@ -23,10 +23,10 @@ Output: `output/blackgate-1.0.0-amd64.iso`
 ## What's Inside the ISO
 | Component | Details |
 |-----------|---------|
-| **OS** | Debian 12 (Bookworm) minimal CLI |
-| **Engine** | Native Elixir binary + Native C Pipeline |
+| **OS** | Ubuntu 22.04 (Jammy) CLI |
+| **Engine** | `docker` + `docker compose` running `blackgate/app:latest` |
 | **SSH** | Enabled, root login disabled |
-| **Boot** | `blackgate.service` runs automatically |
+| **Boot** | `docker load` & `docker compose up` run automatically |
 
 ## Default Credentials
 | Service | User | Password |
@@ -37,14 +37,16 @@ Output: `output/blackgate-1.0.0-amd64.iso`
 > ⚠️ **Change these after first login!**
 
 ## Managing Blackgate on the Appliance
-Blackgate runs as a native systemd service.
+Blackgate runs via Docker Compose in `/opt/blackgate`.
 ```bash
+cd /opt/blackgate
+
 # View live logs
-journalctl -fu blackgate
+docker compose logs -f
 
 # Restart Blackgate
-sudo systemctl restart blackgate
+docker compose restart
 
 # Stop Blackgate
-sudo systemctl stop blackgate
+docker compose down
 ```

@@ -22,9 +22,6 @@ fi
 
 chown -R blackgate:blackgate /opt/blackgate
 chown -R blackgate:blackgate /var/lib/blackgate
-chmod +x /opt/blackgate/bin/*
-chmod +x /opt/blackgate/releases/*/elixir
-chmod +x /opt/blackgate/erts-*/bin/* 2>/dev/null || true
 
 # Create Khepri database directory
 mkdir -p /var/lib/blackgate/khepri

@@ -1,46 +1,23 @@
 [Unit]
-Description=Blackgate SRT Gateway
+Description=Blackgate SRT Gateway (Docker)
 Documentation=https://github.com/visual-alchemy/blackgate-project
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+Requires=docker.service
 
 [Service]
-Type=exec
-User=blackgate
-Group=blackgate
+Type=oneshot
+RemainAfterExit=yes
 WorkingDirectory=/opt/blackgate
 
-# Environment
-Environment=HOME=/var/lib/blackgate
-Environment=PORT=4000
-Environment=PHX_SERVER=true
-Environment=PHX_HOST=0.0.0.0
-Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
-Environment=RELEASE_COOKIE=blackgate_secret_cookie
-Environment=RELEASE_NODE=blackgate@127.0.0.1
-Environment=LANG=en_US.UTF-8
-Environment=RLIMIT_NOFILE=65536
+# ExecStartPre: Load the docker image from tar if it's not already loaded
+ExecStartPre=-/bin/bash -c "docker images -q blackgate/app:latest > /dev/null || docker load -i /opt/blackgate/blackgate-image.tar.gz"
 
-# Start command
-ExecStart=/opt/blackgate/bin/blackgate start
-ExecStop=/opt/blackgate/bin/blackgate stop
+# ExecStart: Run docker compose
+ExecStart=/usr/bin/docker compose up -d
 
-# Restart policy
-Restart=always
-RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=10
-
-# Resource limits
-LimitNOFILE=65536
-LimitNPROC=4096
-
-# Security hardening
-ProtectSystem=strict
-ReadWritePaths=/var/lib/blackgate /tmp
-ProtectHome=true
-NoNewPrivileges=true
-PrivateTmp=true
+# ExecStop: Teardown docker containers
+ExecStop=/usr/bin/docker compose down
 
 [Install]
 WantedBy=multi-user.target

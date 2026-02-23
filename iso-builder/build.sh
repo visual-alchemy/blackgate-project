@@ -2,9 +2,8 @@
 set -e
 
 #
-# Blackgate ISO Builder
-# Builds a bootable Debian 12 ISO with Blackgate pre-installed.
-# Designed to run inside GitHub Actions (Ubuntu runner).
+# Blackgate ISO Builder (Ubuntu 22.04 Docker Edition)
+# Builds a bootable Ubuntu Jammy ISO with Blackgate Docker image pre-installed.
 #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,112 +13,73 @@ VERSION="${VERSION:-1.0.0}"
 OUTPUT_NAME="blackgate-${VERSION}-amd64"
 
 echo "═══════════════════════════════════════════════════════════"
-echo "  Blackgate ISO Builder v${VERSION}"
+echo "  Blackgate Server ISO Builder v${VERSION} (Ubuntu Docker)"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
-# ─── Step 1: Install live-build ─────────────────────────────────────────
+# ─── Step 1: Install prerequisites ──────────────────────────────────────
 
 echo "📦 Step 1: Installing live-build..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso debian-archive-keyring
+sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso ubuntu-keyring
 
-# ─── Step 2: Build Blackgate Release ────────────────────────────────────
+# ─── Step 2: Build Blackgate Docker Image ───────────────────────────────
 
-echo "🔨 Step 2: Building Blackgate release..."
-
-# Build native C pipeline
-echo "   Building native pipeline..."
+echo "🐳 Step 2: Building Blackgate Docker Image..."
 cd "$PROJECT_ROOT"
-make -C native clean
-make -C native
 
-# Install Elixir deps and build release
-echo "   Building Elixir release..."
-cd "$PROJECT_ROOT"
-export MIX_ENV=prod
-export SECRET_KEY_BASE=$(openssl rand -hex 64)
-mix local.hex --force
-mix local.rebar --force
-mix deps.get --only prod
-mix compile
-
-# Build frontend
-echo "   Building frontend..."
-cd "$PROJECT_ROOT/web_app"
-yarn install --frozen-lockfile 2>/dev/null || yarn install
-npx vite build
-mkdir -p "$PROJECT_ROOT/priv/static"
-cp -r dist/* "$PROJECT_ROOT/priv/static/"
-
-# Build Elixir release
-cd "$PROJECT_ROOT"
-mix phx.digest
-mix release --overwrite
-
-RELEASE_DIR="$PROJECT_ROOT/_build/prod/rel/blackgate"
-echo "   Release built at: $RELEASE_DIR"
+# Ensure we're using the latest Dockerfile
+docker build -t blackgate/app:latest .
 
 # ─── Step 3: Prepare live-build ─────────────────────────────────────────
 
-echo "🏗️  Step 3: Preparing live-build environment..."
+echo "🏗️  Step 3: Preparing live-build environment for Ubuntu Jammy..."
 
-# Clean previous build
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Initialize live-build
 lb config \
-    --mode debian \
+    --mode ubuntu \
     --system live \
-    --mirror-bootstrap "http://deb.debian.org/debian/" \
-    --mirror-chroot "http://deb.debian.org/debian/" \
-    --mirror-binary "http://deb.debian.org/debian/" \
+    --mirror-bootstrap "http://archive.ubuntu.com/ubuntu/" \
+    --mirror-chroot "http://archive.ubuntu.com/ubuntu/" \
+    --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
     --security false \
-    --distribution bookworm \
+    --distribution jammy \
     --architectures amd64 \
     --binary-images iso-hybrid \
     --debian-installer live \
     --debian-installer-gui false \
-    --archive-areas "main contrib non-free non-free-firmware" \
+    --archive-areas "main restricted universe multiverse" \
     --apt-recommends false \
     --memtest none \
-    --iso-application "Blackgate SRT Gateway" \
+    --iso-application "Blackgate Server" \
     --iso-preparer "Visual Alchemy" \
     --iso-publisher "Visual Alchemy" \
     --iso-volume "BLACKGATE-${VERSION}"
 
 # ─── Step 4: Copy configuration files ──────────────────────────────────
 
-echo "📋 Step 4: Copying configuration files..."
+echo "📋 Step 4: Copy configuration files..."
 
 # Package lists
 mkdir -p config/package-lists
 cp "$SCRIPT_DIR/config/package-lists/blackgate.list.chroot" config/package-lists/
 
-# Chroot includes (files that go into the ISO filesystem)
+# Chroot includes
 mkdir -p config/includes.chroot/opt/blackgate
 mkdir -p config/includes.chroot/etc/systemd/system
 mkdir -p config/includes.chroot/etc/ssh/sshd_config.d
 mkdir -p config/includes.chroot/etc/sysctl.d
 mkdir -p config/includes.chroot/var/lib/blackgate
 
-# Copy Blackgate release
-cp -r "$RELEASE_DIR"/* config/includes.chroot/opt/blackgate/
+# ✨ Export Docker image into the ISO
+echo "   Exporting Docker image to tar (this may take a minute)..."
+docker save blackgate/app:latest | gzip > config/includes.chroot/opt/blackgate/blackgate-image.tar.gz
 
-# Copy native pipeline binary
-cp "$PROJECT_ROOT/native/build/blackgate_pipeline" config/includes.chroot/opt/blackgate/bin/
-
-# Copy public key for license verification
-mkdir -p config/includes.chroot/opt/blackgate/lib/blackgate-*/priv/license
-if [ -f "$PROJECT_ROOT/priv/license/public_key.pem" ]; then
-    # Find the actual lib directory name
-    find config/includes.chroot/opt/blackgate/lib -name "blackgate-*" -type d | while read dir; do
-        mkdir -p "$dir/priv/license"
-        cp "$PROJECT_ROOT/priv/license/public_key.pem" "$dir/priv/license/"
-    done
-fi
+# Copy docker-compose
+cp "$SCRIPT_DIR/config/includes.chroot/opt/blackgate/docker-compose.yml" config/includes.chroot/opt/blackgate/
 
 # Copy system config files
 cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" \
