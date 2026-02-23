@@ -1,0 +1,118 @@
+#!/bin/bash
+set -e
+
+#
+# Blackgate ISO - Post-install Setup Hook
+# Runs inside the chroot during ISO build.
+# Creates user, sets permissions, enables services.
+#
+
+echo "🔧 Blackgate: Running post-install setup..."
+
+# ─── Create blackgate system user ───────────────────────────────────────
+
+if ! id -u blackgate &>/dev/null; then
+    useradd -r -m -d /var/lib/blackgate -s /bin/bash -c "Blackgate SRT Gateway" blackgate
+    echo "blackgate:blackgate123" | chpasswd
+    usermod -aG sudo blackgate
+    echo "   Created user: blackgate (password: blackgate123)"
+fi
+
+# ─── Set permissions ────────────────────────────────────────────────────
+
+chown -R blackgate:blackgate /opt/blackgate
+chown -R blackgate:blackgate /var/lib/blackgate
+chmod +x /opt/blackgate/bin/*
+chmod +x /opt/blackgate/releases/*/elixir
+chmod +x /opt/blackgate/erts-*/bin/* 2>/dev/null || true
+
+# Create Khepri database directory
+mkdir -p /var/lib/blackgate/khepri
+chown -R blackgate:blackgate /var/lib/blackgate/khepri
+
+# Create unix socket directory
+mkdir -p /tmp
+chmod 1777 /tmp
+
+echo "   Set ownership: /opt/blackgate → blackgate:blackgate"
+
+# ─── Enable services ───────────────────────────────────────────────────
+
+systemctl enable blackgate.service
+systemctl enable ssh.service
+echo "   Enabled: blackgate.service, ssh.service"
+
+# ─── Configure locale ──────────────────────────────────────────────────
+
+sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen
+echo "   Configured locale: en_US.UTF-8"
+
+# ─── Set hostname ──────────────────────────────────────────────────────
+
+echo "blackgate" > /etc/hostname
+echo "   Set hostname: blackgate"
+
+# ─── DHCP configuration ────────────────────────────────────────────────
+
+cat > /etc/network/interfaces << 'EOF'
+# Loopback
+auto lo
+iface lo inet loopback
+
+# Primary network interface — DHCP
+allow-hotplug eth0
+iface eth0 inet dhcp
+
+allow-hotplug ens3
+iface ens3 inet dhcp
+
+allow-hotplug ens33
+iface ens33 inet dhcp
+
+allow-hotplug enp0s3
+iface enp0s3 inet dhcp
+EOF
+echo "   Configured DHCP on common interfaces"
+
+# ─── First-boot IP display script ──────────────────────────────────────
+
+cat > /usr/local/bin/blackgate-show-ip << 'SCRIPT'
+#!/bin/bash
+# Show the Blackgate dashboard URL after boot
+sleep 5
+IP=$(hostname -I | awk '{print $1}')
+if [ -n "$IP" ]; then
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  Blackgate SRT Gateway is running!"
+    echo "  Dashboard: http://${IP}:4000"
+    echo "  SSH:       ssh blackgate@${IP}"
+    echo "═══════════════════════════════════════════════════════════"
+    echo ""
+    # Update /etc/motd with actual IP
+    sed -i "s|<this-machine-ip>|${IP}|g" /etc/motd
+fi
+SCRIPT
+chmod +x /usr/local/bin/blackgate-show-ip
+
+# Create a systemd service to show IP on boot
+cat > /etc/systemd/system/blackgate-show-ip.service << 'EOF'
+[Unit]
+Description=Display Blackgate Dashboard IP
+After=network-online.target blackgate.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/blackgate-show-ip
+StandardOutput=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable blackgate-show-ip.service
+
+echo ""
+echo "✅ Blackgate post-install setup complete!"

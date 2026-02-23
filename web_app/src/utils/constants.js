@@ -17,4 +17,5 @@ export const ROUTES = {
   SETTINGS: '/settings',
   SYSTEM_PIPELINES: '/system/pipelines',
   SYSTEM_NODES: '/system/nodes',
+  LICENSE: '/license',
 }; 

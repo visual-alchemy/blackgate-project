@@ -42,6 +42,7 @@ defmodule Blackgate.Application do
     children = [
       Blackgate.RouteStatsRegistry,
       Blackgate.ErlSysMon,
+      Blackgate.License,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},
       {Registry,

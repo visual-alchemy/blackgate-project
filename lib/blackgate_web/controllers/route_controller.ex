@@ -43,16 +43,24 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def start(conn, %{"route_id" => route_id}) do
-    case Blackgate.start_route(route_id) do
-      {:ok, _pid} ->
-        conn
-        |> put_status(:ok)
-        |> data(%{status: "started", route_id: route_id})
-
+    case Blackgate.License.can_start_route?() do
       {:error, reason} ->
         conn
-        |> put_status(:unprocessable_entity)
-        |> json(%{error: inspect(reason)})
+        |> put_status(:forbidden)
+        |> json(%{error: reason})
+
+      {:ok, :allowed} ->
+        case Blackgate.start_route(route_id) do
+          {:ok, _pid} ->
+            conn
+            |> put_status(:ok)
+            |> data(%{status: "started", route_id: route_id})
+
+          {:error, reason} ->
+            conn
+            |> put_status(:unprocessable_entity)
+            |> json(%{error: inspect(reason)})
+        end
     end
   end
 

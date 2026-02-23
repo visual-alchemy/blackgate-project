@@ -55,6 +55,11 @@ defmodule BlackgateWeb.Router do
     get "/nodes/:id", NodeController, :show
 
     get "/network/interfaces", NetworkController, :index
+
+    # License management
+    get "/license", LicenseController, :show
+    post "/license/activate", LicenseController, :activate
+    delete "/license/deactivate", LicenseController, :deactivate
   end
 
   # TODO: improve this

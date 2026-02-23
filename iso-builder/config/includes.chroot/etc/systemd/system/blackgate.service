@@ -1,0 +1,46 @@
+[Unit]
+Description=Blackgate SRT Gateway
+Documentation=https://github.com/visual-alchemy/blackgate-project
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=blackgate
+Group=blackgate
+WorkingDirectory=/opt/blackgate
+
+# Environment
+Environment=HOME=/var/lib/blackgate
+Environment=PORT=4000
+Environment=PHX_SERVER=true
+Environment=PHX_HOST=0.0.0.0
+Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
+Environment=RELEASE_COOKIE=blackgate_secret_cookie
+Environment=RELEASE_NODE=blackgate@127.0.0.1
+Environment=LANG=en_US.UTF-8
+Environment=RLIMIT_NOFILE=65536
+
+# Start command
+ExecStart=/opt/blackgate/bin/blackgate start
+ExecStop=/opt/blackgate/bin/blackgate stop
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+ProtectSystem=strict
+ReadWritePaths=/var/lib/blackgate /tmp
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

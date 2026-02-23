@@ -12,6 +12,7 @@ import RouteDestEdit from './pages/routes/RouteDestEdit';
 import SystemPipelines from './pages/system/SystemPipelines';
 import SystemNodes from './pages/system/SystemNodes';
 import Login from './pages/Login';
+import License from './pages/License';
 import { isAuthenticated } from './utils/auth';
 import { ROUTES } from './utils/constants';
 import './index.css';
@@ -152,6 +153,14 @@ const App = () => {
           <ProtectedRoute>
             <MainLayout>
               <SystemNodes />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+
+        <Route path={ROUTES.LICENSE} element={
+          <ProtectedRoute>
+            <MainLayout>
+              <License />
             </MainLayout>
           </ProtectedRoute>
         } />

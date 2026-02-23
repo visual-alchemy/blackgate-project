@@ -1,0 +1,117 @@
+name: Build Blackgate ISO
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+env:
+  MIX_ENV: prod
+  ELIXIR_VERSION: '1.17'
+  OTP_VERSION: '27'
+  NODE_VERSION: '18'
+
+jobs:
+  build-iso:
+    name: Build Blackgate ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Extract version from tag (remove 'v' prefix)
+            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+          echo "Version: $(cat $GITHUB_OUTPUT | grep version | cut -d= -f2)"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            live-build debootstrap syslinux-utils isolinux xorriso \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            libcjson-dev libsrt-openssl-dev libcmocka-dev \
+            libglib2.0-dev pkg-config build-essential
+
+      - name: Setup Erlang/OTP and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Yarn
+        run: npm install -g yarn
+
+      - name: Cache Elixir deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - name: Cache Node modules
+        uses: actions/cache@v4
+        with:
+          path: web_app/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('web_app/yarn.lock', 'web_app/package.json') }}
+          restore-keys: ${{ runner.os }}-node-
+
+      - name: Build ISO
+        run: |
+          chmod +x iso-builder/build.sh
+          VERSION=${{ steps.version.outputs.version }} ./iso-builder/build.sh
+        env:
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE || 'default_secret_key_base_for_build_only_change_in_production_1234567890abcdef' }}
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackgate-${{ steps.version.outputs.version }}-amd64
+          path: iso-builder/output/*.iso
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: iso-builder/output/*.iso
+          generate_release_notes: true
+          body: |
+            ## Blackgate SRT Gateway v${{ steps.version.outputs.version }}
+
+            ### Installation
+            1. Download the ISO file below
+            2. Flash to USB (`dd if=blackgate-*.iso of=/dev/sdX bs=4M`) or mount in VM
+            3. Boot and follow the installer
+            4. Access dashboard at `http://<server-ip>:4000`
+
+            ### Credentials
+            - **Dashboard**: `admin` / `password123`
+            - **SSH**: `blackgate` / `blackgate123`
+
+            > ⚠️ Change default passwords after first login!

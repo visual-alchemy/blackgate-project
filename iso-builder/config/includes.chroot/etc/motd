@@ -1,0 +1,11 @@
+
+═══════════════════════════════════════════════════════════
+  Blackgate SRT Gateway
+  Dashboard: http://<this-machine-ip>:4000
+  Default login: admin / password123
+═══════════════════════════════════════════════════════════
+  SSH user: blackgate (password: blackgate123)
+  Service: sudo systemctl status blackgate
+  Logs:    sudo journalctl -u blackgate -f
+═══════════════════════════════════════════════════════════
+

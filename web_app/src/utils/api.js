@@ -258,4 +258,30 @@ export const networkApi = {
     const response = await authFetch('/api/network/interfaces');
     return response.json();
   },
+};
+
+// License API
+export const licenseApi = {
+  // Get current license status
+  getStatus: async () => {
+    const response = await authFetch('/api/license');
+    return response.json();
+  },
+
+  // Activate a license key
+  activate: async (key) => {
+    const response = await authFetch('/api/license/activate', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    });
+    return response.json();
+  },
+
+  // Deactivate current license
+  deactivate: async () => {
+    const response = await authFetch('/api/license/deactivate', {
+      method: 'DELETE',
+    });
+    return response.json();
+  },
 }; 
