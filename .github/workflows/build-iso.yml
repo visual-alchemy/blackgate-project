@@ -18,7 +18,7 @@ env:
   MIX_ENV: prod
   ELIXIR_VERSION: '1.17'
   OTP_VERSION: '27'
-  NODE_VERSION: '18'
+  NODE_VERSION: '20'
 
 jobs:
   build-iso:
