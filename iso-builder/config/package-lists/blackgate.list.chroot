@@ -2,11 +2,9 @@
 linux-image-generic
 initramfs-tools
 casper
-syslinux-utils
-syslinux-efi
-syslinux-common
-isolinux
 xorriso
+grub-pc-bin
+grub-efi-amd64-bin
 
 # Docker runtime
 docker.io
