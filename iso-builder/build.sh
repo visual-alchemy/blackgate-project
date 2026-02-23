@@ -109,6 +109,8 @@ if [ -f "${OUTPUT_NAME}.hybrid.iso" ]; then
     mv "${OUTPUT_NAME}.hybrid.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 elif [ -f "live-image-amd64.hybrid.iso" ]; then
     mv "live-image-amd64.hybrid.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
+elif [ -f "binary.iso" ]; then
+    mv "binary.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 elif [ -f "${OUTPUT_NAME}.iso" ]; then
     mv "${OUTPUT_NAME}.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 elif [ -f "live-image-amd64.iso" ]; then
