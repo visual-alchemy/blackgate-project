@@ -75,9 +75,9 @@ lb config \
     --system live \
     --mirror-bootstrap "http://deb.debian.org/debian/" \
     --mirror-chroot "http://deb.debian.org/debian/" \
-    --mirror-chroot-security "http://security.debian.org/debian-security/" \
     --mirror-binary "http://deb.debian.org/debian/" \
-    --mirror-binary-security "http://security.debian.org/debian-security/" \
+    --security false \
+    --updates false \
     --distribution bookworm \
     --architectures amd64 \
     --binary-images iso-hybrid \
