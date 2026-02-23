@@ -22,7 +22,7 @@ echo ""
 
 echo "📦 Step 1: Installing live-build..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso
+sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso debian-archive-keyring
 
 # ─── Step 2: Build Blackgate Release ────────────────────────────────────
 
@@ -71,6 +71,13 @@ cd "$BUILD_DIR"
 
 # Initialize live-build
 lb config \
+    --mode debian \
+    --system live \
+    --mirror-bootstrap "http://deb.debian.org/debian/" \
+    --mirror-chroot "http://deb.debian.org/debian/" \
+    --mirror-chroot-security "http://security.debian.org/debian-security/" \
+    --mirror-binary "http://deb.debian.org/debian/" \
+    --mirror-binary-security "http://security.debian.org/debian-security/" \
     --distribution bookworm \
     --architectures amd64 \
     --binary-images iso-hybrid \
