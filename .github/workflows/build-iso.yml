@@ -111,7 +111,13 @@ jobs:
       - name: Build Docker ISO
         run: |
           chmod +x iso-builder-docker/build.sh
-          VERSION=${{ steps.version.outputs.version }} ./iso-builder-docker/build.sh
+          # Run inside Debian Bookworm to fix live-build, and mount Docker socket to allow docker CLI usage
+          docker run --rm --privileged \
+            -v ${{ github.workspace }}:/workspace \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -w /workspace \
+            -e VERSION=${{ steps.version.outputs.version }} \
+            debian:bookworm bash -c "apt-get update && apt-get install -y sudo docker.io && ./iso-builder-docker/build.sh"
 
       - name: Upload Docker ISO artifact
         uses: actions/upload-artifact@v4
