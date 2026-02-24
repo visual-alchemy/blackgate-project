@@ -5,6 +5,7 @@ casper
 xorriso
 grub-pc-bin
 grub-efi-amd64-bin
+syslinux-utils
 grub-efi-amd64-signed
 shim-signed
 
