@@ -46,7 +46,7 @@ defmodule BlackgateWeb.RouteController do
     case Blackgate.License.can_start_route?() do
       {:error, reason} ->
         conn
-        |> put_status(:forbidden)
+        |> put_status(:payment_required)
         |> json(%{error: reason})
 
       {:ok, :allowed} ->
