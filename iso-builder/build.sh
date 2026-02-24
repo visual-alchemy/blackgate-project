@@ -48,7 +48,7 @@ lb config \
     --security false \
     --distribution jammy \
     --bootloader "grub-pc,grub-efi" \
-    --binary-images iso-hybrid \
+    --binary-images iso \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
@@ -105,10 +105,10 @@ sudo lb build 2>&1 | tail -20
 echo "📀 Step 6: Collecting output..."
 mkdir -p "$SCRIPT_DIR/output"
 
-if [ -f "${OUTPUT_NAME}.hybrid.iso" ]; then
-    mv "${OUTPUT_NAME}.hybrid.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
-elif [ -f "live-image-amd64.hybrid.iso" ]; then
-    mv "live-image-amd64.hybrid.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
+if [ -f "binary.iso" ]; then
+    mv "binary.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
+elif [ -f "${OUTPUT_NAME}.iso" ]; then
+    mv "${OUTPUT_NAME}.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 fi
 
 ISO_PATH="$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
