@@ -21,7 +21,7 @@ echo ""
 
 echo "📦 Step 1: Installing live-build..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux xorriso ubuntu-keyring mtools dosfstools
+sudo apt-get install -y -qq live-build debootstrap grub-pc-bin grub-efi-amd64-bin xorriso ubuntu-keyring mtools dosfstools
 
 # ─── Step 2: Build Blackgate Docker Image ───────────────────────────────
 
@@ -47,9 +47,8 @@ lb config \
     --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
-    --bootloader "syslinux,grub-efi" \
-    --syslinux-theme "" \
-    --binary-images iso-hybrid \
+    --bootloader "grub-efi" \
+    --binary-images iso \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
