@@ -48,6 +48,7 @@ lb config \
     --security false \
     --distribution jammy \
     --bootloader "syslinux,grub-efi" \
+    --syslinux-theme "" \
     --binary-images iso-hybrid \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \

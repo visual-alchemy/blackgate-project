@@ -8,7 +8,6 @@ grub-efi-amd64-bin
 syslinux-utils
 syslinux-efi
 syslinux-common
-syslinux-themes-ubuntu
 isolinux
 grub-efi-amd64-signed
 shim-signed
