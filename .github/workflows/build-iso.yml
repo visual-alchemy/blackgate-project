@@ -48,7 +48,7 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -w /workspace \
             -e VERSION=${{ steps.version.outputs.version }} \
-            ubuntu:jammy bash -c "apt-get update && apt-get install -y sudo docker.io grub-pc-bin grub-efi-amd64-bin xorriso ca-certificates mtools dosfstools && ./iso-builder/build.sh"
+            ubuntu:jammy bash -c "apt-get update && apt-get install -y sudo docker.io syslinux-utils syslinux-efi syslinux-common isolinux grub-efi-amd64-signed shim-signed mtools dosfstools xorriso ca-certificates && ./iso-builder/build.sh"
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
