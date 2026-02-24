@@ -26,6 +26,7 @@ defmodule BlackgateWeb.Router do
     pipe_through :api
 
     post "/login", AuthController, :login
+    put "/auth/credentials", AuthController, :update_credentials
   end
 
   scope "/api", BlackgateWeb do

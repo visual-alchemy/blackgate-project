@@ -4,6 +4,24 @@
 import { authFetch } from './auth';
 import { API_BASE_URL } from './constants';
 
+// Auth API
+export const authApi = {
+  updateCredentials: async (currentPassword, newUsername, newPassword) => {
+    const response = await authFetch(`${API_BASE_URL}/api/auth/credentials`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_username: newUsername,
+        new_password: newPassword,
+      }),
+    });
+    return response.json();
+  }
+};
+
 // System Pipelines API
 export const systemPipelinesApi = {
   // Get all pipeline processes

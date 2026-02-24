@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined } from '@ant-design/icons';
-import { backupApi, networkApi } from '../utils/api';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input } from 'antd';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined } from '@ant-design/icons';
+import { backupApi, networkApi, authApi } from '../utils/api';
+import { logout } from '../utils/auth';
 
 const { Title } = Typography;
 
@@ -452,6 +453,125 @@ const Settings = () => {
     );
   };
 
+  // Users tab content
+  const UsersTabContent = () => {
+    const [form] = Form.useForm();
+    const [isUpdating, setIsUpdating] = useState(false);
+
+    const onFinish = async (values) => {
+      setIsUpdating(true);
+      try {
+        const result = await authApi.updateCredentials(
+          values.currentPassword,
+          values.newUsername,
+          values.newPassword
+        );
+
+        if (result.error) {
+          throw new Error(result.error);
+        }
+
+        messageApi.success({
+          content: 'Credentials updated successfully. Please log in again.',
+          icon: <CheckCircleOutlined />,
+          duration: 3
+        });
+
+        // Use a short timeout before logging out to let the user see the success message
+        setTimeout(() => {
+          logout();
+        }, 1500);
+      } catch (error) {
+        console.error('Error updating credentials:', error);
+        messageApi.error({
+          content: `Failed to update credentials: ${error.message || 'Unknown error'}`,
+          icon: <CloseCircleOutlined />,
+          duration: 5
+        });
+      } finally {
+        setIsUpdating(false);
+      }
+    };
+
+    return (
+      <div>
+        <Card
+          title={
+            <Space>
+              <UserOutlined />
+              <span>Admin Credentials</span>
+            </Space>
+          }
+        >
+          <p style={{ marginBottom: '24px' }}>
+            Update the username and password used to access this dashboard.
+          </p>
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={onFinish}
+            style={{ maxWidth: 400 }}
+          >
+            <Form.Item
+              name="currentPassword"
+              label="Current Password"
+              rules={[{ required: true, message: 'Please enter your current password' }]}
+            >
+              <Input.Password placeholder="Enter current password" />
+            </Form.Item>
+
+            <Form.Item
+              name="newUsername"
+              label="New Username"
+              rules={[
+                { required: true, message: 'Please enter a new username' },
+                { min: 3, message: 'Username must be at least 3 characters' }
+              ]}
+            >
+              <Input placeholder="Enter new username" />
+            </Form.Item>
+
+            <Form.Item
+              name="newPassword"
+              label="New Password"
+              rules={[
+                { required: true, message: 'Please enter a new password' },
+                { min: 6, message: 'Password must be at least 6 characters' }
+              ]}
+            >
+              <Input.Password placeholder="Enter new password" />
+            </Form.Item>
+
+            <Form.Item
+              name="confirmPassword"
+              label="Confirm New Password"
+              dependencies={['newPassword']}
+              rules={[
+                { required: true, message: 'Please confirm your new password' },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    if (!value || getFieldValue('newPassword') === value) {
+                      return Promise.resolve();
+                    }
+                    return Promise.reject(new Error('The two passwords do not match!'));
+                  },
+                }),
+              ]}
+            >
+              <Input.Password placeholder="Confirm new password" />
+            </Form.Item>
+
+            <Form.Item>
+              <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={isUpdating} block>
+                Update Credentials
+              </Button>
+            </Form.Item>
+          </Form>
+        </Card>
+      </div>
+    );
+  };
+
   const items = [
     {
       key: 'backup',
@@ -467,6 +587,11 @@ const Settings = () => {
       key: 'network',
       label: 'Network',
       children: <NetworkTabContent />,
+    },
+    {
+      key: 'users',
+      label: 'Users',
+      children: <UsersTabContent />,
     },
   ];
 
