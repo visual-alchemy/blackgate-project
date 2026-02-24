@@ -20,6 +20,7 @@ const License = () => {
     const [loading, setLoading] = useState(true);
     const [activating, setActivating] = useState(false);
     const [licenseKey, setLicenseKey] = useState('');
+    const [modal, modalContextHolder] = Modal.useModal();
 
     const fetchLicense = async () => {
         try {
@@ -60,7 +61,7 @@ const License = () => {
     };
 
     const handleDeactivate = () => {
-        Modal.confirm({
+        modal.confirm({
             title: 'Deactivate License',
             content: 'Are you sure you want to deactivate your license? This will revert to trial mode.',
             okText: 'Deactivate',
@@ -112,6 +113,7 @@ const License = () => {
 
     return (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            {modalContextHolder}
             <Title level={3} style={{ margin: 0 }}>
                 <SafetyCertificateOutlined style={{ marginRight: 8 }} />
                 License
