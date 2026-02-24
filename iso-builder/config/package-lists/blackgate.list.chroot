@@ -5,6 +5,8 @@ casper
 xorriso
 grub-pc-bin
 grub-efi-amd64-bin
+syslinux-utils
+isolinux
 
 # Docker runtime
 docker.io
