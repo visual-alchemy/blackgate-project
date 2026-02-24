@@ -78,6 +78,10 @@ const Routes = () => {
         ? await routesApi.start(id)
         : await routesApi.stop(id);
 
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
       // Update the specific route in the routes array
       setRoutes(routes.map(route =>
         route.id === id ? { ...route, status: result.data.status } : route
