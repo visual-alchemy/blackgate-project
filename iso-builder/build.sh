@@ -21,7 +21,7 @@ echo ""
 
 echo "📦 Step 1: Installing live-build..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq live-build debootstrap grub-pc-bin grub-efi-amd64-bin grub-efi-amd64-signed shim-signed xorriso mtools dosfstools ubuntu-keyring
+sudo apt-get install -y -qq live-build debootstrap syslinux-utils grub-pc-bin grub-efi-amd64-bin grub-efi-amd64-signed shim-signed xorriso mtools dosfstools ubuntu-keyring
 
 # ─── Step 2: Build Blackgate Docker Image ───────────────────────────────
 
