@@ -30,6 +30,8 @@ defmodule BlackgateWeb.Router do
 
   scope "/api", BlackgateWeb do
     pipe_through [:api, :auth]
+    put "/auth/credentials", AuthController, :update_credentials
+    
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/:route_id/start", RouteController, :start
     get "/routes/:route_id/stop", RouteController, :stop
