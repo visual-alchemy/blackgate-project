@@ -70,14 +70,12 @@ RUN cd web_app \
     && npm install \
     && npm run build
 
-# Compile the Elixir application
-RUN mix compile
-
 # Changes to config/runtime.exs don't require recompiling the code
 COPY config/runtime.exs config/
 
-# Clean any stale release artifacts and build fresh
-RUN rm -rf _build/prod/rel && mix release --overwrite
+# Compile the Elixir application and build the release in a single layer
+# This prevents Podman OverlayFS bugs related to modifying files across multiple image layers
+RUN mix compile && mix release --overwrite
 
 # Start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
