@@ -118,3 +118,32 @@ graph TB
     class C,D,E backend
     class F streaming
 ```
+
+---
+
+## 7. System Hardware Requirements
+Blackgate is designed to be highly efficient, running both the Elixir backend and the actual video routing engine on minimal hardware footprints.
+
+| Component | Minimum Specification | Recommended Specification (5+ Streams) |
+| :--- | :--- | :--- |
+| **CPU** | 2-Core Intel/AMD x86_64 | 4-Core Intel/AMD x86_64 |
+| **RAM** | 4GB DDR4 | 8GB DDR4 |
+| **Storage** | 16GB SSD (Appliance Boot) | 32GB NVMe SSD |
+| **Network** | 1Gbps Ethernet Interface | 10Gbps Ethernet Interface |
+
+---
+
+## 8. Security & Compliance
+We understand that corporate and broadcast streams contain highly sensitive, embargoed information. Blackgate guarantees complete data safety from end-to-end:
+
+*   **No Cloud Dependency:** Blackgate does not require a connection to our servers to function. Your streams never leave your infrastructure unless you route them out.
+*   **SRT AES Encryption:** Support for military-grade AES-128, AES-192, or AES-256 encryption on all incoming and outgoing SRT streams.
+*   **Encrypted Storage:** All system settings, credentials, and routing rules are saved to disk using an encrypted `Khepri` key-value store. 
+*   **Zero Telemetry:** The appliance does not phone home with user data, stream analytics, or network layouts.
+
+---
+
+## 9. Next Steps / Conclusion
+Blackgate Server represents the modern approach to IP video transmission. By replacing fragile UDP flows and expensive satellite uplinks with a secure, dashboard-driven SRT node, engineering teams can guarantee reliable video transport from anywhere in the world.
+
+Whether deployed as a dedicated hardware server in a broadcast master control room, or spun up dynamically in AWS to handle sudden esports tournament demands, Blackgate scales with your production.
