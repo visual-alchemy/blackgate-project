@@ -20,19 +20,19 @@ Traditional live broadcasting relies on expensive satellite trucks (DSNG) or ded
 
 ## 3. Key Features
 
-### 📡 Dynamic Stream Routing
+### Dynamic Stream Routing
 Easily ingest a single SRT feed (e.g., a cameraman in the field) and dynamically route that exact feed to multiple destinations simultaneously (e.g., YouTube, Twitch, and a local production studio) without putting extra bandwidth strain on the cameraman.
 
-### 📊 Real-Time Telemetry & Monitoring
+### Real-Time Telemetry & Monitoring
 Stop guessing why a stream is lagging. The Blackgate dashboard provides live, granular metrics:
 *   Incoming and Outgoing Bitrate graphs.
 *   Round-Trip Time (RTT) latency tracking.
 *   Packet Loss percentage visualization.
 
-### 👁️ Built-in Video Preview
+### Built-in Video Preview
 Verify your feeds before they go to air. Blackgate decodes the incoming SRT stream and displays a live video and audio visualizer preview directly inside your web browser.
 
-### 🔐 Enterprise Access & Licensing
+### Enterprise Access & Licensing
 *   Encrypted database utilizing a distributed Raft consensus algorithm (Khepri).
 *   Configurable admin user management.
 *   Hardware-bound offline RSA-cryptographic license verification to ensure secure software distribution.
@@ -65,3 +65,56 @@ Blackgate is engineered for professionals who cannot afford a stream to go offli
 ## 6. Deployment Architecture
 Blackgate is deliberately designed as a **stateless, immutable appliance**. 
 It is distributed as a custom Ubuntu Linux `.iso` image. Upon booting in a virtual machine wrapper like Proxmox or VMware ESXi, standard Linux bootloaders seamlessly extract the core Blackgate Docker environment into system RAM, executing the application without the need for manual Linux configuration or dependencies.
+
+### System Topology
+
+```mermaid
+graph TB
+    subgraph "External Network"
+        A["SRT Source<br/>(Encoder/Camera)<br/>Mode: Caller"]
+    end
+    
+    subgraph "Blackgate Server"
+        subgraph "Web Interface"
+            B["React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
+        end
+        
+        subgraph "Elixir Backend"
+            C["Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
+            D["Stats Registry<br/>(ETS + Real-time)"]
+            E["Khepri DB<br/>(Persistent Storage)"]
+        end
+        
+        subgraph "Streaming Layer"
+            F["GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+        end
+    end
+    
+    subgraph "External Destinations"
+        G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
+        H["SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
+    end
+    
+    %% Data Flow
+    A -->|"SRT Stream<br/>(Listener Mode)"| F
+    F -->|"SRT Stream<br/>(Listener Mode)"| G
+    F -->|"SRT Stream<br/>(Listener Mode)"| H
+    
+    %% Control Flow
+    B <-->|"HTTP/REST API"| C
+    C <-->|"Database Ops"| E
+    C <-->|"Stats Updates"| D
+    C -->|"Unix Socket"| F
+    F -->|"Live Stats"| D
+    
+    %% Styling
+    classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
+    classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
+    classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
+    classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
+    
+    class A,G,H external
+    class B ui
+    class C,D,E backend
+    class F streaming
+```
