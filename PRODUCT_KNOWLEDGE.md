@@ -119,6 +119,57 @@ graph TB
     class F streaming
 ```
 
+### SRT Caller Source Workflow
+
+```mermaid
+graph TB
+    subgraph "Blackgate Server"
+        subgraph "Web Interface"
+            A["React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
+        end
+        
+        subgraph "Elixir Backend"
+            B["Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
+            C["Stats Registry<br/>(ETS + Real-time)"]
+            D["Khepri DB<br/>(Persistent Storage)"]
+        end
+        
+        subgraph "Streaming Layer"
+            E["GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+        end
+    end
+    
+    subgraph "External Network"
+        F["SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
+        G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
+        H["SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
+    end
+    
+    %% Data Flow
+    E -->|"SRT Connection<br/>(Caller Mode)"| F
+    F -->|"SRT Stream"| E
+    E -->|"SRT Connection<br/>(Caller Mode)"| G
+    E -->|"SRT Connection<br/>(Caller Mode)"| H
+    
+    %% Control Flow
+    A <-->|"HTTP/REST API"| B
+    B <-->|"Database Ops"| D
+    B <-->|"Stats Updates"| C
+    B -->|"Unix Socket"| E
+    E -->|"Live Stats"| C
+    
+    %% Styling
+    classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
+    classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
+    classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
+    classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
+    
+    class F,G,H external
+    class A ui
+    class B,C,D backend
+    class E streaming
+```
+
 ---
 
 ## 7. System Hardware Requirements
