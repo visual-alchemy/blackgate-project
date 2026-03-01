@@ -216,9 +216,14 @@ echo ""
 echo "   Running xorriso to create bootable ISO..."
 mkdir -p "$SCRIPT_DIR/output"
 
+ISO_VOLUME="BLACKGATE_${VERSION//./_}"
+
+# Fix permissions from sudo lb build
+sudo chmod -R a+r "$ISO_STAGING/"
+
 xorriso -as mkisofs \
     -r -J \
-    -V "BLACKGATE-${VERSION}" \
+    -V "${ISO_VOLUME}" \
     -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
     -c isolinux/boot.cat \
     -b isolinux/isolinux.bin \
