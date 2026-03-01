@@ -2,18 +2,12 @@
 set -e
 
 #
-# Blackgate ISO Builder (Ubuntu 22.04 Docker Edition)
+# Blackgate ISO Builder (Ubuntu 22.04)
 # Builds a bootable Ubuntu Jammy ISO with Blackgate Docker image pre-installed.
 #
 # Usage:
 #   ./build.sh                    # Build with default version 1.0.0
 #   VERSION=2.0.0 ./build.sh      # Build with custom version
-#
-# Prerequisites:
-#   - Ubuntu Server 22.04 (Jammy) x86_64
-#   - Docker installed and running (sudo apt install docker.io)
-#   - Current user in docker group (sudo usermod -aG docker $USER)
-#   - At least 10GB free disk space
 #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,46 +17,34 @@ VERSION="${VERSION:-1.0.0}"
 OUTPUT_NAME="blackgate-${VERSION}-amd64"
 
 echo "═══════════════════════════════════════════════════════════"
-echo "  Blackgate Server ISO Builder v${VERSION} (Ubuntu Docker)"
+echo "  Blackgate Server ISO Builder v${VERSION}"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
 # ─── Pre-flight checks ─────────────────────────────────────────────────
 
-# Make sure Docker is available
 if ! command -v docker &>/dev/null; then
-    echo "❌ Docker is not installed. Install it first:"
+    echo "❌ Docker is not installed."
     echo "   sudo apt-get install -y docker.io"
-    echo "   sudo usermod -aG docker \$USER"
-    echo "   (then log out and back in)"
     exit 1
 fi
 
 if ! docker info &>/dev/null; then
-    echo "❌ Docker daemon is not running or you don't have permission."
-    echo "   Try: sudo systemctl start docker"
-    echo "   Or:  sudo usermod -aG docker \$USER (then re-login)"
+    echo "❌ Docker daemon not running or no permission."
+    echo "   sudo systemctl start docker"
+    echo "   sudo usermod -aG docker \$USER"
     exit 1
 fi
 
 # ─── Step 1: Install prerequisites ──────────────────────────────────────
 
-echo "📦 Step 1: Installing live-build and dependencies..."
+echo "📦 Step 1: Installing dependencies..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
-    live-build \
-    debootstrap \
-    syslinux-utils \
-    isolinux \
-    syslinux \
-    syslinux-common \
-    grub-pc-bin \
-    grub-efi-amd64-bin \
-    grub-efi-amd64-signed \
-    shim-signed \
-    xorriso \
-    mtools \
-    dosfstools \
+    live-build debootstrap \
+    syslinux-utils isolinux syslinux syslinux-common \
+    xorriso mtools dosfstools \
+    squashfs-tools \
     ubuntu-keyring
 
 echo "   ✅ All dependencies installed"
@@ -71,20 +53,21 @@ echo "   ✅ All dependencies installed"
 
 echo ""
 echo "🐳 Step 2: Building Blackgate Docker Image..."
-echo "   (This compiles Elixir, C, and React — may take a few minutes)"
 cd "$PROJECT_ROOT"
 docker build -t blackgate/app:latest .
-echo "   ✅ Docker image built successfully"
+echo "   ✅ Docker image built"
 
 # ─── Step 3: Prepare live-build ─────────────────────────────────────────
 
 echo ""
-echo "🏗️  Step 3: Preparing live-build environment for Ubuntu Jammy..."
+echo "🏗️  Step 3: Preparing live-build..."
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
+# Use --bootloader "none" to skip live-build's broken syslinux integration.
+# We'll set up ISOLINUX manually after the build.
 lb config \
     --mode debian \
     --system live \
@@ -93,7 +76,6 @@ lb config \
     --mirror-binary "http://id.archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
-    --bootloader syslinux \
     --binary-images iso \
     --linux-packages linux-image \
     --linux-flavours generic \
@@ -107,155 +89,126 @@ lb config \
     --iso-publisher "Visual Alchemy" \
     --iso-volume "BLACKGATE-${VERSION}"
 
-echo "   ✅ live-build configured"
+echo "   ✅ live-build configured (no bootloader — we'll add ISOLINUX manually)"
 
 # ─── Step 4: Copy configuration files ──────────────────────────────────
 
 echo ""
 echo "📋 Step 4: Copying configuration files..."
 
-# Package lists
 mkdir -p config/package-lists
 cp "$SCRIPT_DIR/config/package-lists/blackgate.list.chroot" config/package-lists/
 
-# Chroot includes
 mkdir -p config/includes.chroot/opt/blackgate
 mkdir -p config/includes.chroot/etc/systemd/system
 mkdir -p config/includes.chroot/etc/ssh/sshd_config.d
 mkdir -p config/includes.chroot/etc/sysctl.d
 mkdir -p config/includes.chroot/var/lib/blackgate
 
-# ✨ Export Docker image into the ISO
-echo "   Exporting Docker image to tar (this may take a minute)..."
+echo "   Exporting Docker image to tar..."
 docker save blackgate/app:latest | gzip > config/includes.chroot/opt/blackgate/blackgate-image.tar.gz
 echo "   Docker image size: $(du -h config/includes.chroot/opt/blackgate/blackgate-image.tar.gz | cut -f1)"
 
-# Copy docker-compose
 cp "$SCRIPT_DIR/config/includes.chroot/opt/blackgate/docker-compose.yml" config/includes.chroot/opt/blackgate/
+cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" config/includes.chroot/etc/systemd/system/
+cp "$SCRIPT_DIR/config/includes.chroot/etc/ssh/sshd_config.d/99-blackgate.conf" config/includes.chroot/etc/ssh/sshd_config.d/
+cp "$SCRIPT_DIR/config/includes.chroot/etc/sysctl.d/99-blackgate.conf" config/includes.chroot/etc/sysctl.d/
+cp "$SCRIPT_DIR/config/includes.chroot/etc/motd" config/includes.chroot/etc/
+cp "$SCRIPT_DIR/config/includes.chroot/etc/issue" config/includes.chroot/etc/
 
-# Copy system config files
-cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" \
-    config/includes.chroot/etc/systemd/system/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/ssh/sshd_config.d/99-blackgate.conf" \
-    config/includes.chroot/etc/ssh/sshd_config.d/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/sysctl.d/99-blackgate.conf" \
-    config/includes.chroot/etc/sysctl.d/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/motd" \
-    config/includes.chroot/etc/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/issue" \
-    config/includes.chroot/etc/
-
-# Copy hooks
 mkdir -p config/hooks/live
 cp "$SCRIPT_DIR/config/hooks/live/0100-setup.hook.chroot" config/hooks/live/
 chmod +x config/hooks/live/*.hook.chroot
 
 echo "   ✅ All configuration files copied"
 
-# ─── Step 4.5: Fix ISOLINUX paths for Ubuntu ────────────────────────────
+# ─── Step 5: Build filesystem with live-build ────────────────────────────
 
 echo ""
-echo "🔧 Step 4.5: Setting up ISOLINUX boot files..."
-
-# live-build's lb_binary_syslinux looks for isolinux files at /root/isolinux/
-# INSIDE the chroot. Ubuntu installs them to /usr/lib/ISOLINUX/ and
-# /usr/lib/syslinux/modules/bios/ on the HOST. We place them in
-# config/includes.chroot so they end up inside the chroot at /root/isolinux/
-ISOLINUX_DEST="config/includes.chroot/root/isolinux"
-mkdir -p "$ISOLINUX_DEST"
-
-# Copy isolinux.bin
-if [ -f /usr/lib/ISOLINUX/isolinux.bin ]; then
-    cp /usr/lib/ISOLINUX/isolinux.bin "$ISOLINUX_DEST/"
-    echo "   Copied isolinux.bin"
-fi
-
-# Copy syslinux .c32 modules
-if [ -d /usr/lib/syslinux/modules/bios ]; then
-    cp /usr/lib/syslinux/modules/bios/*.c32 "$ISOLINUX_DEST/"
-    echo "   Copied syslinux .c32 modules"
-fi
-
-# Also try syslinux-common paths
-if [ -d /usr/share/syslinux ]; then
-    cp /usr/share/syslinux/vesamenu.c32 "$ISOLINUX_DEST/" 2>/dev/null || true
-    cp /usr/share/syslinux/menu.c32 "$ISOLINUX_DEST/" 2>/dev/null || true
-fi
-
-# Also place on the host as fallback
-sudo mkdir -p /root/isolinux
-sudo cp "$ISOLINUX_DEST"/* /root/isolinux/ 2>/dev/null || true
-
-echo "   ISOLINUX files:"
-ls -la "$ISOLINUX_DEST/"
-
-# ─── Step 5: Build ISO ──────────────────────────────────────────────────
-
-echo ""
-echo "🔥 Step 5: Building ISO (this takes ~10 minutes)..."
-echo "   Full output below:"
-echo "   ─────────────────────────────────────────────────────"
+echo "� Step 5: Building live filesystem (this takes ~10 minutes)..."
 sudo lb build 2>&1
-echo "   ─────────────────────────────────────────────────────"
-
-# ─── Step 5.5: Diagnostics ──────────────────────────────────────────────
-
 echo ""
-echo "🔍 Step 5.5: Checking build output..."
 
-# Show what files were produced
-echo "   ISO files found:"
-ls -lh *.iso 2>/dev/null || echo "   (none at top level)"
+# ─── Step 6: Create bootable ISO manually ───────────────────────────────
 
-echo "   Checking for boot directories:"
-ls -la binary/isolinux/ 2>/dev/null && echo "   ✅ isolinux directory exists" || echo "   ⚠️ No isolinux directory"
-ls -la binary/boot/grub/ 2>/dev/null && echo "   ✅ grub directory exists" || echo "   ⚠️ No grub directory"
+echo "🔧 Step 6: Creating bootable ISO with ISOLINUX..."
 
-# Find the ISO file
-ISO_FILE=""
-for f in binary.hybrid.iso binary.iso live-image-amd64.hybrid.iso live-image-amd64.iso; do
-    if [ -f "$f" ]; then
-        ISO_FILE="$f"
-        echo "   Found ISO: $f"
-        break
+# Check that live-build produced the binary directory
+if [ ! -d "binary" ]; then
+    echo "❌ live-build did not create binary/ directory"
+    ls -la
+    exit 1
+fi
+
+# Set up ISOLINUX boot directory in the binary staging area
+mkdir -p binary/isolinux
+
+# Copy ISOLINUX binary
+cp /usr/lib/ISOLINUX/isolinux.bin binary/isolinux/
+echo "   Copied isolinux.bin"
+
+# Copy syslinux modules
+for f in ldlinux.c32 libutil.c32 libcom32.c32 vesamenu.c32 menu.c32; do
+    if [ -f "/usr/lib/syslinux/modules/bios/$f" ]; then
+        cp "/usr/lib/syslinux/modules/bios/$f" binary/isolinux/
     fi
 done
+echo "   Copied syslinux .c32 modules"
 
-if [ -z "$ISO_FILE" ]; then
-    echo "   Searching for any .iso file..."
-    ISO_FILE=$(find . -maxdepth 1 -name "*.iso" -print -quit)
-    if [ -n "$ISO_FILE" ]; then
-        echo "   Found ISO: $ISO_FILE"
-    fi
+# Find the kernel and initrd that live-build placed
+VMLINUZ=$(find binary -name "vmlinuz*" -o -name "vmlinuz" | head -1)
+INITRD=$(find binary -name "initrd*" -o -name "initrd.img*" | head -1)
+
+if [ -z "$VMLINUZ" ]; then
+    echo "   Looking for kernel in casper/..."
+    VMLINUZ="binary/casper/vmlinuz"
+    INITRD="binary/casper/initrd"
 fi
 
-# ─── Step 6: Validate & Move output ────────────────────────────────────
+echo "   Kernel: $VMLINUZ"
+echo "   Initrd: $INITRD"
 
+# Get relative paths for ISOLINUX config
+VMLINUZ_REL=$(echo "$VMLINUZ" | sed 's|^binary/||')
+INITRD_REL=$(echo "$INITRD" | sed 's|^binary/||')
+
+# Create ISOLINUX boot config
+cat > binary/isolinux/isolinux.cfg << ISOLINUX_EOF
+DEFAULT blackgate
+TIMEOUT 30
+PROMPT 0
+
+LABEL blackgate
+    MENU LABEL Blackgate Server v${VERSION}
+    KERNEL /${VMLINUZ_REL}
+    APPEND initrd=/${INITRD_REL} boot=casper quiet splash ---
+    
+LABEL blackgate-safe
+    MENU LABEL Blackgate Server (Safe Mode)
+    KERNEL /${VMLINUZ_REL}
+    APPEND initrd=/${INITRD_REL} boot=casper nomodeset ---
+ISOLINUX_EOF
+
+echo "   Created isolinux.cfg"
+echo "   Boot files:"
+ls -la binary/isolinux/
+
+# Create the bootable ISO with xorriso
 echo ""
-echo "📀 Step 6: Collecting output..."
+echo "   Creating ISO with xorriso..."
 mkdir -p "$SCRIPT_DIR/output"
 
-if [ -n "$ISO_FILE" ] && [ -f "$ISO_FILE" ]; then
-    # Show ISO info for debugging
-    echo "   ISO file info:"
-    file "$ISO_FILE"
-
-    # Check for El Torito boot record
-    echo "   Boot record check:"
-    xorriso -indev "$ISO_FILE" -report_el_torito as_mkisofs 2>&1 | head -5 || true
-
-    # Try to make it hybrid-bootable (adds MBR so it can boot from USB + CD)
-    if command -v isohybrid &>/dev/null; then
-        echo "   Attempting to make ISO hybrid-bootable..."
-        if isohybrid "$ISO_FILE" 2>&1; then
-            echo "   ✅ ISO is now hybrid-bootable (USB + CD-ROM)"
-        else
-            echo "   ⚠️ isohybrid failed — ISO will still boot as CD-ROM"
-        fi
-    fi
-
-    mv "$ISO_FILE" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
-fi
+xorriso -as mkisofs \
+    -r -J \
+    -V "BLACKGATE-${VERSION}" \
+    -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+    -c isolinux/boot.cat \
+    -b isolinux/isolinux.bin \
+    -no-emul-boot \
+    -boot-load-size 4 \
+    -boot-info-table \
+    -o "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso" \
+    binary/
 
 ISO_PATH="$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 
@@ -267,19 +220,13 @@ if [ -f "$ISO_PATH" ]; then
     echo "  📀 File: $ISO_PATH"
     echo "  📏 Size: $ISO_SIZE"
     echo ""
+    echo "  Boot info:"
+    file "$ISO_PATH"
+    echo ""
     echo "  To copy to Proxmox ISO storage:"
     echo "    scp $ISO_PATH root@<proxmox-ip>:/var/lib/vz/template/iso/"
     echo "═══════════════════════════════════════════════════════════"
 else
-    echo ""
-    echo "❌ ISO build failed — no output file found"
-    echo ""
-    echo "   Build directory contents:"
-    ls -la "$BUILD_DIR/"
-    echo ""
-    echo "   Looking for any ISO files recursively:"
-    find "$BUILD_DIR" -name "*.iso" -ls 2>/dev/null
-    echo ""
-    echo "   Check the full build log above for errors."
+    echo "❌ ISO creation failed"
     exit 1
 fi
