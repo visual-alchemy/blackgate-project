@@ -47,7 +47,7 @@ lb config \
     --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
-    --bootloader "grub-pc,grub-efi" \
+    --bootloader "syslinux,grub-efi" \
     --binary-images iso-hybrid \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
@@ -105,7 +105,9 @@ sudo lb build 2>&1 | tail -20
 echo "📀 Step 6: Collecting output..."
 mkdir -p "$SCRIPT_DIR/output"
 
-if [ -f "binary.iso" ]; then
+if [ -f "binary.hybrid.iso" ]; then
+    mv "binary.hybrid.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
+elif [ -f "binary.iso" ]; then
     mv "binary.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 elif [ -f "${OUTPUT_NAME}.iso" ]; then
     mv "${OUTPUT_NAME}.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
