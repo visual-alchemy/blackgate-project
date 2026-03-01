@@ -180,7 +180,7 @@ if [ -d /usr/share/syslinux ]; then
 fi
 
 echo "   Contents of /root/isolinux/:"
-ls -la /root/isolinux/
+sudo ls -la /root/isolinux/
 
 # ─── Step 5: Build ISO ──────────────────────────────────────────────────
 
