@@ -15,8 +15,17 @@ if ! id -u blackgate &>/dev/null; then
     useradd -r -m -d /var/lib/blackgate -s /bin/bash -c "Blackgate SRT Gateway" blackgate
     echo "blackgate:blackgate123" | chpasswd
     usermod -aG sudo blackgate
+    usermod -aG docker blackgate 2>/dev/null || true
     echo "   Created user: blackgate (password: blackgate123)"
 fi
+
+# ─── Lock root account ─────────────────────────────────────────────────
+
+# Disable root password (no one can su root or login as root on console)
+passwd -l root
+# Set root shell to nologin as extra safety
+usermod -s /usr/sbin/nologin root
+echo "   Locked root account (SSH + console)"
 
 # ─── Set permissions ────────────────────────────────────────────────────
 
