@@ -42,7 +42,11 @@ chmod 1777 /tmp
 
 echo "   Set ownership: /opt/blackgate → blackgate:blackgate"
 
-# ─── Enable services ───────────────────────────────────────────────────
+# ─── Enable services ────────────────────────────────────────────────────
+
+# Disable NetworkManager — conflict dengan systemd-networkd di live environment
+systemctl disable NetworkManager 2>/dev/null || true
+systemctl mask NetworkManager 2>/dev/null || true
 
 systemctl enable systemd-networkd
 systemctl enable systemd-resolved
@@ -50,37 +54,17 @@ systemctl enable var-lib-docker.mount
 systemctl enable docker
 systemctl enable blackgate.service
 systemctl enable ssh.service
-echo "   Enabled network, docker tmpfs, docker, blackgate, and ssh services"
+echo "   Enabled: networkd, resolved, docker tmpfs, docker, blackgate, ssh"
 
-# ─── Configure locale ──────────────────────────────────────────────────
+# ─── DHCP configuration (Netplan) ───────────────────────────────────────
 
-sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
-locale-gen
-echo "   Configured locale: en_US.UTF-8"
+# Hapus semua netplan config default dari casper/live yang mungkin konflik
+rm -f /etc/netplan/*.yaml /etc/netplan/*.yml 2>/dev/null || true
 
-# ─── Set hostname ──────────────────────────────────────────────────────
-
-echo "blackgate" > /etc/hostname
-echo "   Set hostname: blackgate"
-
-# ─── DHCP configuration (Netplan) ────────────────────────────────────────
-
-mkdir -p /etc/netplan
-cat > /etc/netplan/01-netcfg.yaml << 'EOF'
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    all-eth:
-      match:
-        name: "en*"
-      dhcp4: true
-      dhcp4-overrides:
-        use-dns: true
-      optional: true
-EOF
-chmod 600 /etc/netplan/01-netcfg.yaml
-echo "   Configured DHCP via Netplan for en* interfaces"
+# (File 01-blackgate.yaml is copied by build.sh into /etc/netplan)
+chmod 600 /etc/netplan/01-blackgate.yaml 2>/dev/null || true
+netplan generate || true
+echo "   Configured DHCP via Netplan (networkd renderer) for en* interfaces"
 
 # ─── First-boot IP display script ──────────────────────────────────────
 

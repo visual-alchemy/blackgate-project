@@ -100,21 +100,44 @@ echo "📋 Step 4: Copying configuration files..."
 mkdir -p config/package-lists
 cp "$SCRIPT_DIR/config/package-lists/blackgate.list.chroot" config/package-lists/
 
+# Blackgate app
 mkdir -p config/includes.chroot/opt/blackgate
-mkdir -p config/includes.chroot/etc/systemd/system
-mkdir -p config/includes.chroot/etc/ssh/sshd_config.d
-mkdir -p config/includes.chroot/etc/sysctl.d
 mkdir -p config/includes.chroot/var/lib/blackgate
-
 echo "   Exporting Docker image to tar..."
 docker save blackgate/app:latest | gzip > config/includes.chroot/opt/blackgate/blackgate-image.tar.gz
 echo "   Docker image size: $(du -h config/includes.chroot/opt/blackgate/blackgate-image.tar.gz | cut -f1)"
+cp "$SCRIPT_DIR/config/includes.chroot/opt/blackgate/docker-compose.yml" \
+   config/includes.chroot/opt/blackgate/
 
-cp "$SCRIPT_DIR/config/includes.chroot/opt/blackgate/docker-compose.yml" config/includes.chroot/opt/blackgate/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" config/includes.chroot/etc/systemd/system/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/ssh/sshd_config.d/99-blackgate.conf" config/includes.chroot/etc/ssh/sshd_config.d/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/sysctl.d/99-blackgate.conf" config/includes.chroot/etc/sysctl.d/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/motd" config/includes.chroot/etc/
+# Systemd services
+mkdir -p config/includes.chroot/etc/systemd/system
+cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" \
+   config/includes.chroot/etc/systemd/system/
+cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/var-lib-docker.mount" \
+   config/includes.chroot/etc/systemd/system/
+
+# Docker daemon config
+mkdir -p config/includes.chroot/etc/docker
+cp "$SCRIPT_DIR/config/includes.chroot/etc/docker/daemon.json" \
+   config/includes.chroot/etc/docker/
+
+# Netplan
+mkdir -p config/includes.chroot/etc/netplan
+cp "$SCRIPT_DIR/config/includes.chroot/etc/netplan/01-blackgate.yaml" \
+   config/includes.chroot/etc/netplan/
+
+# SSH config
+mkdir -p config/includes.chroot/etc/ssh/sshd_config.d
+cp "$SCRIPT_DIR/config/includes.chroot/etc/ssh/sshd_config.d/99-blackgate.conf" \
+   config/includes.chroot/etc/ssh/sshd_config.d/
+
+# Sysctl
+mkdir -p config/includes.chroot/etc/sysctl.d
+cp "$SCRIPT_DIR/config/includes.chroot/etc/sysctl.d/99-blackgate.conf" \
+   config/includes.chroot/etc/sysctl.d/
+
+# MOTD & issue
+cp "$SCRIPT_DIR/config/includes.chroot/etc/motd"  config/includes.chroot/etc/
 cp "$SCRIPT_DIR/config/includes.chroot/etc/issue" config/includes.chroot/etc/
 
 mkdir -p config/hooks/live
