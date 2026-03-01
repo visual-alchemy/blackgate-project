@@ -47,8 +47,8 @@ lb config \
     --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
-    --bootloader "grub-pc,grub-efi" \
-    --binary-images iso \
+    --bootloaders "grub-pc grub-efi" \
+    --binary-images iso-hybrid \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
