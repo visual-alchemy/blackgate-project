@@ -97,6 +97,8 @@ lb config \
     --binary-images iso \
     --linux-packages linux-image \
     --linux-flavours generic \
+    --firmware-binary false \
+    --firmware-chroot false \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
