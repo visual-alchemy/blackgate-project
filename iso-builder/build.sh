@@ -157,30 +157,37 @@ echo "   ✅ All configuration files copied"
 echo ""
 echo "🔧 Step 4.5: Setting up ISOLINUX boot files..."
 
-# live-build in debian mode expects isolinux files at /root/isolinux/
-# but Ubuntu installs them to /usr/lib/ISOLINUX/ and /usr/lib/syslinux/modules/bios/
-sudo mkdir -p /root/isolinux
+# live-build's lb_binary_syslinux looks for isolinux files at /root/isolinux/
+# INSIDE the chroot. Ubuntu installs them to /usr/lib/ISOLINUX/ and
+# /usr/lib/syslinux/modules/bios/ on the HOST. We place them in
+# config/includes.chroot so they end up inside the chroot at /root/isolinux/
+ISOLINUX_DEST="config/includes.chroot/root/isolinux"
+mkdir -p "$ISOLINUX_DEST"
 
-# Copy isolinux.bin from the isolinux package
+# Copy isolinux.bin
 if [ -f /usr/lib/ISOLINUX/isolinux.bin ]; then
-    sudo cp /usr/lib/ISOLINUX/isolinux.bin /root/isolinux/
+    cp /usr/lib/ISOLINUX/isolinux.bin "$ISOLINUX_DEST/"
     echo "   Copied isolinux.bin"
 fi
 
-# Copy syslinux modules (vesamenu.c32, ldlinux.c32, libutil.c32, etc.)
+# Copy syslinux .c32 modules
 if [ -d /usr/lib/syslinux/modules/bios ]; then
-    sudo cp /usr/lib/syslinux/modules/bios/*.c32 /root/isolinux/
+    cp /usr/lib/syslinux/modules/bios/*.c32 "$ISOLINUX_DEST/"
     echo "   Copied syslinux .c32 modules"
 fi
 
-# Also copy from syslinux-common if available
+# Also try syslinux-common paths
 if [ -d /usr/share/syslinux ]; then
-    sudo cp /usr/share/syslinux/vesamenu.c32 /root/isolinux/ 2>/dev/null || true
-    sudo cp /usr/share/syslinux/menu.c32 /root/isolinux/ 2>/dev/null || true
+    cp /usr/share/syslinux/vesamenu.c32 "$ISOLINUX_DEST/" 2>/dev/null || true
+    cp /usr/share/syslinux/menu.c32 "$ISOLINUX_DEST/" 2>/dev/null || true
 fi
 
-echo "   Contents of /root/isolinux/:"
-sudo ls -la /root/isolinux/
+# Also place on the host as fallback
+sudo mkdir -p /root/isolinux
+sudo cp "$ISOLINUX_DEST"/* /root/isolinux/ 2>/dev/null || true
+
+echo "   ISOLINUX files:"
+ls -la "$ISOLINUX_DEST/"
 
 # ─── Step 5: Build ISO ──────────────────────────────────────────────────
 
