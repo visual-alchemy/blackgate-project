@@ -88,9 +88,9 @@ cd "$BUILD_DIR"
 lb config \
     --mode debian \
     --system live \
-    --mirror-bootstrap "http://archive.ubuntu.com/ubuntu/" \
-    --mirror-chroot "http://archive.ubuntu.com/ubuntu/" \
-    --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
+    --mirror-bootstrap "http://id.archive.ubuntu.com/ubuntu/" \
+    --mirror-chroot "http://id.archive.ubuntu.com/ubuntu/" \
+    --mirror-binary "http://id.archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
     --bootloader syslinux \
