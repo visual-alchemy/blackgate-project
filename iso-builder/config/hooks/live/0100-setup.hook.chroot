@@ -42,27 +42,50 @@ chmod 1777 /tmp
 
 echo "   Set ownership: /opt/blackgate → blackgate:blackgate"
 
-# ─── Enable services ────────────────────────────────────────────────────
+# ─── Enable services (manual symlinks — systemctl enable tidak reliable di chroot) ──
 
-# Disable NetworkManager
 systemctl disable NetworkManager 2>/dev/null || true
 systemctl mask NetworkManager 2>/dev/null || true
 
-# Enable via systemctl
-systemctl enable systemd-networkd
-systemctl enable systemd-resolved
-systemctl enable docker
-systemctl enable blackgate.service
-systemctl enable ssh.service
-systemctl enable blackgate-show-ip.service 2>/dev/null || true
-
-# var-lib-docker.mount — buat symlink MANUAL karena systemctl enable
-# tidak reliable untuk .mount unit di dalam live-build chroot
 mkdir -p /etc/systemd/system/multi-user.target.wants
+mkdir -p /etc/systemd/system/network-online.target.wants
+mkdir -p /etc/systemd/system/sysinit.target.wants
+
+# systemd-networkd
+ln -sf /lib/systemd/system/systemd-networkd.service \
+       /etc/systemd/system/multi-user.target.wants/systemd-networkd.service
+ln -sf /lib/systemd/system/systemd-networkd-wait-online.service \
+       /etc/systemd/system/network-online.target.wants/systemd-networkd-wait-online.service
+
+# systemd-resolved
+ln -sf /lib/systemd/system/systemd-resolved.service \
+       /etc/systemd/system/multi-user.target.wants/systemd-resolved.service
+
+# SSH
+ln -sf /lib/systemd/system/ssh.service \
+       /etc/systemd/system/multi-user.target.wants/ssh.service
+
+# Docker tmpfs mount — HARUS sebelum docker
 ln -sf /etc/systemd/system/var-lib-docker.mount \
        /etc/systemd/system/multi-user.target.wants/var-lib-docker.mount
 
-echo "   Enabled: networkd, resolved, docker tmpfs mount, docker, blackgate, ssh"
+# Docker daemon
+ln -sf /lib/systemd/system/docker.service \
+       /etc/systemd/system/multi-user.target.wants/docker.service
+
+# Blackgate app
+ln -sf /etc/systemd/system/blackgate.service \
+       /etc/systemd/system/multi-user.target.wants/blackgate.service
+
+# Blackgate show IP
+ln -sf /etc/systemd/system/blackgate-show-ip.service \
+       /etc/systemd/system/multi-user.target.wants/blackgate-show-ip.service
+
+echo "   Enabled all services via manual symlinks"
+
+# Verifikasi symlinks terbuat
+echo "   Symlinks in multi-user.target.wants:"
+ls /etc/systemd/system/multi-user.target.wants/
 
 # ─── DHCP configuration (Netplan) ───────────────────────────────────────
 
