@@ -21,7 +21,7 @@ echo ""
 
 echo "📦 Step 1: Installing live-build..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq live-build debootstrap syslinux-utils grub-pc-bin grub-efi-amd64-bin grub-efi-amd64-signed shim-signed xorriso mtools dosfstools ubuntu-keyring
+sudo apt-get install -y -qq live-build debootstrap syslinux-utils isolinux syslinux syslinux-common grub-pc-bin grub-efi-amd64-bin grub-efi-amd64-signed shim-signed xorriso mtools dosfstools ubuntu-keyring
 
 # ─── Step 2: Build Blackgate Docker Image ───────────────────────────────
 
@@ -47,8 +47,8 @@ lb config \
     --mirror-binary "http://archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
-    --bootloader "syslinux,grub-efi" \
-    --binary-images iso-hybrid \
+    --bootloader syslinux \
+    --binary-images iso \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
@@ -98,19 +98,48 @@ chmod +x config/hooks/live/*.hook.chroot
 # ─── Step 5: Build ISO ──────────────────────────────────────────────────
 
 echo "🔥 Step 5: Building ISO (this takes ~10 minutes)..."
-sudo lb build 2>&1 | tail -20
+sudo lb build 2>&1 | tail -30
+
+# ─── Step 5.5: Diagnostics & Hybrid Conversion ─────────────────────────
+
+echo "🔍 Step 5.5: Checking build output..."
+echo "   Files in build directory:"
+ls -la *.iso 2>/dev/null || echo "   No .iso files found at top level"
+echo "   Checking for isolinux directory:"
+ls -la binary/isolinux/ 2>/dev/null || echo "   No isolinux directory"
+
+# Find the ISO file (live-build may name it differently)
+ISO_FILE=""
+for f in binary.hybrid.iso binary.iso live-image-amd64.hybrid.iso live-image-amd64.iso; do
+    if [ -f "$f" ]; then
+        ISO_FILE="$f"
+        echo "   Found ISO: $f"
+        break
+    fi
+done
+
+if [ -z "$ISO_FILE" ]; then
+    echo "   Searching for any .iso file..."
+    ISO_FILE=$(find . -maxdepth 1 -name "*.iso" -print -quit)
+fi
 
 # ─── Step 6: Move output ────────────────────────────────────────────────
 
 echo "📀 Step 6: Collecting output..."
 mkdir -p "$SCRIPT_DIR/output"
 
-if [ -f "binary.hybrid.iso" ]; then
-    mv "binary.hybrid.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
-elif [ -f "binary.iso" ]; then
-    mv "binary.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
-elif [ -f "${OUTPUT_NAME}.iso" ]; then
-    mv "${OUTPUT_NAME}.iso" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
+if [ -n "$ISO_FILE" ] && [ -f "$ISO_FILE" ]; then
+    # Show ISO info for debugging
+    echo "   ISO file info:"
+    file "$ISO_FILE"
+
+    # Try to make it hybrid-bootable (adds MBR so it can boot from USB too)
+    if command -v isohybrid &>/dev/null; then
+        echo "   Attempting to make ISO hybrid-bootable..."
+        isohybrid "$ISO_FILE" 2>&1 && echo "   ✅ ISO is now hybrid-bootable" || echo "   ⚠️ isohybrid skipped (ISO will still boot as CD-ROM)"
+    fi
+
+    mv "$ISO_FILE" "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 fi
 
 ISO_PATH="$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
@@ -125,6 +154,9 @@ if [ -f "$ISO_PATH" ]; then
     echo "═══════════════════════════════════════════════════════════"
 else
     echo "❌ ISO build failed — no output file found"
+    echo "   Build directory contents:"
     ls -la "$BUILD_DIR/"
+    echo "   Looking for any ISO files recursively:"
+    find "$BUILD_DIR" -name "*.iso" -ls 2>/dev/null
     exit 1
 fi
