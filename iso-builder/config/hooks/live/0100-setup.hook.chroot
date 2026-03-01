@@ -44,9 +44,13 @@ echo "   Set ownership: /opt/blackgate → blackgate:blackgate"
 
 # ─── Enable services ───────────────────────────────────────────────────
 
+systemctl enable systemd-networkd
+systemctl enable systemd-resolved
+systemctl enable var-lib-docker.mount
+systemctl enable docker
 systemctl enable blackgate.service
 systemctl enable ssh.service
-echo "   Enabled: blackgate.service, ssh.service"
+echo "   Enabled network, docker tmpfs, docker, blackgate, and ssh services"
 
 # ─── Configure locale ──────────────────────────────────────────────────
 
@@ -69,12 +73,14 @@ network:
   ethernets:
     all-eth:
       match:
-        name: "e*"
+        name: "en*"
       dhcp4: true
-      dhcp6: true
+      dhcp4-overrides:
+        use-dns: true
+      optional: true
 EOF
 chmod 600 /etc/netplan/01-netcfg.yaml
-echo "   Configured DHCP via Netplan for all ethernet interfaces"
+echo "   Configured DHCP via Netplan for en* interfaces"
 
 # ─── First-boot IP display script ──────────────────────────────────────
 
