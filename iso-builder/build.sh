@@ -86,7 +86,7 @@ mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 lb config \
-    --mode ubuntu \
+    --mode debian \
     --system live \
     --mirror-bootstrap "http://archive.ubuntu.com/ubuntu/" \
     --mirror-chroot "http://archive.ubuntu.com/ubuntu/" \
