@@ -95,6 +95,8 @@ lb config \
     --distribution jammy \
     --bootloader syslinux \
     --binary-images iso \
+    --linux-packages linux-image \
+    --linux-flavours generic \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
