@@ -192,12 +192,12 @@ MENU TITLE Blackgate Server Boot Menu
 LABEL blackgate
     MENU LABEL ^Start Blackgate Server
     KERNEL /casper/vmlinuz
-    APPEND initrd=/casper/initrd boot=casper quiet splash ---
+    APPEND initrd=/casper/initrd boot=casper quiet splash ignore_uuid cdrom-detect/try-usb=true noprompt ---
 
 LABEL blackgate-safe
     MENU LABEL ^Safe Mode (no graphics)
     KERNEL /casper/vmlinuz
-    APPEND initrd=/casper/initrd boot=casper nomodeset ---
+    APPEND initrd=/casper/initrd boot=casper nomodeset ignore_uuid cdrom-detect/try-usb=true noprompt ---
 ISOLINUX_EOF
 
 # Create disk info
