@@ -59,35 +59,38 @@ echo "   Configured locale: en_US.UTF-8"
 echo "blackgate" > /etc/hostname
 echo "   Set hostname: blackgate"
 
-# ─── DHCP configuration ────────────────────────────────────────────────
+# ─── DHCP configuration (Netplan) ────────────────────────────────────────
 
-cat > /etc/network/interfaces << 'EOF'
-# Loopback
-auto lo
-iface lo inet loopback
-
-# Primary network interface — DHCP
-allow-hotplug eth0
-iface eth0 inet dhcp
-
-allow-hotplug ens3
-iface ens3 inet dhcp
-
-allow-hotplug ens33
-iface ens33 inet dhcp
-
-allow-hotplug enp0s3
-iface enp0s3 inet dhcp
+mkdir -p /etc/netplan
+cat > /etc/netplan/01-netcfg.yaml << 'EOF'
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    all-eth:
+      match:
+        name: "e*"
+      dhcp4: true
+      dhcp6: true
 EOF
-echo "   Configured DHCP on common interfaces"
+chmod 600 /etc/netplan/01-netcfg.yaml
+echo "   Configured DHCP via Netplan for all ethernet interfaces"
 
 # ─── First-boot IP display script ──────────────────────────────────────
 
 cat > /usr/local/bin/blackgate-show-ip << 'SCRIPT'
 #!/bin/bash
 # Show the Blackgate dashboard URL after boot
-sleep 5
-IP=$(hostname -I | awk '{print $1}')
+
+# Wait up to 30 seconds for an IP address
+for i in {1..15}; do
+    IP=$(hostname -I | awk '{print $1}')
+    if [ -n "$IP" ]; then
+        break
+    fi
+    sleep 2
+done
+
 if [ -n "$IP" ]; then
     echo ""
     echo "═══════════════════════════════════════════════════════════"
@@ -98,6 +101,8 @@ if [ -n "$IP" ]; then
     echo ""
     # Update /etc/motd with actual IP
     sed -i "s|<this-machine-ip>|${IP}|g" /etc/motd
+else
+    echo "   Blackgate: Could not obtain an IP address."
 fi
 SCRIPT
 chmod +x /usr/local/bin/blackgate-show-ip

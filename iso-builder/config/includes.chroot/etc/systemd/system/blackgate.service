@@ -11,7 +11,7 @@ RemainAfterExit=yes
 WorkingDirectory=/opt/blackgate
 
 # ExecStartPre: Load the docker image from tar if it's not already loaded
-ExecStartPre=-/bin/bash -c "docker images -q blackgate/app:latest > /dev/null || docker load -i /opt/blackgate/blackgate-image.tar.gz"
+ExecStartPre=-/bin/bash -c 'if [ -z "$(docker images -q blackgate/app:latest 2>/dev/null)" ]; then echo "Loading image..."; docker load -i /opt/blackgate/blackgate-image.tar.gz; fi'
 
 # ExecStart: Run docker compose
 ExecStart=/usr/bin/docker compose up -d
