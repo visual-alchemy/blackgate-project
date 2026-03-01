@@ -31,8 +31,6 @@ fi
 
 if ! docker info &>/dev/null; then
     echo "❌ Docker daemon not running or no permission."
-    echo "   sudo systemctl start docker"
-    echo "   sudo usermod -aG docker \$USER"
     exit 1
 fi
 
@@ -43,8 +41,7 @@ sudo apt-get update -qq
 sudo apt-get install -y -qq \
     live-build debootstrap \
     syslinux-utils isolinux syslinux syslinux-common \
-    xorriso mtools dosfstools \
-    squashfs-tools \
+    xorriso mtools dosfstools squashfs-tools \
     ubuntu-keyring
 
 echo "   ✅ All dependencies installed"
@@ -66,17 +63,21 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-# Use --bootloader "none" to skip live-build's broken syslinux integration.
-# We'll set up ISOLINUX manually after the build.
+# KEY: --mode ubuntu + --bootloader none
+# --mode ubuntu: avoids debian compatibility issues (broken syslinux themes, wrong kernel names)
+# --bootloader none: completely skips lb_binary_syslinux (which has hardcoded broken paths)
+# --binary-images none: skip ISO creation (we'll do it manually with xorriso)
+# We handle ISOLINUX boot + ISO creation ourselves after the build.
 lb config \
-    --mode debian \
+    --mode ubuntu \
     --system live \
+    --bootloader none \
     --mirror-bootstrap "http://id.archive.ubuntu.com/ubuntu/" \
     --mirror-chroot "http://id.archive.ubuntu.com/ubuntu/" \
     --mirror-binary "http://id.archive.ubuntu.com/ubuntu/" \
     --security false \
     --distribution jammy \
-    --binary-images iso \
+    --binary-images none \
     --linux-packages linux-image \
     --linux-flavours generic \
     --firmware-binary false \
@@ -89,7 +90,7 @@ lb config \
     --iso-publisher "Visual Alchemy" \
     --iso-volume "BLACKGATE-${VERSION}"
 
-echo "   ✅ live-build configured (no bootloader — we'll add ISOLINUX manually)"
+echo "   ✅ live-build configured (bootloader=none, we handle boot manually)"
 
 # ─── Step 4: Copy configuration files ──────────────────────────────────
 
@@ -122,80 +123,97 @@ chmod +x config/hooks/live/*.hook.chroot
 
 echo "   ✅ All configuration files copied"
 
-# ─── Step 5: Build filesystem with live-build ────────────────────────────
+# ─── Step 5: Build live filesystem ──────────────────────────────────────
 
 echo ""
-echo "� Step 5: Building live filesystem (this takes ~10 minutes)..."
+echo "🔥 Step 5: Building live filesystem (this takes ~10 minutes)..."
 sudo lb build 2>&1
 echo ""
+echo "   ✅ live-build completed"
 
-# ─── Step 6: Create bootable ISO manually ───────────────────────────────
+# ─── Step 6: Create squashfs & ISO manually ─────────────────────────────
 
-echo "🔧 Step 6: Creating bootable ISO with ISOLINUX..."
+echo ""
+echo "🔧 Step 6: Creating bootable ISO..."
 
-# Check that live-build produced the binary directory
-if [ ! -d "binary" ]; then
-    echo "❌ live-build did not create binary/ directory"
-    ls -la
+# Create the staging directory for the ISO contents
+ISO_STAGING="$BUILD_DIR/iso-staging"
+rm -rf "$ISO_STAGING"
+mkdir -p "$ISO_STAGING/casper"
+mkdir -p "$ISO_STAGING/isolinux"
+mkdir -p "$ISO_STAGING/.disk"
+
+# Create the squashfs filesystem from the chroot
+echo "   Creating squashfs filesystem (this takes a few minutes)..."
+if [ -d "chroot" ]; then
+    sudo mksquashfs chroot "$ISO_STAGING/casper/filesystem.squashfs" \
+        -comp xz -e boot
+    echo "   SquashFS size: $(du -h "$ISO_STAGING/casper/filesystem.squashfs" | cut -f1)"
+else
+    echo "❌ No chroot directory found. live-build failed to create filesystem."
     exit 1
 fi
 
-# Set up ISOLINUX boot directory in the binary staging area
-mkdir -p binary/isolinux
+# Copy kernel and initrd from chroot
+echo "   Copying kernel and initrd..."
+VMLINUZ=$(find chroot/boot -name "vmlinuz-*" | sort -V | tail -1)
+INITRD=$(find chroot/boot -name "initrd.img-*" | sort -V | tail -1)
 
-# Copy ISOLINUX binary
-cp /usr/lib/ISOLINUX/isolinux.bin binary/isolinux/
-echo "   Copied isolinux.bin"
-
-# Copy syslinux modules
-for f in ldlinux.c32 libutil.c32 libcom32.c32 vesamenu.c32 menu.c32; do
-    if [ -f "/usr/lib/syslinux/modules/bios/$f" ]; then
-        cp "/usr/lib/syslinux/modules/bios/$f" binary/isolinux/
-    fi
-done
-echo "   Copied syslinux .c32 modules"
-
-# Find the kernel and initrd that live-build placed
-VMLINUZ=$(find binary -name "vmlinuz*" -o -name "vmlinuz" | head -1)
-INITRD=$(find binary -name "initrd*" -o -name "initrd.img*" | head -1)
-
-if [ -z "$VMLINUZ" ]; then
-    echo "   Looking for kernel in casper/..."
-    VMLINUZ="binary/casper/vmlinuz"
-    INITRD="binary/casper/initrd"
+if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then
+    echo "❌ Could not find kernel/initrd in chroot/boot/"
+    ls -la chroot/boot/
+    exit 1
 fi
 
+sudo cp "$VMLINUZ" "$ISO_STAGING/casper/vmlinuz"
+sudo cp "$INITRD" "$ISO_STAGING/casper/initrd"
 echo "   Kernel: $VMLINUZ"
 echo "   Initrd: $INITRD"
 
-# Get relative paths for ISOLINUX config
-VMLINUZ_REL=$(echo "$VMLINUZ" | sed 's|^binary/||')
-INITRD_REL=$(echo "$INITRD" | sed 's|^binary/||')
+# Set up ISOLINUX boot files
+echo "   Setting up ISOLINUX boot..."
+cp /usr/lib/ISOLINUX/isolinux.bin "$ISO_STAGING/isolinux/"
+
+for f in ldlinux.c32 libutil.c32 libcom32.c32 vesamenu.c32 menu.c32; do
+    if [ -f "/usr/lib/syslinux/modules/bios/$f" ]; then
+        cp "/usr/lib/syslinux/modules/bios/$f" "$ISO_STAGING/isolinux/"
+    fi
+done
 
 # Create ISOLINUX boot config
-cat > binary/isolinux/isolinux.cfg << ISOLINUX_EOF
-DEFAULT blackgate
-TIMEOUT 30
+cat > "$ISO_STAGING/isolinux/isolinux.cfg" << 'ISOLINUX_EOF'
+UI menu.c32
 PROMPT 0
+TIMEOUT 30
+DEFAULT blackgate
+
+MENU TITLE Blackgate Server Boot Menu
 
 LABEL blackgate
-    MENU LABEL Blackgate Server v${VERSION}
-    KERNEL /${VMLINUZ_REL}
-    APPEND initrd=/${INITRD_REL} boot=casper quiet splash ---
-    
+    MENU LABEL ^Start Blackgate Server
+    KERNEL /casper/vmlinuz
+    APPEND initrd=/casper/initrd boot=casper quiet splash ---
+
 LABEL blackgate-safe
-    MENU LABEL Blackgate Server (Safe Mode)
-    KERNEL /${VMLINUZ_REL}
-    APPEND initrd=/${INITRD_REL} boot=casper nomodeset ---
+    MENU LABEL ^Safe Mode (no graphics)
+    KERNEL /casper/vmlinuz
+    APPEND initrd=/casper/initrd boot=casper nomodeset ---
 ISOLINUX_EOF
 
-echo "   Created isolinux.cfg"
-echo "   Boot files:"
-ls -la binary/isolinux/
+# Create disk info
+echo "Blackgate Server ${VERSION}" > "$ISO_STAGING/.disk/info"
+touch "$ISO_STAGING/.disk/base_installable"
+
+# Generate filesystem manifest
+sudo chroot chroot dpkg-query -W --showformat='${Package} ${Version}\n' \
+    > "$ISO_STAGING/casper/filesystem.manifest" 2>/dev/null || true
+
+echo "   ISO staging contents:"
+find "$ISO_STAGING" -maxdepth 2 -type f | head -20
 
 # Create the bootable ISO with xorriso
 echo ""
-echo "   Creating ISO with xorriso..."
+echo "   Running xorriso to create bootable ISO..."
 mkdir -p "$SCRIPT_DIR/output"
 
 xorriso -as mkisofs \
@@ -208,7 +226,7 @@ xorriso -as mkisofs \
     -boot-load-size 4 \
     -boot-info-table \
     -o "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso" \
-    binary/
+    "$ISO_STAGING/"
 
 ISO_PATH="$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
 
