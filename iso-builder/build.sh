@@ -99,6 +99,7 @@ lb config \
     --linux-flavours generic \
     --firmware-binary false \
     --firmware-chroot false \
+    --initsystem systemd \
     --archive-areas "main restricted universe multiverse" \
     --memtest none \
     --iso-application "Blackgate Server" \
