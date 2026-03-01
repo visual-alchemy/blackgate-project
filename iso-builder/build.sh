@@ -116,6 +116,11 @@ cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" \
 cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/var-lib-docker.mount" \
    config/includes.chroot/etc/systemd/system/
 
+# Docker service override
+mkdir -p config/includes.chroot/etc/systemd/system/docker.service.d
+cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/docker.service.d/override.conf" \
+   config/includes.chroot/etc/systemd/system/docker.service.d/
+
 # Docker daemon config
 mkdir -p config/includes.chroot/etc/docker
 cp "$SCRIPT_DIR/config/includes.chroot/etc/docker/daemon.json" \

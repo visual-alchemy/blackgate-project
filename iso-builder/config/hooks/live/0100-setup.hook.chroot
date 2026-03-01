@@ -44,17 +44,25 @@ echo "   Set ownership: /opt/blackgate → blackgate:blackgate"
 
 # ─── Enable services ────────────────────────────────────────────────────
 
-# Disable NetworkManager — conflict dengan systemd-networkd di live environment
+# Disable NetworkManager
 systemctl disable NetworkManager 2>/dev/null || true
 systemctl mask NetworkManager 2>/dev/null || true
 
+# Enable via systemctl
 systemctl enable systemd-networkd
 systemctl enable systemd-resolved
-systemctl enable var-lib-docker.mount
 systemctl enable docker
 systemctl enable blackgate.service
 systemctl enable ssh.service
-echo "   Enabled: networkd, resolved, docker tmpfs, docker, blackgate, ssh"
+systemctl enable blackgate-show-ip.service 2>/dev/null || true
+
+# var-lib-docker.mount — buat symlink MANUAL karena systemctl enable
+# tidak reliable untuk .mount unit di dalam live-build chroot
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf /etc/systemd/system/var-lib-docker.mount \
+       /etc/systemd/system/multi-user.target.wants/var-lib-docker.mount
+
+echo "   Enabled: networkd, resolved, docker tmpfs mount, docker, blackgate, ssh"
 
 # ─── DHCP configuration (Netplan) ───────────────────────────────────────
 
