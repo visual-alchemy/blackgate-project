@@ -152,6 +152,36 @@ chmod +x config/hooks/live/*.hook.chroot
 
 echo "   ✅ All configuration files copied"
 
+# ─── Step 4.5: Fix ISOLINUX paths for Ubuntu ────────────────────────────
+
+echo ""
+echo "🔧 Step 4.5: Setting up ISOLINUX boot files..."
+
+# live-build in debian mode expects isolinux files at /root/isolinux/
+# but Ubuntu installs them to /usr/lib/ISOLINUX/ and /usr/lib/syslinux/modules/bios/
+sudo mkdir -p /root/isolinux
+
+# Copy isolinux.bin from the isolinux package
+if [ -f /usr/lib/ISOLINUX/isolinux.bin ]; then
+    sudo cp /usr/lib/ISOLINUX/isolinux.bin /root/isolinux/
+    echo "   Copied isolinux.bin"
+fi
+
+# Copy syslinux modules (vesamenu.c32, ldlinux.c32, libutil.c32, etc.)
+if [ -d /usr/lib/syslinux/modules/bios ]; then
+    sudo cp /usr/lib/syslinux/modules/bios/*.c32 /root/isolinux/
+    echo "   Copied syslinux .c32 modules"
+fi
+
+# Also copy from syslinux-common if available
+if [ -d /usr/share/syslinux ]; then
+    sudo cp /usr/share/syslinux/vesamenu.c32 /root/isolinux/ 2>/dev/null || true
+    sudo cp /usr/share/syslinux/menu.c32 /root/isolinux/ 2>/dev/null || true
+fi
+
+echo "   Contents of /root/isolinux/:"
+ls -la /root/isolinux/
+
 # ─── Step 5: Build ISO ──────────────────────────────────────────────────
 
 echo ""
