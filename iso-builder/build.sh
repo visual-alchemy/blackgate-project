@@ -145,24 +145,22 @@ EFI_IMG="$WORK_DIR/efi.img"
 dd if="$UBUNTU_ISO" bs=1 count=432 of="$MBR_IMG" 2>/dev/null
 echo "   ✅ MBR extracted"
 
-# Extract EFI partition using offset reported by xorriso
-EFI_INTERVAL=$(xorriso -indev "$UBUNTU_ISO" -report_el_torito as_mkisofs 2>/dev/null \
-    | grep -oP -- '--interval:\S+' | head -1)
+# Extract EFI partition using fdisk to read partition table from ISO
+EFI_INFO=$(fdisk -l "$UBUNTU_ISO" 2>/dev/null | grep "EFI System")
 
-echo "   EFI interval: $EFI_INTERVAL"
-
-EFI_START=$(echo "$EFI_INTERVAL" | grep -oP 'start_\K[0-9]+(?=s)')
-EFI_SIZE=$(echo  "$EFI_INTERVAL" | grep -oP 'size_\K[0-9]+(?=s)')
-
-if [ -n "$EFI_START" ] && [ -n "$EFI_SIZE" ]; then
-    dd if="$UBUNTU_ISO" bs=512 skip="$EFI_START" count="$EFI_SIZE" of="$EFI_IMG" 2>/dev/null
-    echo "   ✅ EFI partition extracted ($(du -h "$EFI_IMG" | cut -f1))"
-else
-    # Fallback: create minimal FAT EFI image
-    echo "   ⚠️  EFI interval not parsed, creating fallback EFI image..."
-    dd if=/dev/zero of="$EFI_IMG" bs=1M count=4 2>/dev/null
-    mkfs.vfat "$EFI_IMG" 2>/dev/null
+if [ -z "$EFI_INFO" ]; then
+    echo "❌ EFI partition not found in ISO partition table"
+    rm -rf "$WORK_DIR"
+    exit 1
 fi
+
+EFI_START=$(echo "$EFI_INFO" | awk '{print $2}')
+EFI_END=$(echo   "$EFI_INFO" | awk '{print $3}')
+EFI_SIZE=$(( EFI_END - EFI_START + 1 ))
+
+echo "   EFI partition: start=${EFI_START} end=${EFI_END} size=${EFI_SIZE} sectors"
+dd if="$UBUNTU_ISO" bs=512 skip="$EFI_START" count="$EFI_SIZE" of="$EFI_IMG" 2>/dev/null
+echo "   ✅ EFI partition extracted ($(du -h "$EFI_IMG" | cut -f1))"
 
 xorriso -as mkisofs \
     -r \
