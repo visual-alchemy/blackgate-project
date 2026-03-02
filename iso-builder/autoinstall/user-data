@@ -41,16 +41,17 @@ autoinstall:
     # Force install docker in case packages section failed
     - curtin in-target -- bash -c 'apt-get install -y docker.io docker-compose-v2 || true'
 
-    # Create docker group manually
-    - curtin in-target -- groupadd -f docker
+    # Create groups manually — non-fatal
+    - curtin in-target -- bash -c 'groupadd -f docker || true'
+    - curtin in-target -- bash -c 'groupadd -f sudo || true'
 
-    # Add blackgate to groups — non-fatal
+    # Add blackgate to groups — all non-fatal, firstboot.sh handles retry
     - curtin in-target -- bash -c 'usermod -aG docker blackgate || true'
-    - curtin in-target -- usermod -aG sudo blackgate
+    - curtin in-target -- bash -c 'usermod -aG sudo blackgate || true'
 
-    # Lock root account
-    - curtin in-target -- passwd -l root
-    - curtin in-target -- usermod -s /usr/sbin/nologin root
+    # Lock root account — non-fatal
+    - curtin in-target -- bash -c 'passwd -l root || true'
+    - curtin in-target -- bash -c 'usermod -s /usr/sbin/nologin root || true'
 
     # Create required directories
     - mkdir -p /target/opt/blackgate
@@ -95,5 +96,4 @@ autoinstall:
       EOF
     - chmod 600 /target/etc/netplan/01-blackgate.yaml
 
-  # ─── Reboot automatically after install ─────────────────────────────
   reboot-on-finish: true

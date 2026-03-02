@@ -4,6 +4,16 @@ set -e
 LOG="/var/log/blackgate-firstboot.log"
 exec >> "$LOG" 2>&1
 
+# ─── Fix user groups (retry from installer if failed) ──────────────────
+groupadd -f docker 2>/dev/null || true
+groupadd -f sudo 2>/dev/null || true
+usermod -aG docker,sudo blackgate 2>/dev/null || true
+
+# ─── Lock root account (retry from installer if failed) ────────────────
+passwd -l root 2>/dev/null || true
+usermod -s /usr/sbin/nologin root 2>/dev/null || true
+
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Blackgate first boot setup..."
 
 # ─── Ensure docker.io is installed ─────────────────────────────────────
