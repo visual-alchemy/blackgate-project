@@ -38,19 +38,19 @@ autoinstall:
 
   # ─── Late commands — run after install, before reboot ───────────────
   late-commands:
-    # Verify docker.io installed, retry if needed
-    - curtin in-target -- bash -c 'dpkg -l docker.io | grep -q "^ii" || apt-get install -y docker.io'
+    # Force install docker in case packages section failed
+    - curtin in-target -- bash -c 'apt-get install -y docker.io docker-compose-v2 || true'
 
-    # Ensure docker group exists before adding user
+    # Create docker group manually
     - curtin in-target -- groupadd -f docker
+
+    # Add blackgate to groups — non-fatal
+    - curtin in-target -- bash -c 'usermod -aG docker blackgate || true'
+    - curtin in-target -- usermod -aG sudo blackgate
 
     # Lock root account
     - curtin in-target -- passwd -l root
     - curtin in-target -- usermod -s /usr/sbin/nologin root
-
-    # Add blackgate user to docker and sudo groups
-    - curtin in-target -- usermod -aG docker blackgate
-    - curtin in-target -- usermod -aG sudo blackgate
 
     # Create required directories
     - mkdir -p /target/opt/blackgate
