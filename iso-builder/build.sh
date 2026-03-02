@@ -1,283 +1,184 @@
 #!/bin/bash
 set -e
 
-#
-# Blackgate ISO Builder (Ubuntu 22.04)
-# Builds a bootable Ubuntu Jammy ISO with Blackgate Docker image pre-installed.
-#
-# Usage:
-#   ./build.sh                    # Build with default version 1.0.0
-#   VERSION=2.0.0 ./build.sh      # Build with custom version
-#
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="$SCRIPT_DIR/build"
-VERSION="${VERSION:-1.0.0}"
-OUTPUT_NAME="blackgate-${VERSION}-amd64"
+UBUNTU_ISO="$SCRIPT_DIR/ubuntu-22.04-live-server-amd64.iso"
+OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-installer-amd64.iso"
+WORK_DIR="$(mktemp -d)"
+EXTRACT_DIR="$WORK_DIR/iso-extract"
+DOCKER_PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo "═══════════════════════════════════════════════════════════"
-echo "  Blackgate Server ISO Builder v${VERSION}"
+echo "  Blackgate Installer ISO Builder"
 echo "═══════════════════════════════════════════════════════════"
-echo ""
 
-# ─── Pre-flight checks ─────────────────────────────────────────────────
+# ─── Pre-flight checks ──────────────────────────────────────────────────
 
-if ! command -v docker &>/dev/null; then
-    echo "❌ Docker is not installed."
-    echo "   sudo apt-get install -y docker.io"
+if [ "$EUID" -eq 0 ]; then
+    echo "❌ Do not run as root."
+    exit 1
+fi
+
+if [ ! -f "$UBUNTU_ISO" ]; then
+    echo "❌ Ubuntu ISO not found: $UBUNTU_ISO"
+    exit 1
+fi
+
+if ! command -v xorriso &>/dev/null; then
+    echo "❌ xorriso not found: sudo apt-get install -y xorriso"
     exit 1
 fi
 
 if ! docker info &>/dev/null; then
-    echo "❌ Docker daemon not running or no permission."
+    echo "❌ Docker not running or no permission."
     exit 1
 fi
 
-# ─── Step 1: Install prerequisites ──────────────────────────────────────
-
-echo "📦 Step 1: Installing dependencies..."
-sudo apt-get update -qq
-sudo apt-get install -y -qq \
-    live-build debootstrap \
-    syslinux-utils isolinux syslinux syslinux-common \
-    xorriso mtools dosfstools squashfs-tools \
-    ubuntu-keyring
-
-echo "   ✅ All dependencies installed"
-
-# ─── Step 2: Build Blackgate Docker Image ───────────────────────────────
-
-echo ""
-echo "🐳 Step 2: Building Blackgate Docker Image..."
-cd "$PROJECT_ROOT"
-docker build -t blackgate/app:latest .
-echo "   ✅ Docker image built"
-
-# ─── Step 3: Prepare live-build ─────────────────────────────────────────
-
-echo ""
-echo "🏗️  Step 3: Preparing live-build..."
-
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-
-# KEY: --mode ubuntu + --bootloader none
-# --mode ubuntu: avoids debian compatibility issues (broken syslinux themes, wrong kernel names)
-# --bootloader none: completely skips lb_binary_syslinux (which has hardcoded broken paths)
-# --binary-images none: skip ISO creation (we'll do it manually with xorriso)
-# We handle ISOLINUX boot + ISO creation ourselves after the build.
-lb config \
-    --mode ubuntu \
-    --system live \
-    --bootloader none \
-    --mirror-bootstrap "http://id.archive.ubuntu.com/ubuntu/" \
-    --mirror-chroot "http://id.archive.ubuntu.com/ubuntu/" \
-    --mirror-binary "http://id.archive.ubuntu.com/ubuntu/" \
-    --security false \
-    --distribution jammy \
-    --binary-images none \
-    --linux-packages linux-image \
-    --linux-flavours generic \
-    --firmware-binary false \
-    --firmware-chroot false \
-    --initsystem systemd \
-    --archive-areas "main restricted universe multiverse" \
-    --memtest none \
-    --iso-application "Blackgate Server" \
-    --iso-preparer "Visual Alchemy" \
-    --iso-publisher "Visual Alchemy" \
-    --iso-volume "BLACKGATE-${VERSION}"
-
-echo "   ✅ live-build configured (bootloader=none, we handle boot manually)"
-
-# ─── Step 4: Copy configuration files ──────────────────────────────────
-
-echo ""
-echo "📋 Step 4: Copying configuration files..."
-
-mkdir -p config/package-lists
-cp "$SCRIPT_DIR/config/package-lists/blackgate.list.chroot" config/package-lists/
-
-# Blackgate app
-mkdir -p config/includes.chroot/opt/blackgate
-mkdir -p config/includes.chroot/var/lib/blackgate
-echo "   Exporting Docker image to tar..."
-docker save blackgate/app:latest | gzip > config/includes.chroot/opt/blackgate/blackgate-image.tar.gz
-echo "   Docker image size: $(du -h config/includes.chroot/opt/blackgate/blackgate-image.tar.gz | cut -f1)"
-cp "$SCRIPT_DIR/config/includes.chroot/opt/blackgate/docker-compose.yml" \
-   config/includes.chroot/opt/blackgate/
-
-# Systemd services
-mkdir -p config/includes.chroot/etc/systemd/system
-cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/blackgate.service" \
-   config/includes.chroot/etc/systemd/system/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/var-lib-docker.mount" \
-   config/includes.chroot/etc/systemd/system/
-
-# Docker service override
-mkdir -p config/includes.chroot/etc/systemd/system/docker.service.d
-cp "$SCRIPT_DIR/config/includes.chroot/etc/systemd/system/docker.service.d/override.conf" \
-   config/includes.chroot/etc/systemd/system/docker.service.d/
-
-# Docker daemon config
-mkdir -p config/includes.chroot/etc/docker
-cp "$SCRIPT_DIR/config/includes.chroot/etc/docker/daemon.json" \
-   config/includes.chroot/etc/docker/
-
-# Netplan
-mkdir -p config/includes.chroot/etc/netplan
-cp "$SCRIPT_DIR/config/includes.chroot/etc/netplan/01-blackgate.yaml" \
-   config/includes.chroot/etc/netplan/
-
-# SSH config
-mkdir -p config/includes.chroot/etc/ssh/sshd_config.d
-cp "$SCRIPT_DIR/config/includes.chroot/etc/ssh/sshd_config.d/99-blackgate.conf" \
-   config/includes.chroot/etc/ssh/sshd_config.d/
-
-# Sysctl
-mkdir -p config/includes.chroot/etc/sysctl.d
-cp "$SCRIPT_DIR/config/includes.chroot/etc/sysctl.d/99-blackgate.conf" \
-   config/includes.chroot/etc/sysctl.d/
-
-# MOTD & issue
-cp "$SCRIPT_DIR/config/includes.chroot/etc/motd"  config/includes.chroot/etc/
-cp "$SCRIPT_DIR/config/includes.chroot/etc/issue" config/includes.chroot/etc/
-
-mkdir -p config/hooks/live
-cp "$SCRIPT_DIR/config/hooks/live/0100-setup.hook.chroot" config/hooks/live/
-chmod +x config/hooks/live/*.hook.chroot
-
-echo "   ✅ All configuration files copied"
-
-# ─── Step 5: Build live filesystem ──────────────────────────────────────
-
-echo ""
-echo "🔥 Step 5: Building live filesystem (this takes ~10 minutes)..."
-sudo lb build 2>&1
-echo ""
-echo "   ✅ live-build completed"
-
-# ─── Step 6: Create squashfs & ISO manually ─────────────────────────────
-
-echo ""
-echo "🔧 Step 6: Creating bootable ISO..."
-
-# Create the staging directory for the ISO contents
-ISO_STAGING="$BUILD_DIR/iso-staging"
-rm -rf "$ISO_STAGING"
-mkdir -p "$ISO_STAGING/casper"
-mkdir -p "$ISO_STAGING/isolinux"
-mkdir -p "$ISO_STAGING/.disk"
-
-# Create the squashfs filesystem from the chroot
-echo "   Creating squashfs filesystem (this takes a few minutes)..."
-if [ -d "chroot" ]; then
-    sudo mksquashfs chroot "$ISO_STAGING/casper/filesystem.squashfs" \
-        -comp xz -e boot
-    echo "   SquashFS size: $(du -h "$ISO_STAGING/casper/filesystem.squashfs" | cut -f1)"
-else
-    echo "❌ No chroot directory found. live-build failed to create filesystem."
-    exit 1
-fi
-
-# Copy kernel and initrd from chroot
-echo "   Copying kernel and initrd..."
-VMLINUZ=$(find chroot/boot -name "vmlinuz-*" | sort -V | tail -1)
-INITRD=$(find chroot/boot -name "initrd.img-*" | sort -V | tail -1)
-
-if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then
-    echo "❌ Could not find kernel/initrd in chroot/boot/"
-    ls -la chroot/boot/
-    exit 1
-fi
-
-sudo cp "$VMLINUZ" "$ISO_STAGING/casper/vmlinuz"
-sudo cp "$INITRD" "$ISO_STAGING/casper/initrd"
-echo "   Kernel: $VMLINUZ"
-echo "   Initrd: $INITRD"
-
-# Set up ISOLINUX boot files
-echo "   Setting up ISOLINUX boot..."
-cp /usr/lib/ISOLINUX/isolinux.bin "$ISO_STAGING/isolinux/"
-
-for f in ldlinux.c32 libutil.c32 libcom32.c32 vesamenu.c32 menu.c32; do
-    if [ -f "/usr/lib/syslinux/modules/bios/$f" ]; then
-        cp "/usr/lib/syslinux/modules/bios/$f" "$ISO_STAGING/isolinux/"
+# Verify all required files exist
+REQUIRED=(
+    "autoinstall/user-data"
+    "autoinstall/meta-data"
+    "files/docker-compose.yml"
+    "files/blackgate.service"
+    "files/daemon.json"
+    "files/blackgate-firstboot.sh"
+    "files/blackgate-firstboot.service"
+    "files/99-blackgate-motd.sh"
+)
+for f in "${REQUIRED[@]}"; do
+    if [ ! -f "$SCRIPT_DIR/$f" ]; then
+        echo "❌ Missing required file: $f"
+        exit 1
     fi
 done
 
-# Create ISOLINUX boot config
-cat > "$ISO_STAGING/isolinux/isolinux.cfg" << 'ISOLINUX_EOF'
-UI menu.c32
-PROMPT 0
-TIMEOUT 30
-DEFAULT blackgate
+echo "✅ Pre-flight checks passed"
 
-MENU TITLE Blackgate Server Boot Menu
+# ─── Step 1: Build Docker image ─────────────────────────────────────────
 
-LABEL blackgate
-    MENU LABEL ^Start Blackgate Server
-    KERNEL /casper/vmlinuz
-    APPEND initrd=/casper/initrd boot=casper quiet splash ignore_uuid cdrom-detect/try-usb=true noprompt ---
-
-LABEL blackgate-safe
-    MENU LABEL ^Safe Mode (no graphics)
-    KERNEL /casper/vmlinuz
-    APPEND initrd=/casper/initrd boot=casper nomodeset ignore_uuid cdrom-detect/try-usb=true noprompt ---
-ISOLINUX_EOF
-
-# Create disk info
-echo "Blackgate Server ${VERSION}" > "$ISO_STAGING/.disk/info"
-touch "$ISO_STAGING/.disk/base_installable"
-
-# Generate filesystem manifest
-sudo chroot chroot dpkg-query -W --showformat='${Package} ${Version}\n' \
-    > "$ISO_STAGING/casper/filesystem.manifest" 2>/dev/null || true
-
-echo "   ISO staging contents:"
-find "$ISO_STAGING" -maxdepth 2 -type f | head -20
-
-# Create the bootable ISO with xorriso
 echo ""
-echo "   Running xorriso to create bootable ISO..."
+echo "🐳 Step 1: Building Blackgate Docker image..."
+cd "$DOCKER_PROJECT_ROOT"
+docker build -t blackgate/app:latest .
+docker save blackgate/app:latest | gzip > "$SCRIPT_DIR/files/blackgate-image.tar.gz"
+echo "   Image size: $(du -h "$SCRIPT_DIR/files/blackgate-image.tar.gz" | cut -f1)"
+
+# ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────
+
+echo ""
+echo "📦 Step 2: Extracting Ubuntu ISO..."
+mkdir -p "$EXTRACT_DIR"
+xorriso -osirrox on -indev "$UBUNTU_ISO" -extract / "$EXTRACT_DIR" 2>/dev/null
+chmod -R u+w "$EXTRACT_DIR"
+echo "   ✅ Extracted"
+
+# ─── Step 3: Inject autoinstall config ──────────────────────────────────
+
+echo ""
+echo "💉 Step 3: Injecting autoinstall config..."
+mkdir -p "$EXTRACT_DIR/nocloud"
+cp "$SCRIPT_DIR/autoinstall/user-data" "$EXTRACT_DIR/nocloud/user-data"
+cp "$SCRIPT_DIR/autoinstall/meta-data" "$EXTRACT_DIR/nocloud/meta-data"
+echo "   ✅ user-data & meta-data injected"
+
+# ─── Step 4: Copy Blackgate payload files ───────────────────────────────
+
+echo ""
+echo "📋 Step 4: Copying Blackgate files..."
+mkdir -p "$EXTRACT_DIR/blackgate"
+for f in \
+    blackgate-image.tar.gz \
+    docker-compose.yml \
+    blackgate.service \
+    blackgate-firstboot.sh \
+    blackgate-firstboot.service \
+    daemon.json \
+    99-blackgate-motd.sh; do
+    cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
+    echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
+done
+
+# ─── Step 5: Patch GRUB ─────────────────────────────────────────────────
+
+echo ""
+echo "🥾 Step 5: Patching GRUB..."
+GRUB_CFG="$EXTRACT_DIR/boot/grub/grub.cfg"
+cp "$GRUB_CFG" "$GRUB_CFG.bak"
+
+cat > "$GRUB_CFG" << 'GRUBEOF'
+set default="0"
+set timeout=5
+
+loadfont unicode
+set menu_color_normal=white/black
+set menu_color_highlight=black/light-gray
+
+menuentry "Install Blackgate Server" {
+    set gfxpayload=keep
+    linux   /casper/vmlinuz quiet autoinstall ds=nocloud\;s=/cdrom/nocloud/ ---
+    initrd  /casper/initrd
+}
+
+menuentry "Install Blackgate Server (Safe Mode)" {
+    set gfxpayload=keep
+    linux   /casper/vmlinuz nomodeset autoinstall ds=nocloud\;s=/cdrom/nocloud/ ---
+    initrd  /casper/initrd
+}
+GRUBEOF
+echo "   ✅ GRUB patched"
+
+# ─── Step 6: Repack ISO ─────────────────────────────────────────────────
+
+echo ""
+echo "💿 Step 6: Repacking ISO..."
 mkdir -p "$SCRIPT_DIR/output"
 
-ISO_VOLUME="BLACKGATE_${VERSION//./_}"
+MBR_IMG="$WORK_DIR/mbr.img"
+EFI_IMG="$WORK_DIR/efi.img"
 
-# Fix permissions from sudo lb build
-sudo chmod -R a+r "$ISO_STAGING/"
+dd if="$UBUNTU_ISO" bs=1 count=432 of="$MBR_IMG" 2>/dev/null
+
+xorriso -indev "$UBUNTU_ISO" -osirrox on \
+    -extract /boot/grub/efi.img "$EFI_IMG" 2>/dev/null || true
 
 xorriso -as mkisofs \
-    -r -J \
-    -V "${ISO_VOLUME}" \
-    -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
-    -c isolinux/boot.cat \
-    -b isolinux/isolinux.bin \
+    -r \
+    -V "BLACKGATE_INSTALLER" \
+    --grub2-mbr "$MBR_IMG" \
+    --protective-msdos-label \
+    -partition_cyl_align off \
+    -partition_offset 16 \
+    -appended_part_as_gpt \
+    -append_partition 2 28732ac11ff8d211ba4b00a0c93ec93b "$EFI_IMG" \
+    -iso_mbr_part_type a2a0d0ebe5b9334487c068b6b72699c7 \
+    -c '/boot.catalog' \
+    -b '/boot/grub/i386-pc/eltorito.img' \
     -no-emul-boot \
     -boot-load-size 4 \
     -boot-info-table \
-    -o "$SCRIPT_DIR/output/${OUTPUT_NAME}.iso" \
-    "$ISO_STAGING/"
+    --grub2-boot-info \
+    -eltorito-alt-boot \
+    -e '--interval:appended_partition_2:::' \
+    -no-emul-boot \
+    -o "$OUTPUT_ISO" \
+    "$EXTRACT_DIR/"
 
-ISO_PATH="$SCRIPT_DIR/output/${OUTPUT_NAME}.iso"
+rm -rf "$WORK_DIR"
 
-if [ -f "$ISO_PATH" ]; then
-    ISO_SIZE=$(du -h "$ISO_PATH" | cut -f1)
+# ─── Done ───────────────────────────────────────────────────────────────
+
+if [ -f "$OUTPUT_ISO" ]; then
     echo ""
     echo "═══════════════════════════════════════════════════════════"
-    echo "  ✅ ISO built successfully!"
-    echo "  📀 File: $ISO_PATH"
-    echo "  📏 Size: $ISO_SIZE"
+    echo "  ✅ ISO ready!"
+    echo "  📀 File : $OUTPUT_ISO"
+    echo "  📏 Size : $(du -h "$OUTPUT_ISO" | cut -f1)"
     echo ""
-    echo "  Boot info:"
-    file "$ISO_PATH"
-    echo ""
-    echo "  To copy to Proxmox ISO storage:"
-    echo "    scp $ISO_PATH root@<proxmox-ip>:/var/lib/vz/template/iso/"
+    echo "  Copy to Proxmox:"
+    echo "  scp $OUTPUT_ISO root@<proxmox-ip>:/var/lib/vz/template/iso/"
     echo "═══════════════════════════════════════════════════════════"
 else
     echo "❌ ISO creation failed"
+    rm -rf "$WORK_DIR"
     exit 1
 fi

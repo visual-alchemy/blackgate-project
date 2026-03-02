@@ -1,0 +1,22 @@
+[Unit]
+Description=Blackgate SRT Gateway
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/blackgate
+
+# Start Docker Compose
+ExecStart=/usr/bin/docker compose -f /opt/blackgate/docker-compose.yml up -d
+
+# Stop Docker Compose
+ExecStop=/usr/bin/docker compose -f /opt/blackgate/docker-compose.yml down
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,94 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  # ─── Locale & keyboard ─────────────────────────────────────────────
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  # ─── Disk layout — auto LVM, use entire first disk ─────────────────
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+
+  # ─── User account ───────────────────────────────────────────────────
+  identity:
+    hostname: blackgate
+    username: blackgate
+    # Generate hash: openssl passwd -6 blackgate123
+    password: "$6$rounds=656000$blackgate123$gHEfEP6dzFyXBUhJbWicvl01l3vE7EwHMbRbhIDEeE81aZ9y5FGjSjgV6J2tMSLp2wSJHGHR48BkxlZfMWFh11"
+
+  # ─── SSH ────────────────────────────────────────────────────────────
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # ─── Packages to install ────────────────────────────────────────────
+  packages:
+    - docker.io
+    - docker-compose-v2
+    - curl
+    - net-tools
+    - htop
+    - ca-certificates
+
+  # ─── Disable snaps ──────────────────────────────────────────────────
+  snaps: []
+
+  # ─── Late commands — run after install, before reboot ───────────────
+  late-commands:
+    # Lock root account
+    - curtin in-target -- passwd -l root
+    - curtin in-target -- usermod -s /usr/sbin/nologin root
+
+    # Add blackgate user to docker and sudo groups
+    - curtin in-target -- usermod -aG docker blackgate
+    - curtin in-target -- usermod -aG sudo blackgate
+
+    # Create directories
+    - mkdir -p /target/opt/blackgate
+    - mkdir -p /target/var/lib/blackgate/khepri
+    - mkdir -p /target/etc/docker
+    - mkdir -p /target/etc/update-motd.d
+
+    # Copy Blackgate files from ISO to installed system
+    - cp /cdrom/blackgate/blackgate-image.tar.gz /target/opt/blackgate/
+    - cp /cdrom/blackgate/docker-compose.yml /target/opt/blackgate/
+    - cp /cdrom/blackgate/blackgate.service /target/etc/systemd/system/
+    - cp /cdrom/blackgate/blackgate-firstboot.service /target/etc/systemd/system/
+    - cp /cdrom/blackgate/blackgate-firstboot.sh /target/opt/blackgate/
+    - cp /cdrom/blackgate/daemon.json /target/etc/docker/daemon.json
+    - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
+
+    # Set permissions
+    - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
+    - chmod +x /target/etc/update-motd.d/99-blackgate
+    - chown -R 1000:1000 /target/opt/blackgate
+    - chown -R 1000:1000 /target/var/lib/blackgate
+
+    # Enable services via manual symlinks (reliable in chroot)
+    - mkdir -p /target/etc/systemd/system/multi-user.target.wants
+    - ln -sf /lib/systemd/system/docker.service /target/etc/systemd/system/multi-user.target.wants/docker.service
+    - ln -sf /lib/systemd/system/ssh.service /target/etc/systemd/system/multi-user.target.wants/ssh.service
+    - ln -sf /etc/systemd/system/blackgate-firstboot.service /target/etc/systemd/system/multi-user.target.wants/blackgate-firstboot.service
+
+    # Configure netplan for DHCP
+    - rm -f /target/etc/netplan/*.yaml /target/etc/netplan/*.yml
+    - |
+      cat > /target/etc/netplan/01-blackgate.yaml << 'EOF'
+      network:
+        version: 2
+        renderer: networkd
+        ethernets:
+          all-eth:
+            match:
+              name: "en*"
+            dhcp4: true
+            optional: true
+      EOF
+    - chmod 600 /target/etc/netplan/01-blackgate.yaml
+
+  # ─── Reboot automatically after install ─────────────────────────────
+  reboot-on-finish: true
