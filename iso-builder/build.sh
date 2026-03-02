@@ -29,6 +29,11 @@ if ! command -v xorriso &>/dev/null; then
     exit 1
 fi
 
+if ! command -v mkfs.vfat &>/dev/null; then
+    echo "❌ mkfs.vfat not found: sudo apt-get install -y dosfstools"
+    exit 1
+fi
+
 if ! docker info &>/dev/null; then
     echo "❌ Docker not running or no permission."
     exit 1
@@ -136,19 +141,27 @@ mkdir -p "$SCRIPT_DIR/output"
 MBR_IMG="$WORK_DIR/mbr.img"
 EFI_IMG="$WORK_DIR/efi.img"
 
+# Extract MBR (first 432 bytes) from original Ubuntu ISO
 dd if="$UBUNTU_ISO" bs=1 count=432 of="$MBR_IMG" 2>/dev/null
+echo "   ✅ MBR extracted"
 
-xorriso -indev "$UBUNTU_ISO" -osirrox on \
-    -extract /boot/grub/efi.img "$EFI_IMG" 2>/dev/null || \
-xorriso -indev "$UBUNTU_ISO" -osirrox on \
-    -extract /efi.img "$EFI_IMG" 2>/dev/null || true
+# Extract EFI partition using offset reported by xorriso
+EFI_INTERVAL=$(xorriso -indev "$UBUNTU_ISO" -report_el_torito as_mkisofs 2>/dev/null \
+    | grep -oP -- '--interval:\S+' | head -1)
 
-# If efi.img was successfully extracted, use it. Otherwise, create a dummy 4MB FAT image.
-# This prevents 'Cannot open data file for appended partition' if the source ISO layout changed.
-if [ ! -f "$EFI_IMG" ]; then
-    echo "   ⚠️ efi.img not found in base ISO, creating dummy EFI partition..."
+echo "   EFI interval: $EFI_INTERVAL"
+
+EFI_START=$(echo "$EFI_INTERVAL" | grep -oP 'start_\K[0-9]+(?=s)')
+EFI_SIZE=$(echo  "$EFI_INTERVAL" | grep -oP 'size_\K[0-9]+(?=s)')
+
+if [ -n "$EFI_START" ] && [ -n "$EFI_SIZE" ]; then
+    dd if="$UBUNTU_ISO" bs=512 skip="$EFI_START" count="$EFI_SIZE" of="$EFI_IMG" 2>/dev/null
+    echo "   ✅ EFI partition extracted ($(du -h "$EFI_IMG" | cut -f1))"
+else
+    # Fallback: create minimal FAT EFI image
+    echo "   ⚠️  EFI interval not parsed, creating fallback EFI image..."
     dd if=/dev/zero of="$EFI_IMG" bs=1M count=4 2>/dev/null
-    mkfs.vfat "$EFI_IMG" 2>/dev/null || true
+    mkfs.vfat "$EFI_IMG" 2>/dev/null
 fi
 
 xorriso -as mkisofs \

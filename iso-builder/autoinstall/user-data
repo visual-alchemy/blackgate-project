@@ -17,8 +17,7 @@ autoinstall:
   identity:
     hostname: blackgate
     username: blackgate
-    # Generate hash: openssl passwd -6 blackgate123
-    password: "$6$rounds=656000$blackgate123$gHEfEP6dzFyXBUhJbWicvl01l3vE7EwHMbRbhIDEeE81aZ9y5FGjSjgV6J2tMSLp2wSJHGHR48BkxlZfMWFh11"
+    password: "$6$rounds=656000$blackgate$2hFlUHtMRBfBQxMXxRsLYEqvmTMPsT.yB1TGHiHFvH5gMHjZ8KYUJlFf3dDYqVFJFfT0BbmhJ4hqjkTMZV1."
 
   # ─── SSH ────────────────────────────────────────────────────────────
   ssh:
@@ -39,6 +38,12 @@ autoinstall:
 
   # ─── Late commands — run after install, before reboot ───────────────
   late-commands:
+    # Verify docker.io installed, retry if needed
+    - curtin in-target -- bash -c 'dpkg -l docker.io | grep -q "^ii" || apt-get install -y docker.io'
+
+    # Ensure docker group exists before adding user
+    - curtin in-target -- groupadd -f docker
+
     # Lock root account
     - curtin in-target -- passwd -l root
     - curtin in-target -- usermod -s /usr/sbin/nologin root
@@ -47,7 +52,7 @@ autoinstall:
     - curtin in-target -- usermod -aG docker blackgate
     - curtin in-target -- usermod -aG sudo blackgate
 
-    # Create directories
+    # Create required directories
     - mkdir -p /target/opt/blackgate
     - mkdir -p /target/var/lib/blackgate/khepri
     - mkdir -p /target/etc/docker
@@ -68,7 +73,7 @@ autoinstall:
     - chown -R 1000:1000 /target/opt/blackgate
     - chown -R 1000:1000 /target/var/lib/blackgate
 
-    # Enable services via manual symlinks (reliable in chroot)
+    # Enable services via manual symlinks
     - mkdir -p /target/etc/systemd/system/multi-user.target.wants
     - ln -sf /lib/systemd/system/docker.service /target/etc/systemd/system/multi-user.target.wants/docker.service
     - ln -sf /lib/systemd/system/ssh.service /target/etc/systemd/system/multi-user.target.wants/ssh.service
