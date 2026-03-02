@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UBUNTU_ISO="$SCRIPT_DIR/ubuntu-22.04-live-server-amd64.iso"
+UBUNTU_ISO="$SCRIPT_DIR/ubuntu-22.04.5-live-server-amd64.iso"
 OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-installer-amd64.iso"
 WORK_DIR="$(mktemp -d)"
 EXTRACT_DIR="$WORK_DIR/iso-extract"
