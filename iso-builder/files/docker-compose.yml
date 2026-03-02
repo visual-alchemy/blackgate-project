@@ -1,15 +1,20 @@
-version: '3.8'
-
 services:
   blackgate:
     image: blackgate/app:latest
     container_name: blackgate
-    restart: always
+    restart: unless-stopped
     network_mode: "host"
     privileged: true
     volumes:
-      - /var/lib/blackgate/khepri:/app/data/khepri
+      - /var/lib/blackgate/khepri:/app/khepri
       - /tmp:/tmp
     environment:
-      - MIX_ENV=prod
+      - DATABASE_DATA_DIR=/app/khepri
+      - NODE_IP=127.0.0.1
+      - RELEASE_COOKIE="Vt8gXnEI2zRH4l3eqUEBrcGQ22mHSj73CgkYm02u"
+      - PHX_SERVER=true
       - PORT=4000
+      - PHX_HOST=0.0.0.0
+      - API_AUTH_USERNAME=admin
+      - API_AUTH_PASSWORD=password123
+      - RLIMIT_NOFILE=65536
