@@ -139,7 +139,17 @@ EFI_IMG="$WORK_DIR/efi.img"
 dd if="$UBUNTU_ISO" bs=1 count=432 of="$MBR_IMG" 2>/dev/null
 
 xorriso -indev "$UBUNTU_ISO" -osirrox on \
-    -extract /boot/grub/efi.img "$EFI_IMG" 2>/dev/null || true
+    -extract /boot/grub/efi.img "$EFI_IMG" 2>/dev/null || \
+xorriso -indev "$UBUNTU_ISO" -osirrox on \
+    -extract /efi.img "$EFI_IMG" 2>/dev/null || true
+
+# If efi.img was successfully extracted, use it. Otherwise, create a dummy 4MB FAT image.
+# This prevents 'Cannot open data file for appended partition' if the source ISO layout changed.
+if [ ! -f "$EFI_IMG" ]; then
+    echo "   ⚠️ efi.img not found in base ISO, creating dummy EFI partition..."
+    dd if=/dev/zero of="$EFI_IMG" bs=1M count=4 2>/dev/null
+    mkfs.vfat "$EFI_IMG" 2>/dev/null || true
+fi
 
 xorriso -as mkisofs \
     -r \
