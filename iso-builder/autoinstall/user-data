@@ -17,7 +17,7 @@ autoinstall:
   identity:
     hostname: blackgate
     username: blackgate
-    password: "$6$rounds=656000$blackgate$2hFlUHtMRBfBQxMXxRsLYEqvmTMPsT.yB1TGHiHFvH5gMHjZ8KYUJlFf3dDYqVFJFfT0BbmhJ4hqjkTMZV1."
+    password: "$6$DW0zy6128MQOaqTY$NEOd3yZuWNEnNy63QbvqPio9GMpBx9NHWOnBAyUIjhrawA933b57WmeAgKy2qCXzAwAYDCKLGXNE67Oj2SFVj/"
 
   # ─── SSH ────────────────────────────────────────────────────────────
   ssh:
