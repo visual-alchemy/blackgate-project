@@ -41,12 +41,13 @@ install:
 	@echo "Step 2: Installing Node.js & Yarn..."
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
-		if ! command -v node > /dev/null; then \
-			echo "Installing Node.js..."; \
+		NODE_MAJOR=$$(node -v 2>/dev/null | cut -d'v' -f2 | cut -d'.' -f1 || echo "0"); \
+		if [ "$$NODE_MAJOR" -lt 18 ]; then \
+			echo "Node.js is missing or version ($$NODE_MAJOR) is too old. Installing Node.js 18..."; \
 			curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - || true; \
 			sudo apt-get install -y nodejs || sudo dnf install -y nodejs; \
 		else \
-			echo "Node.js already installed: $$(node --version)"; \
+			echo "Node.js version $$NODE_MAJOR is sufficient."; \
 		fi; \
 		if ! command -v yarn > /dev/null; then \
 			echo "Installing Yarn..."; \
