@@ -266,7 +266,10 @@ defmodule Blackgate.License do
       _ ->
         0
     end
+  end
+
   defp get_machine_id do
+
     # 1. Try to read linux machine-id if it exists (for ISO/Docker build)
     case File.read("/etc/machine-id") do
       {:ok, content} ->
