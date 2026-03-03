@@ -67,30 +67,33 @@ install:
 	@echo "Step 3: Installing Elixir & Erlang..."
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
-		if ! command -v elixir > /dev/null; then \
-			echo "Installing Elixir and Erlang..."; \
+		ELIXIR_VERSION=$$(elixir -v 2>/dev/null | grep Elixir | cut -d' ' -f2 || echo "0.0.0"); \
+		ELIXIR_MINOR=$$(echo $$ELIXIR_VERSION | cut -d'.' -f2 || echo "0"); \
+		if [ "$$ELIXIR_MINOR" -lt 14 ]; then \
+			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading to Elixir 1.14+..."; \
 			if command -v apt-get > /dev/null; then \
-				echo "Trying Ubuntu/Debian native packages first..."; \
+				sudo apt-get update; \
 				sudo apt-get install -y erlang elixir 2>/dev/null || \
 				( \
-					echo "Native packages failed, trying erlang-solutions repo..."; \
-					wget -q https://binaries2.erlang-solutions.com/ubuntu/pool/contrib/e/esl-erlang/esl-erlang_26.2.5.2-1~ubuntu~jammy_amd64.deb -O /tmp/erlang.deb && \
-					sudo dpkg -i /tmp/erlang.deb || sudo apt-get install -f -y && \
-					sudo apt-get install -y elixir && \
-					rm -f /tmp/erlang.deb \
+					echo "Standard packages failed or outdated, trying erlang-solutions repo..."; \
+					sudo apt-get install -y wget gnupg; \
+					wget -q https://binaries2.erlang-solutions.com/ubuntu/erlang_solutions.asc -O- | sudo apt-key add - || true; \
+					echo "deb https://binaries2.erlang-solutions.com/ubuntu $$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2) contrib" | sudo tee /etc/apt/sources.list.d/erlang-solutions.list || true; \
+					sudo apt-get update; \
+					sudo apt-get install -y erlang elixir \
 				) || \
 				( \
-					echo "Falling back to apt repository..."; \
-					sudo apt-get install -y software-properties-common && \
-					sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang && \
-					sudo apt-get update && \
+					echo "Falling back to RabbitMQ Erlang PPA..."; \
+					sudo apt-get install -y software-properties-common; \
+					sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang; \
+					sudo apt-get update; \
 					sudo apt-get install -y erlang elixir \
 				); \
 			elif command -v dnf > /dev/null; then \
 				sudo dnf install -y erlang elixir; \
 			fi; \
 		else \
-			echo "Elixir already installed: $$(elixir --version | head -1)"; \
+			echo "Elixir version $$ELIXIR_VERSION is sufficient."; \
 		fi; \
 	elif [ "$$(uname)" = "Darwin" ]; then \
 		brew install elixir || true; \
