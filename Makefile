@@ -72,18 +72,15 @@ install:
 		if [ "$$ELIXIR_MINOR" -lt 17 ]; then \
 			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading to Elixir 1.17+ (Latest)..."; \
 			if command -v apt-get > /dev/null; then \
+				echo "Adding Erlang Solutions repository..."; \
 				sudo apt-get update; \
-				sudo apt-get install -y erlang elixir 2>/dev/null || \
+				sudo apt-get install -y wget gnupg; \
+				wget -q https://binaries2.erlang-solutions.com/ubuntu/erlang_solutions.asc -O- | sudo apt-key add - || true; \
+				echo "deb https://binaries2.erlang-solutions.com/ubuntu $$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2) contrib" | sudo tee /etc/apt/sources.list.d/erlang-solutions.list || true; \
+				sudo apt-get update; \
+				sudo apt-get install -y erlang elixir || \
 				( \
-					echo "Standard packages failed or outdated, trying erlang-solutions repo..."; \
-					sudo apt-get install -y wget gnupg; \
-					wget -q https://binaries2.erlang-solutions.com/ubuntu/erlang_solutions.asc -O- | sudo apt-key add - || true; \
-					echo "deb https://binaries2.erlang-solutions.com/ubuntu $$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2) contrib" | sudo tee /etc/apt/sources.list.d/erlang-solutions.list || true; \
-					sudo apt-get update; \
-					sudo apt-get install -y erlang elixir \
-				) || \
-				( \
-					echo "Falling back to RabbitMQ Erlang PPA..."; \
+					echo "Erlang Solutions failed, trying RabbitMQ Erlang PPA..."; \
 					sudo apt-get install -y software-properties-common; \
 					sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang; \
 					sudo apt-get update; \
