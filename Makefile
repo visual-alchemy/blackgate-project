@@ -45,7 +45,7 @@ install:
 		if [ "$$NODE_MAJOR" -lt 18 ]; then \
 			echo "Node.js is missing or version ($$NODE_MAJOR) is too old. Installing Node.js 18..."; \
 			if command -v apt-get > /dev/null; then \
-				sudo apt-get purge -y libnode-dev nodejs-doc || true; \
+				sudo apt-get purge -y nodejs nodejs-doc libnode-dev "libnode*" || true; \
 			fi; \
 			curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - || true; \
 			sudo apt-get install -y nodejs || sudo dnf install -y nodejs; \
