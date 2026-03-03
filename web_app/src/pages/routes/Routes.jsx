@@ -99,6 +99,7 @@ const Routes = () => {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      sorter: (a, b) => (a.name || '').localeCompare(b.name || ''),
       render: (text, record) => {
         return (
           <Space>
@@ -123,6 +124,7 @@ const Routes = () => {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
+      sorter: (a, b) => (a.status || '').localeCompare(b.status || ''),
     },
     {
       title: 'Authentication',
@@ -164,6 +166,7 @@ const Routes = () => {
       title: 'Last Updated',
       dataIndex: 'updated_at',
       key: 'updated_at',
+      sorter: (a, b) => new Date(a.updated_at || 0) - new Date(b.updated_at || 0),
       render: (date) => new Date(date).toLocaleString(),
     },
     {

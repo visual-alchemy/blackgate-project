@@ -278,6 +278,23 @@ docker compose logs -f
 docker compose down
 ```
 
+#### Auto-Start on Reboot
+
+To ensure Blackgate automatically starts when the host machine reboots:
+
+1. **Enable Docker Daemon on Boot**:
+   Ensure the Docker service itself is configured to start on system boot:
+   ```bash
+   sudo systemctl enable docker
+   ```
+
+2. **Compose Restart Policy**:
+   Ensure your `docker-compose.yml` file contains the `restart: unless-stopped` or `restart: always` directive for the services, and simply run:
+   ```bash
+   docker compose up -d
+   ```
+   Docker will automatically manage the container lifecycle and bring it back up after a restart.
+
 ### Option 2: Baremetal (Linux/macOS)
 
 ```bash

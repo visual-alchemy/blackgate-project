@@ -388,7 +388,7 @@ const RouteItem = () => {
 
   // Filter destinations
   const filteredDestinations = routeData?.destinations.filter(dest =>
-    dest.name.toLowerCase().includes(destinationFilter.toLowerCase()) ||
+    (dest.name?.toLowerCase() || '').includes(destinationFilter.toLowerCase()) ||
     (dest.host && dest.host.toLowerCase().includes(destinationFilter.toLowerCase()))
   ) || [];
 
@@ -489,7 +489,7 @@ const RouteItem = () => {
           </Descriptions.Item>
           <Descriptions.Item label="Node">{routeData.node}</Descriptions.Item>
 
-          {routeData.schema === 'SRT' && (
+          {routeData.schema === 'SRT' ? (
             <>
               <Descriptions.Item label="Latency">{routeData.schema_options?.latency ? `${routeData.schema_options.latency}ms` : 'Default (125ms)'}</Descriptions.Item>
               <Descriptions.Item label="Auto Reconnect">
@@ -507,23 +507,20 @@ const RouteItem = () => {
                   {routeData.schema_options?.authentication ? 'Enabled' : 'Disabled'}
                 </Tag>
               </Descriptions.Item>
-              {routeData.schema_options?.authentication && (
+              {routeData.schema_options?.authentication === true && (
                 <Descriptions.Item label="Key Length">
                   {routeData.schema_options?.pbkeylen !== undefined ? routeData.schema_options.pbkeylen : '0 (Default)'}
                 </Descriptions.Item>
               )}
             </>
-          )}
-
-          {routeData.schema === 'UDP' && (
+          ) : routeData.schema === 'UDP' ? (
             <>
               <Descriptions.Item label="Address">{routeData.schema_options?.address || '0.0.0.0 (Default)'}</Descriptions.Item>
               <Descriptions.Item label="Port">{routeData.schema_options?.port || 'N/A'}</Descriptions.Item>
               <Descriptions.Item label="Buffer Size">{routeData.schema_options?.['buffer-size'] ? `${routeData.schema_options['buffer-size']} bytes` : '0 bytes (Default)'}</Descriptions.Item>
               <Descriptions.Item label="MTU">{routeData.schema_options?.mtu || '1492 (Default)'}</Descriptions.Item>
             </>
-          )}
-
+          ) : null}
         </Descriptions>
       </Card>
 
