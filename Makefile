@@ -70,22 +70,20 @@ install:
 		ELIXIR_VERSION=$$(elixir -v 2>/dev/null | grep Elixir | cut -d' ' -f2 || echo "0.0.0"); \
 		ELIXIR_MINOR=$$(echo $$ELIXIR_VERSION | cut -d'.' -f2 || echo "0"); \
 		if [ "$$ELIXIR_MINOR" -lt 17 ]; then \
-			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading to Elixir 1.17+ (Latest)..."; \
+			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading using precompiled binaries..."; \
 			if command -v apt-get > /dev/null; then \
-				echo "Adding Erlang Solutions repository..."; \
 				sudo apt-get update; \
-				sudo apt-get install -y wget gnupg; \
-				wget -q https://binaries2.erlang-solutions.com/ubuntu/erlang_solutions.asc -O- | sudo apt-key add - || true; \
-				echo "deb https://binaries2.erlang-solutions.com/ubuntu $$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2) contrib" | sudo tee /etc/apt/sources.list.d/erlang-solutions.list || true; \
-				sudo apt-get update; \
-				sudo apt-get install -y erlang elixir || \
-				( \
-					echo "Erlang Solutions failed, trying RabbitMQ Erlang PPA..."; \
-					sudo apt-get install -y software-properties-common; \
-					sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang; \
-					sudo apt-get update; \
-					sudo apt-get install -y erlang elixir \
-				); \
+				sudo apt-get purge -y elixir || true; \
+				sudo apt-get install -y erlang unzip wget || true; \
+				OTP_VERSION=$$(erl -noshell -eval 'io:format("~s", [erlang:system_info(otp_release)]), halt().' || echo "24"); \
+				ELIXIR_DL="v1.17.3/elixir-otp-$$OTP_VERSION.zip"; \
+				if [ "$$OTP_VERSION" -lt 25 ]; then ELIXIR_DL="v1.16.3/elixir-otp-$$OTP_VERSION.zip"; fi; \
+				echo "Downloading Elixir $$ELIXIR_DL..."; \
+				wget -q "https://github.com/elixir-lang/elixir/releases/download/$$ELIXIR_DL" -O /tmp/elixir.zip; \
+				sudo mkdir -p /opt/elixir; \
+				sudo unzip -q -o /tmp/elixir.zip -d /opt/elixir || true; \
+				sudo ln -sf /opt/elixir/bin/* /usr/local/bin/ || true; \
+				rm -f /tmp/elixir.zip; \
 			elif command -v dnf > /dev/null; then \
 				sudo dnf install -y erlang elixir; \
 			fi; \
