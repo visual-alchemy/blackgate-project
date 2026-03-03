@@ -140,18 +140,15 @@ defmodule Blackgate.License do
 
   defp verify_license_with_server(license_key) do
     server_url = Application.get_env(:blackgate, :license_server_url, "http://localhost:3000")
-    admin_secret = Application.get_env(:blackgate, :admin_secret, "")
 
     headers = [
-      {"authorization", "Bearer #{admin_secret}"},
       {"content-type", "application/json"}
     ]
     
     body = %{
       license_key: license_key,
-      machine_id: get_machine_id()
+      machine_id: Blackgate.MachineId.get()
     }
-
 
     try do
       response = Req.post!("#{server_url}/api/validate", headers: headers, json: body)

@@ -146,7 +146,6 @@ start:
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	LICENSE_SERVER_URL=https://license-server-7hdfop4xn-reynandaeldy-gmailcoms-projects.vercel.app \
-	ADMIN_SECRET=blackgate212514 \
 	_build/prod/rel/blackgate/bin/blackgate start
 
 .PHONY: stop
