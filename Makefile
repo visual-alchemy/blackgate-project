@@ -145,7 +145,7 @@ start:
 	PHX_HOST=0.0.0.0 \
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
-	LICENSE_SERVER_URL=https://license-server-7hdfop4xn-reynandaeldy-gmailcoms-projects.vercel.app \
+	LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app \
 	_build/prod/rel/blackgate/bin/blackgate start
 
 .PHONY: stop
