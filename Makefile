@@ -42,12 +42,12 @@ install:
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
 		NODE_MAJOR=$$(node -v 2>/dev/null | cut -d'v' -f2 | cut -d'.' -f1 || echo "0"); \
-		if [ "$$NODE_MAJOR" -lt 18 ]; then \
-			echo "Node.js is missing or version ($$NODE_MAJOR) is too old. Installing Node.js 18..."; \
+		if [ "$$NODE_MAJOR" -lt 20 ]; then \
+			echo "Node.js version ($$NODE_MAJOR) is too old or missing. Installing Node.js 20 (LTS)..."; \
 			if command -v apt-get > /dev/null; then \
 				sudo apt-get purge -y nodejs nodejs-doc libnode-dev "libnode*" || true; \
 			fi; \
-			curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - || true; \
+			curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - || true; \
 			sudo apt-get install -y nodejs || sudo dnf install -y nodejs; \
 		else \
 			echo "Node.js version $$NODE_MAJOR is sufficient."; \
