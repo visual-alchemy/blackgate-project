@@ -17,6 +17,6 @@ services:
       - PHX_HOST=0.0.0.0
       - API_AUTH_USERNAME=admin
       - API_AUTH_PASSWORD=password123
-      - LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
+      - LICENSE_SERVER_URL=https://license-server-7hdfop4xn-reynandaeldy-gmailcoms-projects.vercel.app/
       - ADMIN_SECRET=blackgate212514
       - RLIMIT_NOFILE=65536
