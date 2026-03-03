@@ -388,7 +388,7 @@ const RouteItem = () => {
 
   // Filter destinations
   const filteredDestinations = routeData?.destinations.filter(dest =>
-    dest.name.toLowerCase().includes(destinationFilter.toLowerCase()) ||
+    (dest.name?.toLowerCase() || '').includes(destinationFilter.toLowerCase()) ||
     (dest.host && dest.host.toLowerCase().includes(destinationFilter.toLowerCase()))
   ) || [];
 
