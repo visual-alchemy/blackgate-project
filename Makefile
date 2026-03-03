@@ -126,6 +126,7 @@ build:
 	cd web_app && yarn build
 	@echo ""
 	@echo "Step 2: Copying Frontend to Phoenix..."
+	mkdir -p priv/static
 	rm -rf priv/static/assets
 	cp -r web_app/dist/* priv/static/
 	@echo ""
