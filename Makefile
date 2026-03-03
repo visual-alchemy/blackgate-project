@@ -69,8 +69,8 @@ install:
 	@if [ "$$(uname)" = "Linux" ]; then \
 		ELIXIR_VERSION=$$(elixir -v 2>/dev/null | grep Elixir | cut -d' ' -f2 || echo "0.0.0"); \
 		ELIXIR_MINOR=$$(echo $$ELIXIR_VERSION | cut -d'.' -f2 || echo "0"); \
-		if [ "$$ELIXIR_MINOR" -lt 14 ]; then \
-			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading to Elixir 1.14+..."; \
+		if [ "$$ELIXIR_MINOR" -lt 17 ]; then \
+			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading to Elixir 1.17+ (Latest)..."; \
 			if command -v apt-get > /dev/null; then \
 				sudo apt-get update; \
 				sudo apt-get install -y erlang elixir 2>/dev/null || \
