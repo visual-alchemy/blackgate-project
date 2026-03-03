@@ -147,7 +147,11 @@ defmodule Blackgate.License do
       {"content-type", "application/json"}
     ]
     
-    body = %{license_key: license_key}
+    body = %{
+      license_key: license_key,
+      machine_id: get_machine_id()
+    }
+
 
     try do
       response = Req.post!("#{server_url}/api/validate", headers: headers, json: body)
@@ -262,5 +266,25 @@ defmodule Blackgate.License do
       _ ->
         0
     end
+  defp get_machine_id do
+    # 1. Try to read linux machine-id if it exists (for ISO/Docker build)
+    case File.read("/etc/machine-id") do
+      {:ok, content} ->
+        content |> String.trim()
+
+      _ ->
+        # 2. Fallback: Check Khepri for a persistent ID
+        case :khepri.get(["license", "machine_id"]) do
+          {:ok, uid} when is_binary(uid) ->
+            uid
+
+          _ ->
+            # 3. Generate a new one if still missing
+            uid = Base.hex_encode32(:crypto.strong_rand_bytes(10), case: :lower)
+            :khepri.put(["license", "machine_id"], uid)
+            uid
+        end
+    end
   end
 end
+
