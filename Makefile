@@ -41,7 +41,8 @@ install:
 	@echo "Step 2: Installing Node.js & Yarn..."
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
-		NODE_MAJOR=$$(node -v 2>/dev/null | cut -d'v' -f2 | cut -d'.' -f1 || echo "0"); \
+		NODE_MAJOR=$$(node -v 2>/dev/null | cut -d'v' -f2 | cut -d'.' -f1); \
+		NODE_MAJOR=$${NODE_MAJOR:-0}; \
 		if [ "$$NODE_MAJOR" -lt 20 ]; then \
 			echo "Node.js version ($$NODE_MAJOR) is too old or missing. Installing Node.js 20 (LTS)..."; \
 			if command -v apt-get > /dev/null; then \
