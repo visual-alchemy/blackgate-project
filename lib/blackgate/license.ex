@@ -90,36 +90,37 @@ defmodule Blackgate.License do
   def init(_args) do
     :ets.new(@table_name, [:named_table, :public, :set, read_concurrency: true])
 
-    # Load public key
-    public_key = load_public_key()
+    # Check for existing license data in Khepri
+    case :khepri.get(["license", "data"]) do
+      {:ok, payload} when is_map(payload) ->
+        Logger.info("License: Found cached license data for #{payload["client_name"]}, loading...")
+        
+        # Load immediately to ensure fast boot and offline capability
+        license_data = build_license_data(payload)
+        :ets.insert(@table_name, {:license, license_data})
 
-    # Check for existing license in Khepri
-    state = %{public_key: public_key}
-
-    case :khepri.get(["license", "key"]) do
-      {:ok, license_key} when is_binary(license_key) ->
-        Logger.info("License: Found stored license key, verifying...")
-        verify_and_store(license_key, public_key)
+        # Spawn an async task to re-verify against the server quietly
+        Task.start(fn -> re_verify_license_async(payload["license_key"]) end)
 
       _ ->
         Logger.info("License: No license found, checking trial status...")
         init_trial()
     end
 
-    {:ok, state}
+    {:ok, %{}}
   end
 
   @impl true
   def handle_call({:activate, license_key}, _from, state) do
-    case verify_license_key(license_key, state.public_key) do
+    case verify_license_with_server(license_key) do
       {:ok, payload} ->
-        # Store in Khepri for persistence
-        :khepri.put(["license", "key"], license_key)
+        # Store full payload in Khepri for offline persistence
+        :khepri.put(["license", "data"], payload)
 
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
 
-        Logger.info("License: Activated for #{payload["client"]} (#{payload["plan"]})")
+        Logger.info("License: Activated for #{payload["client_name"]} (#{payload["plan_tier"]})")
         {:reply, {:ok, license_data}, state}
 
       {:error, reason} ->
@@ -129,7 +130,7 @@ defmodule Blackgate.License do
 
   @impl true
   def handle_call(:deactivate, _from, state) do
-    :khepri.delete(["license", "key"])
+    :khepri.delete(["license", "data"])
     init_trial()
     Logger.info("License: Deactivated, reverting to trial mode")
     {:reply, :ok, state}
@@ -137,88 +138,74 @@ defmodule Blackgate.License do
 
   # ─── Private Functions ───────────────────────────────────────────────────
 
-  defp load_public_key do
-    key_path =
-      Application.app_dir(:blackgate, "priv/license/public_key.pem")
+  defp verify_license_with_server(license_key) do
+    server_url = Application.get_env(:blackgate, :license_server_url, "http://localhost:3000")
+    admin_secret = Application.get_env(:blackgate, :admin_secret, "")
 
-    case File.read(key_path) do
-      {:ok, pem_data} ->
-        [entry] = :public_key.pem_decode(pem_data)
-        :public_key.pem_entry_decode(entry)
+    headers = [
+      {"authorization", "Bearer #{admin_secret}"},
+      {"content-type", "application/json"}
+    ]
+    
+    body = %{license_key: license_key}
 
-      {:error, reason} ->
-        # Try relative path for development
-        dev_path = Path.join([File.cwd!(), "priv", "license", "public_key.pem"])
-
-        case File.read(dev_path) do
-          {:ok, pem_data} ->
-            [entry] = :public_key.pem_decode(pem_data)
-            :public_key.pem_entry_decode(entry)
-
-          {:error, _} ->
-            Logger.warning("License: Public key not found (#{reason}). License verification disabled.")
-            nil
-        end
+    try do
+      response = Req.post!("#{server_url}/api/validate", headers: headers, json: body)
+      
+      cond do
+        response.status == 200 && response.body["valid"] == true ->
+          {:ok, response.body["license"]}
+          
+        response.status in [401, 403, 404] ->
+          error_msg = response.body["error"] || "Verification failed"
+          {:error, error_msg}
+          
+        true ->
+          {:error, "Unexpected response from license server"}
+      end
+    rescue
+      e ->
+        Logger.error("Failed to connect to license server: #{inspect(e)}")
+        {:error, "Could not reach license server for verification. Are you online?"}
     end
   end
 
-  defp verify_and_store(license_key, public_key) do
-    case verify_license_key(license_key, public_key) do
+  defp re_verify_license_async(license_key) do
+    case verify_license_with_server(license_key) do
       {:ok, payload} ->
+        Logger.debug("License: Background verification successful")
+        # Update cache in case expiration dates or tiers changed
+        :khepri.put(["license", "data"], payload)
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
-        Logger.info("License: Valid license for #{payload["client"]} (#{payload["plan"]})")
-
+        
       {:error, reason} ->
-        Logger.warning("License: Stored license invalid (#{reason}), reverting to trial")
-        :khepri.delete(["license", "key"])
-        init_trial()
-    end
-  end
-
-  defp verify_license_key(_key, nil) do
-    {:error, "License verification not available (public key missing)"}
-  end
-
-  defp verify_license_key(license_key, public_key) do
-    # Parse: BG-{PLAN}-{base64_payload}.{base64_signature}
-    case Regex.run(~r/^BG-([A-Z]{3})-(.+)\.([A-Za-z0-9_-]+)$/, license_key) do
-      [_, _plan_prefix, payload_b64, signature_b64] ->
-        with {:ok, payload_json} <- Base.url_decode64(payload_b64, padding: false),
-             {:ok, payload} <- Jason.decode(payload_json),
-             {:ok, signature} <- Base.url_decode64(signature_b64, padding: false) do
-          # Verify RSA signature
-          is_valid = :public_key.verify(payload_json, :sha256, signature, public_key)
-
-          if is_valid do
-            {:ok, payload}
-          else
-            {:error, "Invalid signature — this key was not signed by the vendor"}
-          end
-        else
-          _ ->
-            {:error, "Malformed license key — could not decode payload"}
-        end
-
-      nil ->
-        {:error, "Invalid license key format"}
+        Logger.warning("License: Background verification failed (#{reason}). Keeping cached license active.")
     end
   end
 
   defp build_license_data(payload) do
-    expires_at = Date.from_iso8601!(payload["expires_at"])
+    # Handle potentially null expires_at
+    expires_at = if payload["expires_at"], do: Date.from_iso8601!(payload["expires_at"] |> String.slice(0, 10)), else: nil
     today = Date.utc_today()
-    days_remaining = Date.diff(expires_at, today)
-    is_expired = days_remaining < 0
+    
+    # Calculate days remaining if expiration exists
+    {days_remaining, is_expired} = if expires_at do
+      remaining = Date.diff(expires_at, today)
+      {max(remaining, 0), remaining < 0}
+    else
+      # Lifetime license
+      {9999, false}
+    end
 
     %{
       status: :licensed,
-      client: payload["client"],
-      plan: payload["plan"],
+      client: payload["client_name"],
+      plan: payload["plan_tier"],
       max_routes: payload["max_routes"],
-      issued_at: payload["issued_at"],
-      expires_at: payload["expires_at"],
-      days_remaining: max(days_remaining, 0),
+      issued_at: payload["created_at"] |> String.slice(0, 10),
+      expires_at: if(expires_at, do: Date.to_iso8601(expires_at), else: nil),
+      days_remaining: days_remaining,
       expired: is_expired
     }
   end

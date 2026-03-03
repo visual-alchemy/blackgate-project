@@ -39,7 +39,9 @@ if config_env() != :test do
     api_auth_username:
       System.get_env("API_AUTH_USERNAME") || raise("API_AUTH_USERNAME is not set"),
     api_auth_password:
-      System.get_env("API_AUTH_PASSWORD") || raise("API_AUTH_PASSWORD is not set")
+      System.get_env("API_AUTH_PASSWORD") || raise("API_AUTH_PASSWORD is not set"),
+    license_server_url: System.get_env("LICENSE_SERVER_URL", "http://localhost:3000"),
+    admin_secret: System.get_env("ADMIN_SECRET", "blackgate212514")
 
   # database_path =
   #   System.get_env("DATABASE_PATH") ||

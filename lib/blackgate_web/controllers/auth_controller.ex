@@ -57,6 +57,8 @@ defmodule BlackgateWeb.AuthController do
   end
 
   defp verify_credentials(user, password) do
+    require Logger
+    
     stored_username =
       case :khepri.get(["auth", "username"]) do
         {:ok, u} when is_binary(u) -> u
@@ -72,6 +74,9 @@ defmodule BlackgateWeb.AuthController do
           val = Application.get_env(:blackgate, :api_auth_password) || ""
           :crypto.hash(:sha256, val) |> Base.encode16(case: :lower)
       end
+
+    Logger.info("Auth Check -> USER: '#{user}' == '#{stored_username}'")
+    Logger.info("Auth Check -> PASS: '#{input_hashed}' == '#{stored_password_hash}'")
 
     Plug.Crypto.secure_compare(user, stored_username || "") and
       Plug.Crypto.secure_compare(input_hashed, stored_password_hash || "")

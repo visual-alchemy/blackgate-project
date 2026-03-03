@@ -55,7 +55,8 @@ defmodule Blackgate.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:benchee, "~> 1.3", only: :dev},
-      {:instream, "~> 2.0"}
+      {:instream, "~> 2.0"},
+      {:req, "~> 0.5.0"}
     ]
   end
 
