@@ -129,7 +129,7 @@ build:
 	cp -r web_app/dist/* priv/static/
 	@echo ""
 	@echo "Step 3: Building Elixir Release..."
-	MIX_ENV=prod mix assets.deploy
+	MIX_ENV=prod mix phx.digest
 	MIX_ENV=prod mix release --overwrite
 	@echo ""
 	@echo "=============================================="
