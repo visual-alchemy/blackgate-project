@@ -1,8 +1,7 @@
 [Unit]
 Description=Blackgate First Boot Setup
-After=docker.service network-online.target
+After=network-online.target
 Wants=network-online.target
-Requires=docker.service
 
 [Service]
 Type=oneshot

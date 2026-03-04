@@ -1,22 +1,28 @@
 [Unit]
 Description=Blackgate SRT Gateway
-After=docker.service network-online.target
+After=network-online.target
 Wants=network-online.target
-Requires=docker.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=exec
+User=blackgate
+Group=blackgate
 WorkingDirectory=/opt/blackgate
 
-# Start Docker Compose
-ExecStart=/usr/bin/docker compose -f /opt/blackgate/docker-compose.yml up -d
+Environment=PHX_SERVER=true
+Environment=PORT=4000
+Environment=PHX_HOST=0.0.0.0
+Environment=API_AUTH_USERNAME=admin
+Environment=API_AUTH_PASSWORD=password123
+Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
+Environment=HOME=/opt/blackgate
 
-# Stop Docker Compose
-ExecStop=/usr/bin/docker compose -f /opt/blackgate/docker-compose.yml down
+ExecStart=/opt/blackgate/bin/blackgate start
+ExecStop=/opt/blackgate/bin/blackgate stop
 
-Restart=on-failure
-RestartSec=10
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

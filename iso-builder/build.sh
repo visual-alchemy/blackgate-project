@@ -6,10 +6,10 @@ UBUNTU_ISO="$SCRIPT_DIR/ubuntu-22.04.5-live-server-amd64.iso"
 OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-installer-amd64.iso"
 WORK_DIR="$(mktemp -d)"
 EXTRACT_DIR="$WORK_DIR/iso-extract"
-DOCKER_PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo "═══════════════════════════════════════════════════════════"
-echo "  Blackgate Installer ISO Builder"
+echo "  Blackgate Installer ISO Builder (Bare-metal)"
 echo "═══════════════════════════════════════════════════════════"
 
 # ─── Pre-flight checks ──────────────────────────────────────────────────
@@ -34,18 +34,11 @@ if ! command -v mkfs.vfat &>/dev/null; then
     exit 1
 fi
 
-if ! docker info &>/dev/null; then
-    echo "❌ Docker not running or no permission."
-    exit 1
-fi
-
 # Verify all required files exist
 REQUIRED=(
     "autoinstall/user-data"
     "autoinstall/meta-data"
-    "files/docker-compose.yml"
     "files/blackgate.service"
-    "files/daemon.json"
     "files/blackgate-firstboot.sh"
     "files/blackgate-firstboot.service"
     "files/99-blackgate-motd.sh"
@@ -59,14 +52,23 @@ done
 
 echo "✅ Pre-flight checks passed"
 
-# ─── Step 1: Build Docker image ─────────────────────────────────────────
+# ─── Step 1: Build Elixir Release ───────────────────────────────────────
 
 echo ""
-echo "🐳 Step 1: Building Blackgate Docker image..."
-cd "$DOCKER_PROJECT_ROOT"
-docker build -t blackgate/app:latest .
-docker save blackgate/app:latest | gzip > "$SCRIPT_DIR/files/blackgate-image.tar.gz"
-echo "   Image size: $(du -h "$SCRIPT_DIR/files/blackgate-image.tar.gz" | cut -f1)"
+echo "🔨 Step 1: Building Blackgate Elixir release..."
+cd "$PROJECT_ROOT"
+make install
+make build
+
+RELEASE_DIR="$PROJECT_ROOT/_build/prod/rel/blackgate"
+if [ ! -d "$RELEASE_DIR" ]; then
+    echo "❌ Release directory not found: $RELEASE_DIR"
+    exit 1
+fi
+
+echo "   Packaging release tarball..."
+tar czf "$SCRIPT_DIR/files/blackgate-release.tar.gz" -C "$PROJECT_ROOT/_build/prod/rel" blackgate
+echo "   Release size: $(du -h "$SCRIPT_DIR/files/blackgate-release.tar.gz" | cut -f1)"
 
 # ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────
 
@@ -92,12 +94,10 @@ echo ""
 echo "📋 Step 4: Copying Blackgate files..."
 mkdir -p "$EXTRACT_DIR/blackgate"
 for f in \
-    blackgate-image.tar.gz \
-    docker-compose.yml \
+    blackgate-release.tar.gz \
     blackgate.service \
     blackgate-firstboot.sh \
     blackgate-firstboot.service \
-    daemon.json \
     99-blackgate-motd.sh; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"

@@ -8,8 +8,8 @@ for i in {1..5}; do
     sleep 1
 done
 
-# ─── Get Blackgate container status ─────────────────────────────────────
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^blackgate$"; then
+# ─── Get Blackgate service status ────────────────────────────────────────
+if systemctl is-active --quiet blackgate 2>/dev/null; then
     STATUS="✅ Running"
 else
     STATUS="❌ Stopped"

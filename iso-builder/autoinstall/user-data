@@ -24,48 +24,46 @@ autoinstall:
     install-server: true
     allow-pw: true
 
-  # ─── Packages to install ────────────────────────────────────────────
+  # ─── Packages to install (bare-metal runtime dependencies) ─────────
   packages:
-    - docker.io
-    - docker-compose-v2
     - curl
     - net-tools
     - htop
     - ca-certificates
+    - libssl3
+    - libncurses6
+    - libgstreamer1.0-0
+    - gstreamer1.0-plugins-good
+    - gstreamer1.0-plugins-bad
+    - libsrt-openssl-dev
+    - libcjson-dev
+    - libglib2.0-dev
+    - build-essential
+    - pkg-config
+    - iproute2
 
   # ─── Disable snaps ──────────────────────────────────────────────────
   snaps: []
 
   # ─── Late commands — run after install, before reboot ───────────────
   late-commands:
-    # Force install docker in case packages section failed
-    - curtin in-target -- bash -c 'apt-get install -y docker.io docker-compose-v2 || true'
-
-    # Create groups manually — non-fatal
-    - curtin in-target -- bash -c 'groupadd -f docker || true'
-    - curtin in-target -- bash -c 'groupadd -f sudo || true'
-
-    # Add blackgate to groups — all non-fatal, firstboot.sh handles retry
-    - curtin in-target -- bash -c 'usermod -aG docker blackgate || true'
-    - curtin in-target -- bash -c 'usermod -aG sudo blackgate || true'
-
     # Lock root account — non-fatal
     - curtin in-target -- bash -c 'passwd -l root || true'
     - curtin in-target -- bash -c 'usermod -s /usr/sbin/nologin root || true'
 
+    # Remove sudo access for blackgate user (client has no root)
+    - curtin in-target -- bash -c 'deluser blackgate sudo || true'
+
     # Create required directories
     - mkdir -p /target/opt/blackgate
     - mkdir -p /target/var/lib/blackgate/khepri
-    - mkdir -p /target/etc/docker
     - mkdir -p /target/etc/update-motd.d
 
     # Copy Blackgate files from ISO to installed system
-    - cp /cdrom/blackgate/blackgate-image.tar.gz /target/opt/blackgate/
-    - cp /cdrom/blackgate/docker-compose.yml /target/opt/blackgate/
+    - cp /cdrom/blackgate/blackgate-release.tar.gz /target/opt/blackgate/
     - cp /cdrom/blackgate/blackgate.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.sh /target/opt/blackgate/
-    - cp /cdrom/blackgate/daemon.json /target/etc/docker/daemon.json
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
 
     # Set permissions
@@ -76,7 +74,6 @@ autoinstall:
 
     # Enable services via manual symlinks
     - mkdir -p /target/etc/systemd/system/multi-user.target.wants
-    - ln -sf /lib/systemd/system/docker.service /target/etc/systemd/system/multi-user.target.wants/docker.service
     - ln -sf /lib/systemd/system/ssh.service /target/etc/systemd/system/multi-user.target.wants/ssh.service
     - ln -sf /etc/systemd/system/blackgate-firstboot.service /target/etc/systemd/system/multi-user.target.wants/blackgate-firstboot.service
 

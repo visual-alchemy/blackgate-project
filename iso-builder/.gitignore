@@ -1,2 +1,5 @@
 build/
 output/
+files/blackgate-release.tar.gz
+files/blackgate-image.tar.gz
+*.iso

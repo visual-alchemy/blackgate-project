@@ -4,50 +4,25 @@ set -e
 LOG="/var/log/blackgate-firstboot.log"
 exec >> "$LOG" 2>&1
 
-# ─── Fix user groups (retry from installer if failed) ──────────────────
-groupadd -f docker 2>/dev/null || true
-groupadd -f sudo 2>/dev/null || true
-usermod -aG docker,sudo blackgate 2>/dev/null || true
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Blackgate first boot setup..."
 
-# ─── Lock root account (retry from installer if failed) ────────────────
+# ─── Lock root account ──────────────────────────────────────────────────
 passwd -l root 2>/dev/null || true
 usermod -s /usr/sbin/nologin root 2>/dev/null || true
 
+# ─── Remove sudo access for blackgate user ──────────────────────────────
+deluser blackgate sudo 2>/dev/null || true
+gpasswd -d blackgate sudo 2>/dev/null || true
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Blackgate first boot setup..."
-
-# ─── Ensure docker.io is installed ─────────────────────────────────────
-if ! command -v docker &>/dev/null; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Docker not found, installing..."
-    apt-get update -qq
-    apt-get install -y docker.io docker-compose-v2
-fi
-
-# ─── Ensure docker group and user membership ────────────────────────────
-groupadd -f docker
-usermod -aG docker blackgate 2>/dev/null || true
-
-# ─── Wait for Docker to be ready ───────────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for Docker daemon..."
-for i in {1..30}; do
-    if docker info > /dev/null 2>&1; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Docker is ready"
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Docker not ready after 60s"
-        exit 1
-    fi
-    sleep 2
-done
-
-# ─── Load Docker image ──────────────────────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loading Blackgate Docker image..."
-if docker image inspect blackgate/app:latest > /dev/null 2>&1; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Image already loaded, skipping"
+# ─── Extract Elixir release ─────────────────────────────────────────────
+RELEASE_TARBALL="/opt/blackgate/blackgate-release.tar.gz"
+if [ -f "$RELEASE_TARBALL" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extracting Blackgate release..."
+    tar xzf "$RELEASE_TARBALL" -C /opt/blackgate/ --strip-components=0
+    rm -f "$RELEASE_TARBALL"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Release extracted successfully"
 else
-    docker load < /opt/blackgate/blackgate-image.tar.gz
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Image loaded successfully"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Release tarball not found at $RELEASE_TARBALL"
 fi
 
 # ─── Set ownership ──────────────────────────────────────────────────────
@@ -61,14 +36,17 @@ systemctl daemon-reload
 systemctl enable blackgate.service
 systemctl start blackgate.service
 
-# ─── Wait for container to be running ──────────────────────────────────
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for Blackgate container..."
-for i in {1..20}; do
-    if docker ps --format '{{.Names}}' | grep -q "^blackgate$"; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Blackgate container is running"
+# ─── Wait for port 4000 to be listening ────────────────────────────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for Blackgate to start (port 4000)..."
+for i in {1..30}; do
+    if ss -tlnp 2>/dev/null | grep -q ':4000 '; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ Blackgate is listening on port 4000"
         break
     fi
-    sleep 3
+    if [ "$i" -eq 30 ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Blackgate not listening after 60s. Check 'journalctl -u blackgate'"
+    fi
+    sleep 2
 done
 
 # ─── Disable firstboot so it won't run again on next reboot ────────────
