@@ -101,10 +101,10 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp get_binary_path do
-    if System.get_env("MIX_ENV", "dev") == "dev" do
-      "./native/build/blackgate_pipeline"
-    else
+    if System.get_env("RELEASE_NAME") do
       "#{:code.priv_dir(:blackgate)}/native/build/blackgate_pipeline"
+    else
+      "./native/build/blackgate_pipeline"
     end
   end
 
