@@ -14,7 +14,7 @@ gpasswd -d blackgate sudo 2>/dev/null || true
 RELEASE_TARBALL="/opt/blackgate/blackgate-release.tar.gz"
 if [ -f "$RELEASE_TARBALL" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extracting Blackgate release..."
-    tar xzf "$RELEASE_TARBALL" -C /opt/blackgate/ --strip-components=0
+    tar xzf "$RELEASE_TARBALL" -C /opt/blackgate/ --strip-components=1
     rm -f "$RELEASE_TARBALL"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Release extracted successfully"
 else
