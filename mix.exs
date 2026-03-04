@@ -56,7 +56,8 @@ defmodule Blackgate.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:benchee, "~> 1.3", only: :dev},
       {:instream, "~> 2.0"},
-      {:req, "~> 0.5.0"}
+      {:req, "~> 0.5.0"},
+      {:castore, "~> 1.0"}
     ]
   end
 
