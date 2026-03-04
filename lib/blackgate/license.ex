@@ -153,12 +153,22 @@ defmodule Blackgate.License do
     try do
       response = Req.post!("#{server_url}/api/validate", headers: headers, json: body)
       
+      # Vercel NextJS might sometimes return text/plain for error responses
+      parsed_body = if is_binary(response.body) do
+        case Jason.decode(response.body) do
+          {:ok, decoded} -> decoded
+          _ -> %{}
+        end
+      else
+        response.body || %{}
+      end
+      
       cond do
-        response.status == 200 && response.body["valid"] == true ->
-          {:ok, response.body["license"]}
+        response.status == 200 && parsed_body["valid"] == true ->
+          {:ok, parsed_body["license"]}
           
         response.status in [401, 403, 404] ->
-          error_msg = response.body["error"] || "Verification failed"
+          error_msg = parsed_body["error"] || "Verification failed"
           {:error, error_msg}
           
         true ->
