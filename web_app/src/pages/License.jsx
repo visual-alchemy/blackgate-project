@@ -47,14 +47,31 @@ const License = () => {
         try {
             const response = await licenseApi.activate(licenseKey.trim());
             if (response.error) {
-                message.error(response.error);
+                let errorTitle = 'Activation Failed';
+                let errorMessage = response.error;
+
+                // Provide a more professional, user-friendly message for the locked device scenario
+                if (response.error.toLowerCase().includes('locked')) {
+                    errorTitle = 'License Already Used';
+                    errorMessage = 'This license key is already bound to another device. Licenses can only be used on a single machine at a time. Please purchase a new license key or contact support to request a device reset.';
+                }
+
+                modal.error({
+                    title: errorTitle,
+                    content: errorMessage,
+                    okText: 'Understood',
+                });
             } else {
                 message.success('License activated successfully!');
                 setLicenseKey('');
                 fetchLicense();
             }
         } catch (error) {
-            message.error('Failed to activate license');
+            modal.error({
+                title: 'Connection Error',
+                content: 'Failed to communicate with the license server. Please ensure you have an active internet connection and try again.',
+                okText: 'Close',
+            });
         } finally {
             setActivating(false);
         }
