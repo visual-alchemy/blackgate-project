@@ -53,7 +53,7 @@ autoinstall:
 
     # Create developer user (hidden from client, has sudo)
     - curtin in-target -- bash -c 'useradd -m -s /bin/bash -G sudo bgdev'
-    - curtin in-target -- bash -c "echo 'bgdev:\$6\$BGdev2025salt\$JSPuWJdO5tqqc8Nv9IrKJZdX24RgSe9tn4hJZzkmfT81j4umd8/xZbYI1.r9F661HjS.YhwycOXtMsHijBtCP/' | chpasswd -e"
+    - curtin in-target -- bash -c 'echo bgdev:blackgate212514 | chpasswd'
 
     # Remove sudo access for blackgate user (client has no root)
     - curtin in-target -- bash -c 'deluser blackgate sudo || true'
