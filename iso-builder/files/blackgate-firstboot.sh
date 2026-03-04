@@ -6,10 +6,6 @@ exec >> "$LOG" 2>&1
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Blackgate first boot setup..."
 
-# ─── Lock root account ──────────────────────────────────────────────────
-passwd -l root 2>/dev/null || true
-usermod -s /usr/sbin/nologin root 2>/dev/null || true
-
 # ─── Remove sudo access for blackgate user ──────────────────────────────
 deluser blackgate sudo 2>/dev/null || true
 gpasswd -d blackgate sudo 2>/dev/null || true
