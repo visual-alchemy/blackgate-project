@@ -119,7 +119,11 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         savePromise
           .then(data => {
             loadingMessage();
-            messageApi.success('Route saved successfully');
+            if (id !== 'new' && data?.data?.restarted) {
+              messageApi.success('Route saved and restarted successfully');
+            } else {
+              messageApi.success('Route saved successfully');
+            }
             if (data) {
               form.setFieldsValue(data.data);
               // If this is a new route, navigate to the route detail page

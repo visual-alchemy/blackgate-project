@@ -17,10 +17,16 @@ defmodule BlackgateWeb.DestinationController do
   end
 
   def create(conn, %{"destination" => dest_params, "route_id" => route_id}) do
+    was_running = route_is_running?(route_id)
+
     with {:ok, route} <- Db.create_destination(route_id, dest_params) do
+      if was_running do
+        Blackgate.restart_route(route_id)
+      end
+
       conn
       |> put_status(:created)
-      |> data(route)
+      |> data(Map.put(route, "restarted", was_running))
     end
   end
 
@@ -30,16 +36,38 @@ defmodule BlackgateWeb.DestinationController do
   end
 
   def update(conn, %{"dest_id" => id, "route_id" => route_id, "destination" => dest_params}) do
+    was_running = route_is_running?(route_id)
+
     with {:ok, route} <- Db.update_destination(route_id, id, dest_params) do
-      data(conn, route)
+      if was_running do
+        Blackgate.restart_route(route_id)
+      end
+
+      data(conn, Map.put(route, "restarted", was_running))
     end
   end
 
   def delete(conn, %{"dest_id" => id, "route_id" => route_id}) do
+    was_running = route_is_running?(route_id)
+
     with :ok <- Db.del_destination(route_id, id) do
-      send_resp(conn, :no_content, "")
+      if was_running do
+        Blackgate.restart_route(route_id)
+      end
+
+      conn
+      |> put_status(:ok)
+      |> json(%{data: %{deleted: true, restarted: was_running}})
+    end
+  end
+
+  defp route_is_running?(route_id) do
+    case Blackgate.get_route(route_id) do
+      {:ok, _pid} -> true
+      _ -> false
     end
   end
 
   defp data(conn, data), do: json(conn, %{data: data})
 end
+

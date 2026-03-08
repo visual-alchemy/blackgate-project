@@ -121,7 +121,13 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 savePromise
                     .then(data => {
                         loadingMessage();
-                        messageApi.success('Destination saved successfully');
+                        if (destId !== 'new' && data?.data?.restarted) {
+                            messageApi.success('Destination saved — route restarted');
+                        } else if (destId === 'new' && data?.data?.restarted) {
+                            messageApi.success('Destination created — route restarted');
+                        } else {
+                            messageApi.success('Destination saved successfully');
+                        }
                         if (data) {
                             form.setFieldsValue(data.data);
                             // If this is a new destination, navigate to the route detail page
