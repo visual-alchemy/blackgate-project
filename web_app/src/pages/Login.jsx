@@ -10,6 +10,7 @@ import {
   Typography,
   Card,
   Space,
+  Alert,
   message
 } from 'antd';
 import {
@@ -43,6 +44,7 @@ const Login = () => {
   const onFinish = async (values) => {
     try {
       setLoading(true);
+      setErrorMsg(null);
 
       // Call the login function from auth.js
       await login(values.username, values.password);
@@ -118,6 +120,12 @@ const Login = () => {
           style={styles.form}
           size="large"
         >
+          {/* {errorMsg && ( // Removed obsolete errorMsg Alert
+            <Form.Item>
+              <Alert message={errorMsg} type="error" showIcon />
+            </Form.Item>
+          )} */}
+
           <Form.Item
             name="username"
             rules={[{ required: true, message: 'Please input your username!' }]}
