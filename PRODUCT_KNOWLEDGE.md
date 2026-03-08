@@ -15,10 +15,31 @@ Traditional live broadcasting relies on expensive satellite trucks (DSNG) or ded
 *   **Ultra-Low Latency:** Optimized for sub-second delay, making it perfect for live two-way interviews.
 *   **Secure by Default:** Features AES-128/256 video encryption to prevent stream interception.
 *   **Centralized Management:** Gives network engineers a single, beautiful "air traffic control" dashboard to monitor and route every camera feed in their organization.
+*   **Zero-overhead Transport:** Uses native C bindings and GStreamer's `tsparse` to demux and remux streams without the CPU overhead of transcoding.
+*   **Embedded Fault-Tolerant DB:** Uses Khepri (Raft consensus) right inside the BEAM VM for storing route configuration, removing the need for an external SQL database.
 
 ---
 
-## 3. Key Features
+## 3. Recent Feature Additions (Latest First)
+
+### UI/UX Quick Wins
+- **Bulk Start/Stop**: Manage multiple routes simultaneously using table checkboxes and a single click.
+- **Route Cloning**: Instantly duplicate complex route configurations including all their multi-destinations.
+- **Filter Persistence**: Search and filter settings (status, schema, text) remember their state across page navigation.
+- **Dual Save Buttons**: "Save and Continue" vs "Save and Exit" when editing routes.
+
+### Seamless Auto-Restart
+Editing a running route's configuration (or its destinations) seamlessly restarts the native pipeline in the background applying the new config without requiring manual stop/start clicks. 
+
+### Machine Locking & Anti-Tampering (Planned)
+Future license enforcement will integrate dmidecode (UUID, Serial, MAC) to lock licenses to specific baremetal hardware.
+
+### Baremetal ISO Installer (Planned)
+Future distribution method packaging Debian Bookworm + Blackgate + Docker into a self-installing ISO using Preseed, allowing customers to install the entire appliance from a USB drive in 5 minutes.
+
+---
+
+## 4. Key Features
 
 ### Dynamic Stream Routing
 Easily ingest a single SRT feed (e.g., a cameraman in the field) and dynamically route that exact feed to multiple destinations simultaneously (e.g., YouTube, Twitch, and a local production studio) without putting extra bandwidth strain on the cameraman.
@@ -39,16 +60,17 @@ Verify your feeds before they go to air. Blackgate decodes the incoming SRT stre
 
 ---
 
-## 4. Target Audience & Use Cases
+## 5. Target Audience & Use Cases
 Blackgate is engineered for professionals who cannot afford a stream to go offline:
 *   **Live Event Production & Esports:** Routing dozens of player cameras and commentator feeds to a central mixing studio.
 *   **News Organizations (ENG):** Receiving live hit feeds from journalists reporting via 5G backpacks.
 *   **Corporate Webcasting:** Securely transmitting town halls and CEO addresses between global offices.
 *   **Church Broadcasting:** Linking multi-campus services together in real-time.
+*   **Cloud Video Infrastructure:** Cloud video infrastructure providers needing an edge ingest gateway.
 
 ---
 
-## 5. Technical Specifications
+## 6. Technical Specifications
 
 | Feature | Specification |
 | :--- | :--- |
@@ -62,7 +84,7 @@ Blackgate is engineered for professionals who cannot afford a stream to go offli
 
 ---
 
-## 6. Deployment Architecture
+## 7. Deployment Architecture
 Blackgate is deliberately designed as a **stateless, immutable appliance**. 
 It is distributed as a custom Ubuntu Linux `.iso` image. Upon booting in a virtual machine wrapper like Proxmox or VMware ESXi, standard Linux bootloaders seamlessly extract the core Blackgate Docker environment into system RAM, executing the application without the need for manual Linux configuration or dependencies.
 
@@ -172,7 +194,7 @@ graph TB
 
 ---
 
-## 7. System Hardware Requirements
+## 8. System Hardware Requirements
 Blackgate is designed to be highly efficient, running both the Elixir backend and the actual video routing engine on minimal hardware footprints.
 
 | Component | Minimum Specification | Recommended Specification (5+ Streams) |
@@ -184,7 +206,7 @@ Blackgate is designed to be highly efficient, running both the Elixir backend an
 
 ---
 
-## 8. Security & Compliance
+## 9. Security & Compliance
 We understand that corporate and broadcast streams contain highly sensitive, embargoed information. Blackgate guarantees complete data safety from end-to-end:
 
 *   **No Cloud Dependency:** Blackgate does not require a connection to our servers to function. Your streams never leave your infrastructure unless you route them out.
@@ -194,7 +216,7 @@ We understand that corporate and broadcast streams contain highly sensitive, emb
 
 ---
 
-## 9. Next Steps / Conclusion
+## 10. Next Steps / Conclusion
 Blackgate Server represents the modern approach to IP video transmission. By replacing fragile UDP flows and expensive satellite uplinks with a secure, dashboard-driven SRT node, engineering teams can guarantee reliable video transport from anywhere in the world.
 
 Whether deployed as a dedicated hardware server in a broadcast master control room, or spun up dynamically in AWS to handle sudden esports tournament demands, Blackgate scales with your production.

@@ -38,6 +38,8 @@ defmodule BlackgateWeb.Router do
     get "/routes/:route_id/restart", RouteController, :restart
     get "/routes/:route_id/stats", RouteController, :stats
     get "/routes/:route_id/destination-stats", RouteController, :destination_stats
+    post "/routes/bulk-action", RouteController, :bulk_action
+    post "/routes/:route_id/clone", RouteController, :clone
     get "/routes/:route_id/destinations", DestinationController, :index
     post "/routes/:route_id/destinations", DestinationController, :create
     get "/routes/:route_id/destinations/:dest_id", DestinationController, :show

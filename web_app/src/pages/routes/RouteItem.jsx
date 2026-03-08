@@ -23,7 +23,8 @@ import {
   ExclamationCircleFilled,
   HomeOutlined,
   LoadingOutlined,
-  SearchOutlined
+  SearchOutlined,
+  CopyOutlined
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
@@ -437,6 +438,29 @@ const RouteItem = () => {
                 }}
               >
                 {statusDetails.buttonText}
+              </Button>
+              <Button
+                icon={<CopyOutlined />}
+                onClick={async () => {
+                  const loadingMsg = messageApi.loading(`Cloning "${routeData.name}"...`, 0);
+                  try {
+                    const result = await routesApi.clone(id);
+                    loadingMsg();
+                    messageApi.success(`Route cloned successfully`);
+                    navigate(`/routes/${result.data.id}`);
+                  } catch (error) {
+                    loadingMsg();
+                    messageApi.error(`Failed to clone: ${error.message}`);
+                  }
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minWidth: '80px'
+                }}
+              >
+                Clone
               </Button>
               <Button
                 danger

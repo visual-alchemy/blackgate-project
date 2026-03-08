@@ -30,7 +30,7 @@ const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState(null);
+  const [messageApi, contextHolder] = message.useMessage();
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -48,12 +48,14 @@ const Login = () => {
       // Call the login function from auth.js
       await login(values.username, values.password);
 
+      messageApi.success('Login successful!');
+
       // Redirect to the page the user was trying to access, or to the dashboard
       const from = location.state?.from?.pathname || ROUTES.DASHBOARD;
       navigate(from, { replace: true });
     } catch (error) {
       console.error('Login error:', error);
-      setErrorMsg('Invalid username or password. Please try again.');
+      messageApi.error('Invalid username or password');
     } finally {
       setLoading(false);
     }
@@ -97,6 +99,7 @@ const Login = () => {
 
   return (
     <div style={styles.container}>
+      {contextHolder}
       <Card style={styles.card}>
         <div style={styles.header}>
           <div style={styles.logo}>
@@ -116,11 +119,11 @@ const Login = () => {
           style={styles.form}
           size="large"
         >
-          {errorMsg && (
+          {/* {errorMsg && ( // Removed obsolete errorMsg Alert
             <Form.Item>
               <Alert message={errorMsg} type="error" showIcon />
             </Form.Item>
-          )}
+          )} */}
 
           <Form.Item
             name="username"
