@@ -14,6 +14,7 @@ import {
   HomeOutlined,
   ApiOutlined,
   CodeOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { Button, Layout, Menu, theme, Grid, Avatar, Dropdown, Space, message, Breadcrumb } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -34,6 +35,7 @@ const MainLayout = ({ children }) => {
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken();
+  const [messageApi, contextHolder] = message.useMessage();
 
   // Expose setBreadcrumbItems to window object for child components
   useEffect(() => {
@@ -143,7 +145,7 @@ const MainLayout = ({ children }) => {
   const handleLogout = () => {
     // Use the logout function from auth.js
     logout();
-    message.success('Logged out successfully');
+    messageApi.success('Logged out successfully');
   };
 
   const dropdownItems = {
@@ -179,6 +181,11 @@ const MainLayout = ({ children }) => {
       label: 'Nodes',
     },
     {
+      key: ROUTES.LICENSE,
+      icon: <SafetyCertificateOutlined />,
+      label: 'License',
+    },
+    {
       key: ROUTES.SETTINGS,
       icon: <SettingOutlined />,
       label: 'Settings',
@@ -195,6 +202,7 @@ const MainLayout = ({ children }) => {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
+      {contextHolder}
       <Sider
         trigger={null}
         collapsible
