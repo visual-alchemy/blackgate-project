@@ -134,6 +134,23 @@ export const routesApi = {
     const response = await authFetch(`/api/routes/${id}/destination-stats`);
     return response.json();
   },
+
+  // Bulk start/stop routes
+  bulkAction: async (action, routeIds) => {
+    const response = await authFetch('/api/routes/bulk-action', {
+      method: 'POST',
+      body: JSON.stringify({ action, route_ids: routeIds }),
+    });
+    return response.json();
+  },
+
+  // Clone a route
+  clone: async (id) => {
+    const response = await authFetch(`/api/routes/${id}/clone`, {
+      method: 'POST',
+    });
+    return response.json();
+  },
 };
 
 export const backupApi = {

@@ -588,7 +588,9 @@ end
 | `POST` | `/api/login` | No | `AuthController` | Login, returns token |
 | `GET` | `/api/routes` | Yes | `RouteController` | List all routes |
 | `POST` | `/api/routes` | Yes | `RouteController` | Create route |
+| `POST` | `/api/routes/bulk-action` | Yes | `RouteController` | Bulk start/stop routes |
 | `GET` | `/api/routes/:id` | Yes | `RouteController` | Get route details |
+| `POST` | `/api/routes/:id/clone` | Yes | `RouteController` | Clone route and its destinations |
 | `PUT` | `/api/routes/:id` | Yes | `RouteController` | Update route |
 | `DELETE` | `/api/routes/:id` | Yes | `RouteController` | Delete route |
 | `GET` | `/api/routes/:id/start` | Yes | `RouteController` | Start pipeline |

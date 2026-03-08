@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Seamless Auto-Restart**: Editing a running route or destination now automatically restarts the pipeline with the new configuration, without requiring a manual stop/start cycle.
 - **Dual Save Buttons**: Route and Destination edit pages now feature 'Save and Continue' and 'Save and Exit' buttons for a smoother user experience.
+- **Bulk Start/Stop Routes**: Select multiple routes from the table and start/stop them all at once.
+- **Route Cloning**: Duplicate a route with all its destinations via a 'Clone' button.
+- **Route Search & Filter**: Search routes by name and filter by status (Started/Stopped) or schema (SRT/UDP).
 - `BLACKGATE_TECHNICAL_ANALYSIS.md` — comprehensive software design review document
 
 ---

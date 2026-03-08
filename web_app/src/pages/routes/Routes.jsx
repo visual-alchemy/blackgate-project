@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined } from '@ant-design/icons';
+import { Table, Card, Button, Tag, Space, Typography, message, Modal, Input, Select, Badge } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 
@@ -12,6 +12,16 @@ const Routes = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
+  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+  const [searchText, setSearchText] = useState(() => sessionStorage.getItem('routes_search') || '');
+  const [statusFilter, setStatusFilter] = useState(() => sessionStorage.getItem('routes_status') || 'all');
+  const [schemaFilter, setSchemaFilter] = useState(() => sessionStorage.getItem('routes_schema') || 'all');
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  // Persist filters to sessionStorage
+  useEffect(() => { sessionStorage.setItem('routes_search', searchText); }, [searchText]);
+  useEffect(() => { sessionStorage.setItem('routes_status', statusFilter); }, [statusFilter]);
+  useEffect(() => { sessionStorage.setItem('routes_schema', schemaFilter); }, [schemaFilter]);
 
   // Set breadcrumb items for the Routes page
   useEffect(() => {
@@ -90,6 +100,62 @@ const Routes = () => {
     }
   };
 
+  // Bulk action handler
+  const handleBulkAction = async (action) => {
+    if (selectedRowKeys.length === 0) return;
+
+    setBulkLoading(true);
+    try {
+      const result = await routesApi.bulkAction(action, selectedRowKeys);
+      const successCount = result.data.filter(r => r.status && !r.error).length;
+      const failCount = result.data.filter(r => r.error).length;
+
+      if (failCount > 0) {
+        messageApi.warning(`${successCount} routes ${action}ed, ${failCount} failed`);
+      } else {
+        messageApi.success(`${successCount} routes ${action}ed successfully`);
+      }
+
+      setSelectedRowKeys([]);
+      fetchRoutes();
+    } catch (error) {
+      messageApi.error(`Bulk ${action} failed: ${error.message}`);
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  // Clone handler
+  const handleClone = async (id, name) => {
+    const loadingMessage = messageApi.loading(`Cloning "${name}"...`, 0);
+    try {
+      await routesApi.clone(id);
+      loadingMessage();
+      messageApi.success(`Route "${name}" cloned successfully`);
+      fetchRoutes();
+    } catch (error) {
+      loadingMessage();
+      messageApi.error(`Failed to clone route: ${error.message}`);
+    }
+  };
+
+  // Filter routes
+  const filteredRoutes = routes.filter(route => {
+    const matchesSearch = !searchText ||
+      (route.name || '').toLowerCase().includes(searchText.toLowerCase());
+    const matchesStatus = statusFilter === 'all' ||
+      (route.status || '').toLowerCase() === statusFilter;
+    const matchesSchema = schemaFilter === 'all' ||
+      (route.schema || '').toUpperCase() === schemaFilter;
+    return matchesSearch && matchesStatus && matchesSchema;
+  });
+
+  // Row selection config
+  const rowSelection = {
+    selectedRowKeys,
+    onChange: (keys) => setSelectedRowKeys(keys),
+  };
+
   const columns = [
     {
       title: 'Name',
@@ -125,14 +191,6 @@ const Routes = () => {
     {
       title: 'Authentication',
       key: 'authentication',
-      // filters: [
-      //   { text: 'Enabled', value: true },
-      //   { text: 'Disabled', value: false }
-      // ],
-      // onFilter: (value, record) => {
-      //   if (record.schema !== 'SRT') return !value;
-      //   return (record.schema_options && record.schema_options.authentication) === value;
-      // },
       render: (_, record) => {
         if (record.schema !== 'SRT') return <Tag color="default">N/A</Tag>;
         return record.schema_options && record.schema_options.authentication ? (
@@ -179,6 +237,13 @@ const Routes = () => {
           </Button>
           <Button
             type="link"
+            icon={<CopyOutlined />}
+            onClick={() => handleClone(record.id, record.name)}
+          >
+            Clone
+          </Button>
+          <Button
+            type="link"
             icon={<EditOutlined />}
             onClick={() => navigate(`/routes/${record.id}/edit`)}
           >
@@ -216,11 +281,65 @@ const Routes = () => {
         </Space>
 
         <Card>
+          {/* Search and Filter Bar */}
+          <Space style={{ width: '100%', marginBottom: 16, flexWrap: 'wrap' }} wrap>
+            <Input
+              placeholder="Search by name..."
+              prefix={<SearchOutlined />}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              style={{ width: 240 }}
+              allowClear
+            />
+            <Select
+              value={statusFilter}
+              onChange={setStatusFilter}
+              style={{ width: 140 }}
+              options={[
+                { label: 'All Status', value: 'all' },
+                { label: 'Started', value: 'started' },
+                { label: 'Stopped', value: 'stopped' },
+              ]}
+            />
+            <Select
+              value={schemaFilter}
+              onChange={setSchemaFilter}
+              style={{ width: 140 }}
+              options={[
+                { label: 'All Schema', value: 'all' },
+                { label: 'SRT', value: 'SRT' },
+                { label: 'UDP', value: 'UDP' },
+              ]}
+            />
+            {selectedRowKeys.length > 0 && (
+              <>
+                <Badge count={selectedRowKeys.length} style={{ backgroundColor: '#1890ff' }}>
+                  <Button
+                    type="primary"
+                    icon={<CaretRightOutlined />}
+                    loading={bulkLoading}
+                    onClick={() => handleBulkAction('start')}
+                  >
+                    Start Selected
+                  </Button>
+                </Badge>
+                <Button
+                  icon={<StopOutlined />}
+                  loading={bulkLoading}
+                  onClick={() => handleBulkAction('stop')}
+                >
+                  Stop Selected
+                </Button>
+              </>
+            )}
+          </Space>
+
           <Table
             columns={columns}
-            dataSource={routes}
+            dataSource={filteredRoutes}
             rowKey="id"
             loading={loading}
+            rowSelection={rowSelection}
             pagination={{
               defaultPageSize: 10,
               showSizeChanger: true,

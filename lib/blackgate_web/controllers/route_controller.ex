@@ -112,6 +112,60 @@ defmodule BlackgateWeb.RouteController do
     |> json(%{data: sink_stats})
   end
 
+  def bulk_action(conn, %{"action" => action, "route_ids" => route_ids})
+      when action in ["start", "stop"] and is_list(route_ids) do
+    results =
+      Enum.map(route_ids, fn route_id ->
+        result =
+          case action do
+            "start" ->
+              case Blackgate.start_route(route_id) do
+                {:ok, _pid} -> %{route_id: route_id, status: "started"}
+                {:error, reason} -> %{route_id: route_id, error: inspect(reason)}
+              end
+
+            "stop" ->
+              case Blackgate.stop_route(route_id) do
+                :ok -> %{route_id: route_id, status: "stopped"}
+                {:error, reason} -> %{route_id: route_id, error: inspect(reason)}
+              end
+          end
+
+        result
+      end)
+
+    conn
+    |> put_status(:ok)
+    |> json(%{data: results})
+  end
+
+  def clone(conn, %{"route_id" => route_id}) do
+    with {:ok, route} <- Db.get_route(route_id, true) do
+      # Prepare route data for cloning
+      destinations = Map.get(route, "destinations", [])
+
+      clone_data =
+        route
+        |> Map.drop(["id", "created_at", "updated_at", "status", "destinations"])
+        |> Map.put("name", "#{route["name"]} (Copy)")
+        |> Map.put("status", "stopped")
+
+      with {:ok, new_route} <- Db.create_route(clone_data) do
+        # Clone each destination
+        Enum.each(destinations, fn dest ->
+          dest_data = Map.drop(dest, ["id", "route_id", "created_at", "updated_at"])
+          Db.create_destination(new_route["id"], dest_data)
+        end)
+
+        {:ok, full_route} = Db.get_route(new_route["id"], true)
+
+        conn
+        |> put_status(:created)
+        |> data(full_route)
+      end
+    end
+  end
+
   defp route_is_running?(id) do
     case Blackgate.get_route(id) do
       {:ok, _pid} -> true

@@ -30,6 +30,7 @@ const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
+  const [messageApi, contextHolder] = message.useMessage();
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -46,14 +47,14 @@ const Login = () => {
       // Call the login function from auth.js
       await login(values.username, values.password);
 
-      message.success('Login successful!');
+      messageApi.success('Login successful!');
 
       // Redirect to the page the user was trying to access, or to the dashboard
       const from = location.state?.from?.pathname || ROUTES.DASHBOARD;
       navigate(from, { replace: true });
     } catch (error) {
       console.error('Login error:', error);
-      message.error('Invalid username or password');
+      messageApi.error('Invalid username or password');
     } finally {
       setLoading(false);
     }
@@ -97,6 +98,7 @@ const Login = () => {
 
   return (
     <div style={styles.container}>
+      {contextHolder}
       <Card style={styles.card}>
         <div style={styles.header}>
           <div style={styles.logo}>
