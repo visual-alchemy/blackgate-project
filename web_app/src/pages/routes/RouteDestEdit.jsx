@@ -108,7 +108,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
         }
     };
 
-    const handleSave = () => {
+    const handleSave = (exitAfterSave = false) => {
         form.validateFields()
             .then(values => {
                 const loadingMessage = messageApi.loading('Saving destination...', 0);
@@ -121,12 +121,23 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 savePromise
                     .then(data => {
                         loadingMessage();
-                        messageApi.success('Destination saved successfully');
+                        if (destId !== 'new' && data?.data?.restarted) {
+                            messageApi.success('Destination saved — route restarted');
+                        } else if (destId === 'new' && data?.data?.restarted) {
+                            messageApi.success('Destination created — route restarted');
+                        } else {
+                            messageApi.success('Destination saved successfully');
+                        }
                         if (data) {
                             form.setFieldsValue(data.data);
-                            // If this is a new destination, navigate to the route detail page
                             if (destId === 'new' && data.data.id) {
-                                navigate(`/routes/${routeId}`);
+                                if (exitAfterSave) {
+                                    navigate('/routes');
+                                } else {
+                                    navigate(`/routes/${routeId}`);
+                                }
+                            } else if (exitAfterSave) {
+                                navigate('/routes');
                             }
                         }
                     })
@@ -458,10 +469,18 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                     </Button>
                                     <Button
                                         type="primary"
+                                        ghost
                                         icon={<SaveOutlined />}
-                                        onClick={handleSave}
+                                        onClick={() => handleSave(false)}
                                     >
-                                        Save
+                                        Save and Continue
+                                    </Button>
+                                    <Button
+                                        type="primary"
+                                        icon={<SaveOutlined />}
+                                        onClick={() => handleSave(true)}
+                                    >
+                                        Save and Exit
                                     </Button>
                                 </Space>
                             </Row>

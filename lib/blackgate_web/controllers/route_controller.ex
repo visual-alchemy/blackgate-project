@@ -31,8 +31,14 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def update(conn, %{"id" => id, "route" => route_params}) do
+    was_running = route_is_running?(id)
+
     with {:ok, route} <- Db.update_route(id, route_params) do
-      data(conn, route)
+      if was_running do
+        Blackgate.restart_route(id)
+      end
+
+      data(conn, Map.put(route, "restarted", was_running))
     end
   end
 
@@ -112,6 +118,13 @@ defmodule BlackgateWeb.RouteController do
     conn
     |> put_status(:ok)
     |> json(%{data: sink_stats})
+  end
+
+  defp route_is_running?(id) do
+    case Blackgate.get_route(id) do
+      {:ok, _pid} -> true
+      _ -> false
+    end
   end
 
   defp data(conn, data), do: json(conn, %{data: data})

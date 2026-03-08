@@ -106,7 +106,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = (exitAfterSave = false) => {
     form.validateFields()
       .then(values => {
         const loadingMessage = messageApi.loading('Saving route...', 0);
@@ -119,12 +119,21 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         savePromise
           .then(data => {
             loadingMessage();
-            messageApi.success('Route saved successfully');
+            if (id !== 'new' && data?.data?.restarted) {
+              messageApi.success('Route saved and restarted successfully');
+            } else {
+              messageApi.success('Route saved successfully');
+            }
             if (data) {
               form.setFieldsValue(data.data);
-              // If this is a new route, navigate to the route detail page
               if (id === 'new' && data.data.id) {
-                navigate(`/routes/${data.data.id}`);
+                if (exitAfterSave) {
+                  navigate('/routes');
+                } else {
+                  navigate(`/routes/${data.data.id}`);
+                }
+              } else if (exitAfterSave) {
+                navigate('/routes');
               }
             }
           })
@@ -552,10 +561,18 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Button>
                   <Button
                     type="primary"
+                    ghost
                     icon={<SaveOutlined />}
-                    onClick={handleSave}
+                    onClick={() => handleSave(false)}
                   >
-                    Save
+                    Save and Continue
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    onClick={() => handleSave(true)}
+                  >
+                    Save and Exit
                   </Button>
                 </Space>
               </Row>
