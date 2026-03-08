@@ -44,7 +44,6 @@ const Login = () => {
   const onFinish = async (values) => {
     try {
       setLoading(true);
-      setErrorMsg(null);
 
       // Call the login function from auth.js
       await login(values.username, values.password);
