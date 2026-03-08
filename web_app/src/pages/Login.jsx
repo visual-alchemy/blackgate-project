@@ -10,7 +10,8 @@ import {
   Typography,
   Card,
   Space,
-  Alert
+  Alert,
+  message
 } from 'antd';
 import {
   LockOutlined,
