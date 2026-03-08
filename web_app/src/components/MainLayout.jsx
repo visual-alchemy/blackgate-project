@@ -35,6 +35,7 @@ const MainLayout = ({ children }) => {
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken();
+  const [messageApi, contextHolder] = message.useMessage();
 
   // Expose setBreadcrumbItems to window object for child components
   useEffect(() => {
@@ -144,7 +145,7 @@ const MainLayout = ({ children }) => {
   const handleLogout = () => {
     // Use the logout function from auth.js
     logout();
-    message.success('Logged out successfully');
+    messageApi.success('Logged out successfully');
   };
 
   const dropdownItems = {
@@ -201,6 +202,7 @@ const MainLayout = ({ children }) => {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
+      {contextHolder}
       <Sider
         trigger={null}
         collapsible

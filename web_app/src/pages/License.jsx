@@ -21,6 +21,7 @@ const License = () => {
     const [activating, setActivating] = useState(false);
     const [licenseKey, setLicenseKey] = useState('');
     const [modal, modalContextHolder] = Modal.useModal();
+    const [messageApi, messageContextHolder] = message.useMessage();
 
     const fetchLicense = async () => {
         try {
@@ -39,7 +40,7 @@ const License = () => {
 
     const handleActivate = async () => {
         if (!licenseKey.trim()) {
-            message.warning('Please enter a license key');
+            messageApi.warning('Please enter a license key');
             return;
         }
 
@@ -62,7 +63,7 @@ const License = () => {
                     okText: 'Understood',
                 });
             } else {
-                message.success('License activated successfully!');
+                messageApi.success('License activated successfully!');
                 setLicenseKey('');
                 fetchLicense();
             }
@@ -87,10 +88,10 @@ const License = () => {
             onOk: async () => {
                 try {
                     await licenseApi.deactivate();
-                    message.success('License deactivated');
+                    messageApi.success('License deactivated');
                     fetchLicense();
                 } catch (error) {
-                    message.error('Failed to deactivate license');
+                    messageApi.error('Failed to deactivate license');
                 }
             },
         });
@@ -131,6 +132,7 @@ const License = () => {
     return (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
             {modalContextHolder}
+            {messageContextHolder}
             <Title level={3} style={{ margin: 0 }}>
                 <SafetyCertificateOutlined style={{ marginRight: 8 }} />
                 License
