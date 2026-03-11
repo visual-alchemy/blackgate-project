@@ -1,4 +1,4 @@
-# Blackgate — Open-source SRT Video Gateway
+# Blackgate — SRT Video Gateway
 
 ![Blackgate Logo](./blackgate-logo.png)
 
@@ -339,7 +339,7 @@ make status    # Check if running
 
 ## 📄 License
 
-MIT License — feel free to use in personal and commercial projects.
+Blackgate is proprietary software developed by [Visual Alchemy](https://github.com/visual-alchemy). All rights reserved. A valid license key is required for production use. See [[docs/USER_GUIDE]] for license activation details.
 
 ---
 
