@@ -1,31 +1,12 @@
-<p align="center">
-  <img src="./blackgate-logo.png" alt="Blackgate" width="300"/>
-</p>
+# Blackgate — Open-source SRT Video Gateway
 
-<p align="center">
-  <strong>🎬 Open-source SRT Video Gateway</strong><br>
-  <em>High-performance video routing with secure, reliable transport</em>
-</p>
+![Blackgate Logo](./blackgate-logo.png)
 
-<p align="center">
-  <a href="#-features">Features</a> •
-  <a href="#-quick-start">Quick Start</a> •
-  <a href="#-architecture">Architecture</a> •
-  <a href="#-docker">Docker</a> •
-  <a href="#-api">API</a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Elixir-1.17+-purple?style=flat-square&logo=elixir" alt="Elixir">
-  <img src="https://img.shields.io/badge/GStreamer-1.0-green?style=flat-square" alt="GStreamer">
-  <img src="https://img.shields.io/badge/React-18-blue?style=flat-square&logo=react" alt="React">
-  <img src="https://img.shields.io/badge/SRT-Secure_Reliable_Transport-orange?style=flat-square" alt="SRT">
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
-</p>
-
----
+**High-performance video routing with secure, reliable transport**
 
 > 🚀 **Alpha**: Core features functional. Actively improving based on real-world usage.
+
+---
 
 ## ✨ Features
 
@@ -47,19 +28,19 @@
 
 #### Source Statistics
 Monitor your input streams with live metrics:
-- **Bitrate** - Current receiving rate (Mbps)
-- **RTT** - Round-trip time for connection quality
-- **Packet Loss** - Percentage of lost packets
-- **Bandwidth** - Available connection bandwidth
-- **Connected Callers** - Active source connections (listener mode)
+- **Bitrate** — Current receiving rate (Mbps)
+- **RTT** — Round-trip time for connection quality
+- **Packet Loss** — Percentage of lost packets
+- **Bandwidth** — Available connection bandwidth
+- **Connected Callers** — Active source connections (listener mode)
 
 #### Destination Statistics
 Track each SRT output destination:
-- **Send Rate** - Current bitrate per destination
-- **RTT** - Round-trip time to destination
-- **Bytes Sent** - Total data transmitted
-- **Connected Clients** - Clients pulling streams (listener mode)
-- **Per-client details** - IP address, bitrate, RTT, packets sent
+- **Send Rate** — Current bitrate per destination
+- **RTT** — Round-trip time to destination
+- **Bytes Sent** — Total data transmitted
+- **Connected Clients** — Clients pulling streams (listener mode)
+- **Per-client details** — IP address, bitrate, RTT, packets sent
 
 ### 🚧 Roadmap
 
@@ -68,6 +49,8 @@ Track each SRT output destination:
 - [ ] Dynamic Routing rules
 - [ ] RTSP / RTMP / HLS / WebRTC support
 - [ ] Stream health monitoring & alerts
+
+See [[ROADMAP]] for the full roadmap.
 
 ---
 
@@ -80,43 +63,40 @@ Track each SRT output destination:
 ```mermaid
 graph TB
     subgraph "External Network"
-        A["📹 SRT Source<br/>(Encoder/Camera)<br/>Mode: Caller"]
+        A["SRT Source<br/>(Encoder/Camera)<br/>Mode: Caller"]
     end
     
     subgraph "Blackgate Server"
         subgraph "Web Interface"
-            B["🌐 React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
+            B["React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
         end
         
         subgraph "Elixir Backend"
-            C["⚙️ Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
-            D["📊 Stats Registry<br/>(ETS + Real-time)"]
-            E["🗄️ Khepri DB<br/>(Persistent Storage)"]
+            C["Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
+            D["Stats Registry<br/>(ETS + Real-time)"]
+            E["Khepri DB<br/>(Persistent Storage)"]
         end
         
         subgraph "Streaming Layer"
-            F["🎬 GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+            F["GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
         end
     end
     
     subgraph "External Destinations"
-        G["📺 SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
-        H["📺 SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
+        G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
+        H["SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
     end
     
-    %% Data Flow
     A -->|"SRT Stream<br/>(Listener Mode)"| F
     F -->|"SRT Stream<br/>(Listener Mode)"| G
     F -->|"SRT Stream<br/>(Listener Mode)"| H
     
-    %% Control Flow
     B <-->|"HTTP/REST API"| C
     C <-->|"Database Ops"| E
     C <-->|"Stats Updates"| D
     C -->|"Unix Socket"| F
     F -->|"Live Stats"| D
     
-    %% Styling
     classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
     classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
     classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
@@ -134,40 +114,37 @@ graph TB
 graph TB
     subgraph "Blackgate Server"
         subgraph "Web Interface"
-            A["🌐 React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
+            A["React Dashboard<br/>(Vite + Ant Design)<br/>Port: 5173/4000"]
         end
         
         subgraph "Elixir Backend"
-            B["⚙️ Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
-            C["📊 Stats Registry<br/>(ETS + Real-time)"]
-            D["🗄️ Khepri DB<br/>(Persistent Storage)"]
+            B["Phoenix API<br/>(REST + WebSocket)<br/>Route Management"]
+            C["Stats Registry<br/>(ETS + Real-time)"]
+            D["Khepri DB<br/>(Persistent Storage)"]
         end
         
         subgraph "Streaming Layer"
-            E["🎬 GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+            E["GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
         end
     end
     
     subgraph "External Network"
-        F["📹 SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
-        G["📺 SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
-        H["📺 SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
+        F["SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
+        G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
+        H["SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
     end
     
-    %% Data Flow
     E -->|"SRT Connection<br/>(Caller Mode)"| F
     F -->|"SRT Stream"| E
     E -->|"SRT Connection<br/>(Caller Mode)"| G
     E -->|"SRT Connection<br/>(Caller Mode)"| H
     
-    %% Control Flow
     A <-->|"HTTP/REST API"| B
     B <-->|"Database Ops"| D
     B <-->|"Stats Updates"| C
     B -->|"Unix Socket"| E
     E -->|"Live Stats"| C
     
-    %% Styling
     classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
     classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
     classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
@@ -212,8 +189,7 @@ make dev-all
 🌐 **Access:** http://localhost:5173  
 🔐 **Login:** `admin` / `password123`
 
-<details>
-<summary><strong>Manual Installation (if make install fails)</strong></summary>
+### Manual Installation (if make install fails)
 
 #### Ubuntu/Debian
 
@@ -243,8 +219,6 @@ sudo apt-get install -y esl-erlang elixir
 ```bash
 brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
 ```
-
-</details>
 
 ---
 
@@ -282,18 +256,16 @@ docker compose down
 
 To ensure Blackgate automatically starts when the host machine reboots:
 
-1. **Enable Docker Daemon on Boot**:
-   Ensure the Docker service itself is configured to start on system boot:
+1. **Enable Docker Daemon on Boot:**
    ```bash
    sudo systemctl enable docker
    ```
 
-2. **Compose Restart Policy**:
-   Ensure your `docker-compose.yml` file contains the `restart: unless-stopped` or `restart: always` directive for the services, and simply run:
+2. **Compose Restart Policy:**
+   Ensure your `docker-compose.yml` file contains `restart: unless-stopped`, and run:
    ```bash
    docker compose up -d
    ```
-   Docker will automatically manage the container lifecycle and bring it back up after a restart.
 
 ### Option 2: Baremetal (Linux/macOS)
 
@@ -367,10 +339,19 @@ make status    # Check if running
 
 ## 📄 License
 
-MIT License - feel free to use in personal and commercial projects.
+MIT License — feel free to use in personal and commercial projects.
 
 ---
 
-<p align="center">
-  Made with ❤️ by <a href="https://github.com/visual-alchemy">Visual Alchemy</a>
-</p>
+## Related Docs
+
+- [[PRODUCT_KNOWLEDGE]] — Product overview & value proposition
+- [[ROADMAP]] — Development roadmap & feature backlog
+- [[CHANGELOG]] — Version history
+- [[docs/USER_GUIDE]] — End-user guide
+- [[docs/TROUBLESHOOTING]] — Troubleshooting guide
+- [[docs/BLACKGATE_TECHNICAL_ANALYSIS]] — Technical deep-dive
+
+---
+
+Made with ❤️ by [Visual Alchemy](https://github.com/visual-alchemy)
