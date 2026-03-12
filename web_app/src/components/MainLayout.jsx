@@ -14,7 +14,7 @@ import {
   HomeOutlined,
   ApiOutlined,
   CodeOutlined,
-  SafetyCertificateOutlined,
+
 } from '@ant-design/icons';
 import { Button, Layout, Menu, theme, Grid, Avatar, Dropdown, Space, message, Breadcrumb } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -180,11 +180,7 @@ const MainLayout = ({ children }) => {
       icon: <ApiOutlined />,
       label: 'Nodes',
     },
-    {
-      key: ROUTES.LICENSE,
-      icon: <SafetyCertificateOutlined />,
-      label: 'License',
-    },
+
     {
       key: ROUTES.SETTINGS,
       icon: <SettingOutlined />,
