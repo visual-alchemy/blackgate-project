@@ -33,10 +33,12 @@ defmodule BlackgateWeb.Router do
     put "/auth/credentials", AuthController, :update_credentials
     
     resources "/routes", RouteController, except: [:new, :edit]
+    get "/routes/tags", RouteController, :tags
     get "/routes/:route_id/start", RouteController, :start
     get "/routes/:route_id/stop", RouteController, :stop
     get "/routes/:route_id/restart", RouteController, :restart
     get "/routes/:route_id/stats", RouteController, :stats
+    get "/routes/:route_id/health", RouteController, :health
     get "/routes/:route_id/destination-stats", RouteController, :destination_stats
     post "/routes/bulk-action", RouteController, :bulk_action
     post "/routes/:route_id/clone", RouteController, :clone

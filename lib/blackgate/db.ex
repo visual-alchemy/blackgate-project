@@ -204,5 +204,22 @@ defmodule Blackgate.Db do
     end
   end
 
+  @spec get_all_tags() :: {:ok, list(String.t())} | {:error, any}
+  def get_all_tags do
+    case get_all_routes() do
+      {:ok, routes} ->
+        tags =
+          routes
+          |> Enum.flat_map(fn route -> route["tags"] || [] end)
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        {:ok, tags}
+
+      error ->
+        error
+    end
+  end
+
   defp now, do: DateTime.utc_now()
 end

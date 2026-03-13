@@ -1,5 +1,5 @@
-import { Typography, Card, Row, Col, Statistic, Table, Tag, Spin } from 'antd';
-import { ApiOutlined, PlayCircleOutlined, StopOutlined, HomeOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Typography, Card, Row, Col, Statistic, Table, Tag } from 'antd';
+import { ApiOutlined, PlayCircleOutlined, StopOutlined, HomeOutlined, ClockCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import React from 'react';
 import { nodesApi, routesApi } from '../utils/api';
@@ -18,6 +18,7 @@ const Dashboard = () => {
     total: 0,
     active: 0,
     stopped: 0,
+    unhealthy: 0,
     recentRoutes: []
   });
   const [loading, setLoading] = useState(true);
@@ -60,10 +61,24 @@ const Dashboard = () => {
           .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
           .slice(0, 5);
 
+        // Check health for all active routes in parallel
+        let unhealthyCount = 0;
+        if (activeRoutes.length > 0) {
+          const healthResults = await Promise.allSettled(
+            activeRoutes.map(r => routesApi.getHealth(r.id))
+          );
+          unhealthyCount = healthResults.filter(r =>
+            r.status === 'fulfilled' &&
+            r.value?.data?.status &&
+            ['warning', 'critical'].includes(r.value.data.status)
+          ).length;
+        }
+
         setRouteStats({
           total: routes.length,
           active: activeRoutes.length,
           stopped: stoppedRoutes.length,
+          unhealthy: unhealthyCount,
           recentRoutes
         });
       } catch (error) {
@@ -80,13 +95,6 @@ const Dashboard = () => {
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);
   }, []);
-
-  const getProgressColor = (value) => {
-    if (value === null || value === undefined) return '#ccc';
-    if (value > 80) return '#ff4d4f';
-    if (value > 50) return '#faad14';
-    return '#52c41a';
-  };
 
   // Columns for recent routes table
   const recentRoutesColumns = [
@@ -132,7 +140,7 @@ const Dashboard = () => {
 
       {/* Route Statistics */}
       <Row gutter={[16, 16]} style={{ marginTop: '16px' }}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card>
             <Statistic
               title="Total Routes"
@@ -142,7 +150,7 @@ const Dashboard = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card>
             <Statistic
               title="Active Routes"
@@ -153,13 +161,27 @@ const Dashboard = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card>
             <Statistic
               title="Stopped Routes"
               value={routeStats.stopped}
               prefix={<StopOutlined style={{ color: '#8c8c8c' }} />}
               valueStyle={{ color: '#8c8c8c' }}
+              loading={loading}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={6}>
+          <Card
+            style={routeStats.unhealthy > 0 ? { borderColor: '#faad14', cursor: 'pointer' } : {}}
+            onClick={() => routeStats.unhealthy > 0 && navigate('/routes')}
+          >
+            <Statistic
+              title="Unhealthy Streams"
+              value={routeStats.unhealthy}
+              prefix={<WarningOutlined style={{ color: routeStats.unhealthy > 0 ? '#faad14' : '#8c8c8c' }} />}
+              valueStyle={{ color: routeStats.unhealthy > 0 ? '#faad14' : '#8c8c8c' }}
               loading={loading}
             />
           </Card>

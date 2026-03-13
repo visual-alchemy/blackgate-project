@@ -151,6 +151,21 @@ export const routesApi = {
     });
     return response.json();
   },
+
+  // Get a thumbnail image URL (returns URL string, not a fetch result)
+  getThumbnailUrl: (id) => `${API_BASE_URL}/api/routes/${id}/thumbnail`,
+
+  // Get route health status
+  getHealth: async (id) => {
+    const response = await authFetch(`/api/routes/${id}/health`);
+    return response.json();
+  },
+
+  // Get all unique tags
+  getTags: async () => {
+    const response = await authFetch('/api/routes/tags');
+    return response.json();
+  },
 };
 
 export const backupApi = {

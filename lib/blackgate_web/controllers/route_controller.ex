@@ -104,6 +104,61 @@ defmodule BlackgateWeb.RouteController do
     end
   end
 
+  def health(conn, %{"route_id" => route_id}) do
+    result =
+      case Blackgate.RouteStatsRegistry.get_stats(route_id) do
+        nil ->
+          %{status: "no_data", reasons: []}
+
+        %{stats: stats} ->
+          # Extract key metrics (handle both caller-mode and listener-mode layouts)
+          caller = (stats["callers"] || []) |> List.first() || %{}
+
+          bitrate = stats["receive-rate-mbps"] || caller["receive-rate-mbps"] || 0
+          rtt = stats["rtt-ms"] || caller["rtt-ms"] || 0
+          packets_recv = stats["packets-received"] || caller["packets-received"] || 0
+          packets_lost = stats["packets-received-lost"] || caller["packets-received-lost"] || 0
+
+          packet_loss =
+            if packets_recv > 0,
+              do: packets_lost / (packets_recv + packets_lost) * 100,
+              else: 0.0
+
+          reasons = []
+
+          reasons =
+            cond do
+              packet_loss > 1.0 -> ["Packet loss #{Float.round(packet_loss, 2)}% (critical)" | reasons]
+              packet_loss > 0.1 -> ["Packet loss #{Float.round(packet_loss, 2)}% (elevated)" | reasons]
+              true -> reasons
+            end
+
+          reasons =
+            cond do
+              rtt > 200 -> ["RTT #{Float.round(rtt * 1.0, 1)}ms (high)" | reasons]
+              rtt > 50 -> ["RTT #{Float.round(rtt * 1.0, 1)}ms (elevated)" | reasons]
+              true -> reasons
+            end
+
+          reasons =
+            if bitrate == 0,
+              do: ["No stream data received" | reasons],
+              else: reasons
+
+          status =
+            cond do
+              Enum.any?(reasons, &String.contains?(&1, "critical")) -> "critical"
+              Enum.any?(reasons, &String.contains?(&1, "No stream")) -> "critical"
+              reasons != [] -> "warning"
+              true -> "good"
+            end
+
+          %{status: status, reasons: reasons, packet_loss: packet_loss, rtt: rtt, bitrate: bitrate}
+      end
+
+    json(conn, %{data: result})
+  end
+
   def destination_stats(conn, %{"route_id" => route_id}) do
     sink_stats = Blackgate.RouteStatsRegistry.get_all_sink_stats(route_id)
 
@@ -163,6 +218,18 @@ defmodule BlackgateWeb.RouteController do
         |> put_status(:created)
         |> data(full_route)
       end
+    end
+  end
+
+  def tags(conn, _params) do
+    case Db.get_all_tags() do
+      {:ok, tags} ->
+        json(conn, %{data: tags})
+
+      error ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch tags: #{inspect(error)}"})
     end
   end
 

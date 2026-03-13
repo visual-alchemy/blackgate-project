@@ -17,6 +17,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const dataFetchedRef = useRef(false);
   const [routeData, setRouteData] = useState(null);
   const [interfaces, setInterfaces] = useState([]);
+  const [existingTags, setExistingTags] = useState([]);
 
   // Set breadcrumb items for the RouteSourceEdit page
   useEffect(() => {
@@ -72,6 +73,15 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       .catch(error => {
         console.error('Error fetching network interfaces:', error);
       });
+  }, []);
+
+  // Fetch existing tags for the tags dropdown
+  useEffect(() => {
+    routesApi.getTags()
+      .then(result => {
+        setExistingTags((result.data || []).map(t => ({ label: t, value: t })));
+      })
+      .catch(() => {});
   }, []);
 
   const availableNodes = [
@@ -252,6 +262,20 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                       options={availableNodes}
                       disabled={true}
                       style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Tags"
+                    name="tags"
+                    tooltip="Optionally tag this route for grouping and filtering (e.g. 'Stadium A', 'Backup')"
+                  >
+                    <Select
+                      mode="tags"
+                      placeholder="Add tags (press Enter to create)"
+                      options={existingTags}
+                      style={{ width: '100%' }}
+                      tokenSeparators={[',']}
                     />
                   </Form.Item>
                 </Card>

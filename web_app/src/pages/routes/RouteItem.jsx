@@ -24,12 +24,14 @@ import {
   HomeOutlined,
   LoadingOutlined,
   SearchOutlined,
-  CopyOutlined
+  CopyOutlined,
+  TagOutlined
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
 import RouteStats from '../../components/RouteStats';
 import DestinationStats from '../../components/DestinationStats';
+import HealthBadge from '../../components/HealthBadge';
 
 const { Title, Text } = Typography;
 
@@ -414,14 +416,24 @@ const RouteItem = () => {
           <Col>
             <Space direction="vertical" size="small">
               <Title level={4} style={{ margin: 0 }}>{routeData.name}</Title>
-              <Space>
+              <Space wrap>
                 <Tag color={statusDetails.color}>
                   {routeData.status ? routeData.status.charAt(0).toUpperCase() + routeData.status.slice(1) : 'Unknown'}
                 </Tag>
+                <HealthBadge routeId={id} isRunning={isRouteStarted} />
                 <Text type="secondary">
                   Last Updated: {new Date(routeData.updated_at).toLocaleString()}
                 </Text>
               </Space>
+              {(routeData.tags || []).length > 0 && (
+                <Space size={4} wrap>
+                  {(routeData.tags || []).map(tag => (
+                    <Tag key={tag} icon={<TagOutlined />} color="geekblue" style={{ fontSize: 11 }}>
+                      {tag}
+                    </Tag>
+                  ))}
+                </Space>
+              )}
             </Space>
           </Col>
           <Col>

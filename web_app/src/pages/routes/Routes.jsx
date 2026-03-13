@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Table, Card, Button, Tag, Space, Typography, message, Modal, Input, Select, Badge } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, CopyOutlined, SearchOutlined, TagOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
+import HealthBadge from '../../components/HealthBadge';
 
 const { Title } = Typography;
 
@@ -16,12 +17,15 @@ const Routes = () => {
   const [searchText, setSearchText] = useState(() => sessionStorage.getItem('routes_search') || '');
   const [statusFilter, setStatusFilter] = useState(() => sessionStorage.getItem('routes_status') || 'all');
   const [schemaFilter, setSchemaFilter] = useState(() => sessionStorage.getItem('routes_schema') || 'all');
+  const [tagFilter, setTagFilter] = useState(() => sessionStorage.getItem('routes_tag') || 'all');
+  const [availableTags, setAvailableTags] = useState([]);
   const [bulkLoading, setBulkLoading] = useState(false);
 
   // Persist filters to sessionStorage
   useEffect(() => { sessionStorage.setItem('routes_search', searchText); }, [searchText]);
   useEffect(() => { sessionStorage.setItem('routes_status', statusFilter); }, [statusFilter]);
   useEffect(() => { sessionStorage.setItem('routes_schema', schemaFilter); }, [schemaFilter]);
+  useEffect(() => { sessionStorage.setItem('routes_tag', tagFilter); }, [tagFilter]);
 
   // Set breadcrumb items for the Routes page
   useEffect(() => {
@@ -42,6 +46,10 @@ const Routes = () => {
 
   useEffect(() => {
     fetchRoutes();
+    routesApi.getTags().then(r => {
+      const tags = r.data || [];
+      setAvailableTags(tags.map(t => ({ label: t, value: t })));
+    }).catch(() => {});
   }, []);
 
   const fetchRoutes = async () => {
@@ -147,7 +155,9 @@ const Routes = () => {
       (route.status || '').toLowerCase() === statusFilter;
     const matchesSchema = schemaFilter === 'all' ||
       (route.schema || '').toUpperCase() === schemaFilter;
-    return matchesSearch && matchesStatus && matchesSchema;
+    const matchesTag = tagFilter === 'all' ||
+      (route.tags || []).includes(tagFilter);
+    return matchesSearch && matchesStatus && matchesSchema && matchesTag;
   });
 
   // Row selection config
@@ -163,13 +173,27 @@ const Routes = () => {
       key: 'name',
       sorter: (a, b) => (a.name || '').localeCompare(b.name || ''),
       render: (text, record) => {
+        const tags = record.tags || [];
         return (
-          <Space>
-            <a href={`#/routes/${record.id}`}>
-              {text}
-            </a>
+          <Space direction="vertical" size={2}>
+            <a href={`#/routes/${record.id}`}>{text}</a>
+            {tags.length > 0 && (
+              <Space size={4} wrap>
+                {tags.map(tag => (
+                  <Tag
+                    key={tag}
+                    icon={<TagOutlined />}
+                    color="geekblue"
+                    style={{ fontSize: 11, cursor: 'pointer' }}
+                    onClick={() => setTagFilter(tag)}
+                  >
+                    {tag}
+                  </Tag>
+                ))}
+              </Space>
+            )}
           </Space>
-        )
+        );
       },
     },
     {
@@ -187,6 +211,13 @@ const Routes = () => {
       dataIndex: 'status',
       key: 'status',
       sorter: (a, b) => (a.status || '').localeCompare(b.status || ''),
+    },
+    {
+      title: 'Health',
+      key: 'health',
+      render: (_, record) => (
+        <HealthBadge routeId={record.id} isRunning={record.status === 'started'} />
+      ),
     },
     {
       title: 'Authentication',
@@ -311,6 +342,18 @@ const Routes = () => {
                 { label: 'UDP', value: 'UDP' },
               ]}
             />
+            {availableTags.length > 0 && (
+              <Select
+                value={tagFilter}
+                onChange={setTagFilter}
+                style={{ width: 150 }}
+                options={[
+                  { label: 'All Tags', value: 'all' },
+                  ...availableTags,
+                ]}
+                placeholder="Filter by tag"
+              />
+            )}
             {selectedRowKeys.length > 0 && (
               <>
                 <Badge count={selectedRowKeys.length} style={{ backgroundColor: '#1890ff' }}>

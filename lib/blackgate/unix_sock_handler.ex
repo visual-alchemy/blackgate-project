@@ -89,6 +89,7 @@ defmodule Blackgate.UnixSockHandler do
       case Jason.decode(source_json) do
         {:ok, stats} ->
           RouteStatsRegistry.put_stats(data.route_id, stats)
+          Phoenix.PubSub.broadcast(Blackgate.PubSub, "route_stats:#{data.route_id}", {:stats_update, stats})
           try do
             stats_to_metrics(stats, data)
           rescue
@@ -105,6 +106,7 @@ defmodule Blackgate.UnixSockHandler do
         {:ok, stats} ->
           sink_index = stats["sink-index"] || 0
           RouteStatsRegistry.put_sink_stats(data.route_id, sink_index, stats)
+          Phoenix.PubSub.broadcast(Blackgate.PubSub, "route_stats:#{data.route_id}", {:sink_stats_update, sink_index, stats})
         _ -> :ok
       end
     end
@@ -120,7 +122,9 @@ defmodule Blackgate.UnixSockHandler do
     # Store source stats
     if source_json do
       case Jason.decode(source_json) do
-        {:ok, stats} -> RouteStatsRegistry.put_stats(route_id, stats)
+        {:ok, stats} -> 
+          RouteStatsRegistry.put_stats(route_id, stats)
+          Phoenix.PubSub.broadcast(Blackgate.PubSub, "route_stats:#{route_id}", {:stats_update, stats})
         _ -> :ok
       end
     end
@@ -131,6 +135,7 @@ defmodule Blackgate.UnixSockHandler do
         {:ok, stats} ->
           sink_index = stats["sink-index"] || 0
           RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
+          Phoenix.PubSub.broadcast(Blackgate.PubSub, "route_stats:#{route_id}", {:sink_stats_update, sink_index, stats})
         _ -> :ok
       end
     end

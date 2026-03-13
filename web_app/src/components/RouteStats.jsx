@@ -112,7 +112,7 @@ const RouteStats = ({ routeId, isRunning }) => {
         }
 
         fetchStats();
-        const interval = setInterval(fetchStats, 1500); // Poll every 1.5 seconds
+        const interval = setInterval(fetchStats, 1500);
 
         return () => clearInterval(interval);
     }, [fetchStats, isRunning]);
