@@ -17,6 +17,11 @@ services:
       - API_AUTH_PASSWORD=password123
       - DATABASE_DATA_DIR=/app/khepri
       - RLIMIT_NOFILE=65536
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./data/khepri:/app/khepri
       - ./data/backup:/app/backup
