@@ -7,12 +7,33 @@ defmodule BlackgateWeb.RouteController do
 
   def index(conn, _params) do
     with {:ok, routes} <- Db.get_all_routes() do
-      data(conn, routes)
+      enriched_routes = Enum.map(routes, fn route ->
+        is_connected = route_connected?(route["id"])
+        Map.put(route, "connected", is_connected)
+      end)
+      data(conn, enriched_routes)
     else
       error ->
         conn
         |> put_status(:internal_server_error)
         |> json(%{error: "Failed to fetch routes: #{inspect(error)}"})
+    end
+  end
+
+  defp route_connected?(route_id) do
+    case Blackgate.RouteStatsRegistry.get_stats(route_id) do
+      %{stats: stats} ->
+        callers = Map.get(stats, "callers", [])
+        connected_callers = Map.get(stats, "connected-callers", 0)
+        receive_mbps = Map.get(stats, "receive-rate-mbps", 0)
+        caller_mbps = case callers do
+          [first_caller | _] -> Map.get(first_caller, "receive-rate-mbps", 0)
+          _ -> 0
+        end
+
+        connected_callers > 0 or receive_mbps > 0 or caller_mbps > 0
+
+      nil -> false
     end
   end
 

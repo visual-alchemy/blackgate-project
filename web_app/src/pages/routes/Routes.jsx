@@ -42,18 +42,20 @@ const Routes = () => {
 
   useEffect(() => {
     fetchRoutes();
+    const interval = setInterval(() => fetchRoutes(true), 3000); // Poll silently every 3s
+    return () => clearInterval(interval);
   }, []);
 
-  const fetchRoutes = async () => {
+  const fetchRoutes = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const result = await routesApi.getAll();
       setRoutes(result.data);
     } catch (error) {
-      messageApi.error(`Failed to fetch routes: ${error.message}`);
+      if (!silent) messageApi.error(`Failed to fetch routes: ${error.message}`);
       console.error('Error:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -187,7 +189,7 @@ const Routes = () => {
       ),
     },
     {
-      title: 'Status',
+      title: 'Process',
       dataIndex: 'status',
       key: 'status',
       sorter: (a, b) => (a.status || '').localeCompare(b.status || ''),
@@ -228,39 +230,50 @@ const Routes = () => {
       render: (date) => new Date(date).toLocaleString(),
     },
     {
+      title: 'Connection',
+      key: 'connection',
+      align: 'center',
+      render: (_, record) => {
+        if (record.status !== 'started') {
+           return <Badge status="default" text="Off" />;
+        }
+        return record.connected ? (
+           <Badge status="success" text="Connected" />
+        ) : (
+           <Badge status="error" text="Waiting" />
+        );
+      }
+    },
+    {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space size="small">
           <Button
-            type="link"
-            icon={record.status === 'started' ? <StopOutlined /> : <CaretRightOutlined />}
+            type="text"
+            icon={record.status === 'started' ? <StopOutlined style={{ color: '#ff4d4f' }} /> : <CaretRightOutlined style={{ color: '#52c41a' }} />}
             onClick={() => handleRouteStatus(record.id, record.status === 'started' ? 'stop' : 'start')}
-          >
-            {record.status === 'started' ? 'Stop' : 'Start'}
-          </Button>
+            title={record.status === 'started' ? 'Stop' : 'Start'}
+          />
           <Button
-            type="link"
+            type="text"
             icon={<CopyOutlined />}
             onClick={() => handleClone(record.id, record.name)}
-          >
-            Clone
-          </Button>
+            title="Clone"
+          />
           <Button
-            type="link"
+            type="text"
             icon={<EditOutlined />}
             onClick={() => navigate(`/routes/${record.id}/edit`)}
-          >
-            Edit
-          </Button>
+            title="Edit"
+          />
           <Button
-            type="link"
+            type="text"
             danger
             icon={<DeleteOutlined />}
             onClick={() => showDeleteConfirm(record)}
-          >
-            Delete
-          </Button>
+            title="Delete"
+          />
         </Space>
       ),
     },
