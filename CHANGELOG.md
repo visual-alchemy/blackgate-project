@@ -9,12 +9,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Seamless Auto-Restart**: Editing a running route or destination now automatically restarts the pipeline with the new configuration, without requiring a manual stop/start cycle.
-- **Dual Save Buttons**: Route and Destination edit pages now feature 'Save and Continue' and 'Save and Exit' buttons for a smoother user experience.
+- **SRT StreamID Support** *(testing)*: Optional Stream ID field for SRT Caller sources and destinations, enabling compatibility with services like Vidio that require `streamid` in the SRT URI.
+
+---
+
+## [0.2.0] - 2026-04-06
+
+### Added
+- **Real-time Connection Status**: Live green/red/grey connection indicator on the Routes table showing whether SRT streams are actively connected, waiting, or off. Auto-refreshes every 3 seconds.
+- **Seamless Auto-Restart**: Editing a running route or destination now automatically restarts the pipeline with the new configuration — no manual stop/start cycle needed.
+- **Dual Save Buttons**: Route and Destination edit pages now feature "Save and Continue" and "Save and Exit" buttons for a smoother editing workflow.
 - **Bulk Start/Stop Routes**: Select multiple routes from the table and start/stop them all at once.
-- **Route Cloning**: Duplicate a route with all its destinations via a 'Clone' button.
+- **Route Cloning**: Duplicate a route with all its destinations via a "Clone" button.
 - **Route Search & Filter**: Search routes by name and filter by status (Started/Stopped) or schema (SRT/UDP).
-- `BLACKGATE_TECHNICAL_ANALYSIS.md` — comprehensive software design review document
+- **Credential Management**: Settings → Users tab allows changing the admin username and password from the Web UI, persisted via Khepri.
+- **System Pipelines Page**: View and manage running GStreamer pipeline processes, including the ability to kill orphaned pipelines.
+- **System Nodes Page**: View cluster node information and system health.
+
+### Changed
+- **Routes table Actions**: Action buttons (Start/Stop, Clone, Edit, Delete) are now icon-only for a cleaner, more compact table layout. Hover for tooltips.
+- **Routes table columns**: "Status" column renamed to "Process" to differentiate from the new "Connection" indicator. New column order: Name → Enabled → Process → Authentication → Input → Last Updated → Connection → Actions.
+
+### Fixed
+- React rendering crash on Route details page when authentication is toggled.
+- React rendering crash on RouteItem for undefined array filters.
+- Login error display now uses a visible Alert component instead of an easily-missed toast message.
+- Frontend production build errors related to static message API usage in MainLayout.
 
 ---
 
