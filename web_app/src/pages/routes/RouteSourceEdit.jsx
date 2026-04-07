@@ -340,6 +340,20 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             <InputNumber style={{ width: '100%' }} placeholder="Enter port number" />
                           </Form.Item>
 
+                          <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                            {({ getFieldValue }) =>
+                              getFieldValue(['schema_options', 'mode']) === 'caller' && (
+                                <Form.Item
+                                  label="Stream ID"
+                                  name={['schema_options', 'streamid']}
+                                  extra="Optional. The SRT Stream ID to send when connecting. Leave empty if not required."
+                                >
+                                  <Input placeholder="Enter Stream ID" />
+                                </Form.Item>
+                              )
+                            }
+                          </Form.Item>
+
                           <Form.Item
                             label="Latency"
                             name={['schema_options', 'latency']}

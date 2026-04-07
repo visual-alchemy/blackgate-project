@@ -180,7 +180,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                     node: 'self',
                     schema: 'SRT',
                     autoReconnect: true,
-                    srtMode: 'caller',
+                    schema_options: { mode: 'caller' },
                     ...initialValues
                 }}
                 onValuesChange={handleValuesChange}
@@ -258,6 +258,20 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             <Radio.Button value="listener">Listener</Radio.Button>
                                                             <Radio.Button value="rendezvous">Rendezvous</Radio.Button>
                                                         </Radio.Group>
+                                                    </Form.Item>
+
+                                                    <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                                                        {({ getFieldValue }) =>
+                                                            getFieldValue(['schema_options', 'mode']) === 'caller' && (
+                                                                <Form.Item
+                                                                    label="Stream ID"
+                                                                    name={['schema_options', 'streamid']}
+                                                                    extra="Optional. The SRT Stream ID to send when connecting. Leave empty if not required."
+                                                                >
+                                                                    <Input placeholder="Enter Stream ID" />
+                                                                </Form.Item>
+                                                            )
+                                                        }
                                                     </Form.Item>
 
                                                     <Form.Item
