@@ -12,6 +12,8 @@ defmodule Blackgate.License do
   @table_name :blackgate_license
   @trial_max_routes 2
   @trial_days 30
+  # Re-verify license every 6 hours to keep Supabase alive and catch revocations
+  @heartbeat_interval :timer.hours(6)
 
   # ─── Public API ──────────────────────────────────────────────────────────
 
@@ -102,6 +104,9 @@ defmodule Blackgate.License do
         # Spawn an async task to re-verify against the server quietly
         Task.start(fn -> re_verify_license_async(payload["license_key"]) end)
 
+        # Schedule periodic heartbeat
+        schedule_heartbeat()
+
       _ ->
         Logger.info("License: No license found, checking trial status...")
         init_trial()
@@ -120,6 +125,9 @@ defmodule Blackgate.License do
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
 
+        # Start heartbeat on fresh activation
+        schedule_heartbeat()
+
         Logger.info("License: Activated for #{payload["client_name"]} (#{payload["plan_tier"]})")
         {:reply, {:ok, license_data}, state}
 
@@ -136,7 +144,26 @@ defmodule Blackgate.License do
     {:reply, :ok, state}
   end
 
+  @impl true
+  def handle_info(:heartbeat, state) do
+    case :khepri.get(["license", "data"]) do
+      {:ok, payload} when is_map(payload) ->
+        Logger.info("License: Running periodic heartbeat verification...")
+        re_verify_license_async(payload["license_key"])
+
+      _ ->
+        Logger.debug("License: Heartbeat skipped — no active license")
+    end
+
+    schedule_heartbeat()
+    {:noreply, state}
+  end
+
   # ─── Private Functions ───────────────────────────────────────────────────
+
+  defp schedule_heartbeat do
+    Process.send_after(self(), :heartbeat, @heartbeat_interval)
+  end
 
   defp verify_license_with_server(license_key) do
     server_url = Application.get_env(:blackgate, :license_server_url, "http://localhost:3000")
