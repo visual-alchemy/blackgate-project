@@ -228,7 +228,9 @@ defmodule Blackgate.RouteHandler do
   def sink_from_record(%{"schema" => "UDP", "schema_options" => opts}) do
     create_sink("udpsink", opts, [
       "host",
-      "port"
+      "port",
+      "bind-address",
+      "multicast-iface"
     ])
   end
 
