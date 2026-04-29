@@ -1,5 +1,5 @@
 import { Typography, Card, Row, Col, Statistic, Tag, Spin, Alert } from 'antd';
-import { ApiOutlined, PlayCircleOutlined, StopOutlined, HomeOutlined, VideoCameraOutlined, DisconnectOutlined, WarningOutlined } from '@ant-design/icons';
+import { ApiOutlined, PlayCircleOutlined, StopOutlined, HomeOutlined, VideoCameraOutlined, DisconnectOutlined, WarningOutlined, WifiOutlined } from '@ant-design/icons';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import React from 'react';
 import { nodesApi, routesApi } from '../utils/api';
@@ -91,32 +91,53 @@ const RoutePreviewCard = ({ route, onHealthChange }) => {
           <div style={{
             position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            gap: '8px', color: '#434343',
+            gap: '8px',
           }}>
-            {isRunning ? (
+            {!isRunning && (
+              <>
+                <DisconnectOutlined style={{ fontSize: '24px', color: '#434343' }} />
+                <span style={{ fontSize: '11px', color: '#434343' }}>Stopped</span>
+              </>
+            )}
+            {isRunning && (health === 'disconnected' || health === null) && (
+              <>
+                <WifiOutlined style={{ fontSize: '24px', color: '#595959' }} />
+                <span style={{ fontSize: '11px', color: '#595959' }}>Waiting for client…</span>
+              </>
+            )}
+            {isRunning && health && health !== 'disconnected' && (
               <>
                 <Spin size="small" />
-                <span style={{ fontSize: '11px' }}>Loading preview…</span>
-              </>
-            ) : (
-              <>
-                <DisconnectOutlined style={{ fontSize: '24px' }} />
-                <span style={{ fontSize: '11px' }}>No Signal</span>
+                <span style={{ fontSize: '11px', color: '#595959' }}>Loading preview…</span>
               </>
             )}
           </div>
         )}
 
-        {/* Health badge top-left, LIVE/Stopped top-right */}
+        {/* Status badge — top-left */}
         <div style={{ position: 'absolute', top: '8px', left: '8px' }}>
-          {isRunning && health ? (
+          {isRunning && health && health !== 'disconnected' ? (
             <HealthBadge health={health} compact />
-          ) : (
+          ) : isRunning && health === 'disconnected' ? (
             <Tag
-              color={isRunning ? 'green' : 'default'}
+              color="orange"
               style={{ margin: 0, fontSize: '10px', lineHeight: '16px', padding: '0 6px' }}
             >
-              {isRunning ? '● LIVE' : '○ Stopped'}
+              ● Waiting
+            </Tag>
+          ) : isRunning ? (
+            <Tag
+              color="green"
+              style={{ margin: 0, fontSize: '10px', lineHeight: '16px', padding: '0 6px' }}
+            >
+              ● LIVE
+            </Tag>
+          ) : (
+            <Tag
+              color="default"
+              style={{ margin: 0, fontSize: '10px', lineHeight: '16px', padding: '0 6px' }}
+            >
+              ○ Stopped
             </Tag>
           )}
         </div>
