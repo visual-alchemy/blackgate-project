@@ -195,6 +195,21 @@ defmodule BlackgateWeb.RouteController do
     end
   end
 
+  def preview(conn, %{"route_id" => route_id}) do
+    preview_path = "/tmp/blackgate_preview_#{route_id}.jpg"
+
+    case File.read(preview_path) do
+      {:ok, data} ->
+        conn
+        |> put_resp_content_type("image/jpeg")
+        |> put_resp_header("cache-control", "no-cache, no-store, must-revalidate")
+        |> send_resp(200, data)
+
+      {:error, _} ->
+        send_resp(conn, 204, "")
+    end
+  end
+
   defp route_is_running?(id) do
     case Blackgate.get_route(id) do
       {:ok, _pid} -> true

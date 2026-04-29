@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
-GstElement *create_pipeline(cJSON *json);
+GstElement *create_pipeline(cJSON *json, const char *route_id);
 void cleanup_pipeline(GstElement *pipeline);
 void print_srt_stats(GstElement *source);
 

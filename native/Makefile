@@ -1,6 +1,6 @@
 CC := gcc
-CFLAGS := -Wall -Wextra -g `pkg-config --cflags gstreamer-1.0 libcjson cmocka srt`
-LDFLAGS := `pkg-config --libs gstreamer-1.0 libcjson cmocka gio-2.0 srt`
+CFLAGS := -Wall -Wextra -g `pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 libcjson cmocka srt`
+LDFLAGS := `pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 libcjson cmocka gio-2.0 srt`
 
 SRC_DIR := src
 BUILD_DIR := build

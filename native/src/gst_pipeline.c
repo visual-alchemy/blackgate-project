@@ -2,8 +2,10 @@
 
 #include <gio/gio.h>
 #include <gst/gst.h>
+#include <gst/app/gstappsink.h>
 #include <pthread.h>
 #include <srt/srt.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "unix_socket.h"
@@ -27,6 +29,12 @@ static int sink_count = 0;
 
 // Store tee element for video caps query
 static GstElement *tee_element = NULL;
+
+// Thumbnail capture state
+static GstElement *thumbnail_appsink = NULL;
+static pthread_t thumbnail_thread;
+static volatile gboolean thumbnail_running = FALSE;
+static gboolean thumbnail_thread_started = FALSE;
 
 // MPEG-TS parsing structures for video metadata extraction
 #define TS_PACKET_SIZE 188
@@ -58,6 +66,11 @@ static VideoInfo video_info = {0, 0, 0, 1, FALSE, FALSE, FALSE, 0, 0, 0, PTHREAD
 // Forward declarations for MPEG-TS parsing
 static void parse_pat(const guint8 *data, gsize size);
 static void parse_pmt(const guint8 *data, gsize size);
+
+// Forward declarations for thumbnail
+static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id);
+static void *thumbnail_worker(void *arg);
+static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer data);
 static void parse_h264_sps(const guint8 *data, gsize size);
 static void parse_mpeg2_sequence(const guint8 *data, gsize size);
 static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
@@ -886,7 +899,172 @@ static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, g
     return GST_PAD_PROBE_OK;
 }
 
-GstElement *create_pipeline(cJSON *json)
+// =============================================================================
+// Thumbnail Capture Branch
+// =============================================================================
+
+static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer data)
+{
+    (void)decodebin;
+    GstElement *videoconvert = (GstElement *)data;
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) caps = gst_pad_query_caps(pad, NULL);
+    if (!caps) return;
+
+    GstStructure *str = gst_caps_get_structure(caps, 0);
+    const gchar *name = gst_structure_get_name(str);
+    gst_caps_unref(caps);
+
+    if (!g_str_has_prefix(name, "video/")) return; // Skip audio pads
+
+    GstPad *sink_pad = gst_element_get_static_pad(videoconvert, "sink");
+    if (!gst_pad_is_linked(sink_pad)) {
+        GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+        if (ret == GST_PAD_LINK_OK) {
+            g_print("Thumbnail: Linked video pad to videoconvert\n");
+        } else {
+            g_printerr("Thumbnail: Failed to link video pad: %d\n", ret);
+        }
+    }
+    gst_object_unref(sink_pad);
+}
+
+static void *thumbnail_worker(void *arg)
+{
+    char *route_id = (char *)arg;
+    char path[512];
+    char tmp_path[512];
+    snprintf(path, sizeof(path), "/tmp/blackgate_preview_%s.jpg", route_id);
+    snprintf(tmp_path, sizeof(tmp_path), "/tmp/blackgate_preview_%s.tmp.jpg", route_id);
+
+    g_print("Thumbnail: Worker started, saving to %s\n", path);
+
+    // Give the pipeline a moment to reach PLAYING state
+    sleep(3);
+
+    while (thumbnail_running) {
+        if (!thumbnail_appsink) {
+            sleep(1);
+            continue;
+        }
+
+        GstSample *sample = gst_app_sink_try_pull_sample(
+            GST_APP_SINK(thumbnail_appsink),
+            GST_SECOND // 1 second timeout
+        );
+
+        if (sample) {
+            GstBuffer *buffer = gst_sample_get_buffer(sample);
+            GstMapInfo map;
+
+            if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                FILE *f = fopen(tmp_path, "wb");
+                if (f) {
+                    fwrite(map.data, 1, map.size, f);
+                    fclose(f);
+                    rename(tmp_path, path); // Atomic replace
+                    g_print("Thumbnail: Saved %zu bytes\n", map.size);
+                }
+                gst_buffer_unmap(buffer, &map);
+            }
+            gst_sample_unref(sample);
+        }
+
+        // Sleep 5 seconds in 100ms chunks for responsive shutdown
+        for (int i = 0; i < 50 && thumbnail_running; i++) {
+            usleep(100000);
+        }
+    }
+
+    // Cleanup preview files on stop
+    remove(path);
+    remove(tmp_path);
+    free(route_id);
+    g_print("Thumbnail: Worker stopped\n");
+    return NULL;
+}
+
+static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id)
+{
+    GstElement *queue       = gst_element_factory_make("queue",         "thumbnail_queue");
+    GstElement *decodebin   = gst_element_factory_make("decodebin",     "thumbnail_decodebin");
+    GstElement *convert     = gst_element_factory_make("videoconvert",  "thumbnail_convert");
+    GstElement *scale       = gst_element_factory_make("videoscale",    "thumbnail_scale");
+    GstElement *capsfilter  = gst_element_factory_make("capsfilter",    "thumbnail_capsfilter");
+    GstElement *jpegenc     = gst_element_factory_make("jpegenc",       "thumbnail_jpegenc");
+    GstElement *appsink     = gst_element_factory_make("appsink",       "thumbnail_appsink");
+
+    if (!queue || !decodebin || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
+        g_printerr("Thumbnail: One or more elements unavailable — skipping thumbnail branch\n");
+        if (queue)      gst_object_unref(queue);
+        if (decodebin)  gst_object_unref(decodebin);
+        if (convert)    gst_object_unref(convert);
+        if (scale)      gst_object_unref(scale);
+        if (capsfilter) gst_object_unref(capsfilter);
+        if (jpegenc)    gst_object_unref(jpegenc);
+        if (appsink)    gst_object_unref(appsink);
+        return;
+    }
+
+    // Leaky upstream queue: drops old buffers so thumbnail never blocks main stream
+    g_object_set(queue,
+        "max-size-buffers", 10,
+        "max-size-bytes",   0,
+        "max-size-time",    (guint64)0,
+        "leaky",            2,  // GST_QUEUE_LEAK_UPSTREAM
+        NULL);
+
+    // Scale target: 320x180
+    GstCaps *caps = gst_caps_new_simple("video/x-raw",
+        "width",  G_TYPE_INT, 320,
+        "height", G_TYPE_INT, 180,
+        NULL);
+    g_object_set(capsfilter, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    g_object_set(jpegenc, "quality", 75, NULL);
+
+    g_object_set(appsink,
+        "emit-signals", FALSE,
+        "max-buffers",  2,
+        "drop",         TRUE,
+        "sync",         FALSE,
+        NULL);
+
+    gst_bin_add_many(GST_BIN(pipeline), queue, decodebin, convert, scale, capsfilter, jpegenc, appsink, NULL);
+
+    g_signal_connect(decodebin, "pad-added", G_CALLBACK(on_thumbnail_pad_added), convert);
+
+    if (!gst_element_link(tee, queue) || !gst_element_link(queue, decodebin)) {
+        g_printerr("Thumbnail: Failed to link tee → queue → decodebin\n");
+        return;
+    }
+
+    if (!gst_element_link_many(convert, scale, capsfilter, jpegenc, appsink, NULL)) {
+        g_printerr("Thumbnail: Failed to link video chain\n");
+        return;
+    }
+
+    thumbnail_appsink = appsink;
+
+    char *route_id_copy = strdup(route_id);
+    thumbnail_running = TRUE;
+    if (pthread_create(&thumbnail_thread, NULL, thumbnail_worker, route_id_copy) != 0) {
+        g_printerr("Thumbnail: Failed to start worker thread\n");
+        thumbnail_running = FALSE;
+        free(route_id_copy);
+    } else {
+        thumbnail_thread_started = TRUE;
+        g_print("Thumbnail: Branch ready for route %s\n", route_id);
+    }
+}
+
+// =============================================================================
+// Pipeline Creation
+// =============================================================================
+
+GstElement *create_pipeline(cJSON *json, const char *route_id)
 {
     GstElement *pipeline, *source, *tee;
 
@@ -962,6 +1140,8 @@ GstElement *create_pipeline(cJSON *json)
 
     // Reset sink counter
     sink_count = 0;
+    thumbnail_thread_started = FALSE;
+    thumbnail_appsink = NULL;
 
     cJSON *sink;
     int sink_idx = 0;
@@ -972,6 +1152,11 @@ GstElement *create_pipeline(cJSON *json)
             return NULL;
         }
         sink_idx++;
+    }
+
+    // Add thumbnail capture branch (gracefully skipped if elements unavailable)
+    if (route_id && route_id[0] != '\0') {
+        add_thumbnail_branch(pipeline, tee, route_id);
     }
 
     loop = g_main_loop_new(NULL, FALSE);
@@ -1050,9 +1235,20 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 void cleanup_pipeline(GstElement *pipeline)
 {
     running = FALSE;
+    thumbnail_running = FALSE; // Signal thumbnail thread to stop
+
+    // Set pipeline to NULL first — this flushes appsink, unblocking try_pull_sample
+    gst_element_set_state(pipeline, GST_STATE_NULL);
+
     pthread_join(stats_thread, NULL);
 
-    gst_element_set_state(pipeline, GST_STATE_NULL);
+    if (thumbnail_thread_started) {
+        pthread_join(thumbnail_thread, NULL);
+        thumbnail_thread_started = FALSE;
+    }
+
+    thumbnail_appsink = NULL;
+
     gst_object_unref(pipeline);
 
     if (loop) {

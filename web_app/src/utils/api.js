@@ -151,6 +151,13 @@ export const routesApi = {
     });
     return response.json();
   },
+
+  // Fetch live thumbnail as a Blob (returns null if not yet available)
+  previewBlob: async (id) => {
+    const response = await authFetch(`/api/routes/${id}/preview`);
+    if (!response.ok || response.status === 204) return null;
+    return response.blob();
+  },
 };
 
 export const backupApi = {
