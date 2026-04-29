@@ -75,8 +75,11 @@ RUN cd web_app \
 COPY config/runtime.exs config/
 
 # Compile the Elixir application and build the release in a single layer
-# This prevents Podman OverlayFS bugs related to modifying files across multiple image layers
-RUN mix compile && mix release --overwrite
+# Explicitly remove any existing release dir instead of using --overwrite,
+# which triggers a chmod bug on Docker Desktop (Mac) overlay FS.
+RUN mix compile \
+    && rm -rf _build/prod/rel \
+    && mix release
 
 # Start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
