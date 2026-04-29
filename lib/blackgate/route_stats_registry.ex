@@ -21,9 +21,17 @@ defmodule Blackgate.RouteStatsRegistry do
 
   @doc """
   Store stats for a route. Called by UnixSockHandler.
+  Also broadcasts the update via PubSub so WebSocket clients receive it immediately.
   """
   def put_stats(route_id, stats) when is_binary(route_id) and is_map(stats) do
-    :ets.insert(@table_name, {route_id, stats, System.system_time(:millisecond)})
+    updated_at = System.system_time(:millisecond)
+    :ets.insert(@table_name, {route_id, stats, updated_at})
+    health = Blackgate.RouteHealth.evaluate(stats)
+    Phoenix.PubSub.broadcast(
+      Blackgate.PubSub,
+      "route:stats:#{route_id}",
+      {:stats_update, %{stats: stats, health: health, updated_at: updated_at}}
+    )
     :ok
   end
 

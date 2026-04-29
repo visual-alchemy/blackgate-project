@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { Card, Statistic, Row, Col, Table, Typography, Tag, Spin, Empty } from 'antd';
 import {
     ArrowUpOutlined,
@@ -9,7 +9,7 @@ import {
     VideoCameraOutlined,
     FieldTimeOutlined
 } from '@ant-design/icons'
-import { routesApi } from '../utils/api';
+import { useRouteStats } from '../hooks/useRouteStats';
 
 const { Text } = Typography;
 
@@ -74,52 +74,14 @@ const formatScanType = (interlaceMode) => {
 };
 
 const RouteStats = ({ routeId, isRunning }) => {
-    const [stats, setStats] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
-    const [lastUpdated, setLastUpdated] = useState(null);
-
-    const fetchStats = useCallback(async () => {
-        if (!routeId || !isRunning) {
-            setStats(null);
-            setLoading(false);
-            return;
-        }
-
-        try {
-            const result = await routesApi.getStats(routeId);
-            if (result.data) {
-                setStats(result.data);
-                setLastUpdated(new Date());
-                setError(null);
-            } else {
-                setStats(null);
-            }
-        } catch (err) {
-            console.error('Failed to fetch stats:', err);
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
-    }, [routeId, isRunning]);
-
-    // Initial fetch and polling
-    useEffect(() => {
-        if (!isRunning) {
-            setStats(null);
-            setLoading(false);
-            return;
-        }
-
-        fetchStats();
-        const interval = setInterval(fetchStats, 1500); // Poll every 1.5 seconds
-
-        return () => clearInterval(interval);
-    }, [fetchStats, isRunning]);
+    // Live stats via WebSocket — no polling needed
+    const { stats } = useRouteStats(routeId, isRunning);
+    const [lastUpdated] = useState(null); // kept for layout compat; WS updates are immediate
 
     if (!isRunning) {
         return null;
     }
+
 
     // Get stats - use top-level stats (works for both caller and listener modes)
     // Fall back to first caller if top-level stats are not available
@@ -203,25 +165,12 @@ const RouteStats = ({ routeId, isRunning }) => {
             title={
                 <span>
                     Source Statistics
-                    {loading && <SyncOutlined spin style={{ marginLeft: 8 }} />}
+                    {!stats && <SyncOutlined spin style={{ marginLeft: 8 }} />}
                 </span>
-            }
-            extra={
-                lastUpdated && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                        Last updated: {lastUpdated.toLocaleTimeString()}
-                    </Text>
-                )
             }
             style={{ marginBottom: 24 }}
         >
-            {loading && !stats ? (
-                <div style={{ textAlign: 'center', padding: 24 }}>
-                    <Spin tip="Loading statistics..." />
-                </div>
-            ) : error ? (
-                <Empty description={`Error loading stats: ${error}`} />
-            ) : !stats ? (
+            {!stats ? (
                 <Empty description="No statistics available. Start streaming to see stats." />
             ) : (
                 <>

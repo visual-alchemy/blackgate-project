@@ -36,17 +36,18 @@
 - [x] Display live thumbnail on dashboard with auto-refresh
 - [ ] Optional: WebRTC-based low-latency preview in browser
 
-### 6. Route Health Monitoring
-- [ ] Define health thresholds (packet loss > X%, RTT > Y ms, disconnected)
-- [ ] Add health status indicator to routes table (green/yellow/red dot)
-- [ ] Show health alerts on the dashboard
-- [ ] Auto-detect disconnected callers and update status
+### 6. ~~Route Health Monitoring~~ ✅
+- [x] Define health thresholds (packet loss > 2%/10%, RTT > 150ms/500ms, disconnected)
+- [x] Add health status badge to dashboard preview cards (HealthBadge component)
+- [x] Show health alert banner on the dashboard for warning/critical routes
+- [x] Auto-detect disconnected callers (no signal = disconnected state)
+- [ ] Optional: health dot indicator in routes table
 
-### 7. WebSocket Live Stats
-- [ ] Replace polling-based stats with Phoenix Channels (WebSocket)
-- [ ] Push real-time bitrate, RTT, and packet loss to the frontend
-- [ ] Reduce server load from repeated HTTP polling
-- [ ] Smoother, more responsive stats graphs
+### 7. ~~WebSocket Live Stats~~ ✅
+- [x] Replace polling-based stats with Phoenix Channels (Phoenix.PubSub + UserSocket + StatsChannel)
+- [x] Push real-time bitrate, RTT, and packet loss to the frontend
+- [x] Reduce server load (HTTP polling dropped from 1.5s to 3s fallback; WS handles live updates)
+- [x] Hybrid fallback: HTTP on mount + WebSocket push for reliability
 
 ### 8. Route Groups / Tags
 - [ ] Add `tags` or `group` field to route schema
