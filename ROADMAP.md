@@ -30,10 +30,10 @@
 
 ## 🚀 Medium Effort, High Impact
 
-### 5. Live Video Preview
-- [ ] Decode incoming SRT stream server-side (GStreamer → JPEG/WebP thumbnails)
-- [ ] Serve thumbnail snapshots via API endpoint
-- [ ] Display live thumbnail on route detail page with auto-refresh
+### 5. ~~Live Video Preview~~ ✅
+- [x] Decode incoming SRT stream server-side (GStreamer → JPEG thumbnails)
+- [x] Serve thumbnail snapshots via API endpoint
+- [x] Display live thumbnail on dashboard with auto-refresh
 - [ ] Optional: WebRTC-based low-latency preview in browser
 
 ### 6. Route Health Monitoring
