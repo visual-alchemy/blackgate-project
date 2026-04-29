@@ -1,19 +1,29 @@
-import { Typography, Card, Row, Col, Statistic, Tag, Spin } from 'antd';
-import { ApiOutlined, PlayCircleOutlined, StopOutlined, HomeOutlined, VideoCameraOutlined, DisconnectOutlined } from '@ant-design/icons';
+import { Typography, Card, Row, Col, Statistic, Tag, Spin, Alert } from 'antd';
+import { ApiOutlined, PlayCircleOutlined, StopOutlined, HomeOutlined, VideoCameraOutlined, DisconnectOutlined, WarningOutlined } from '@ant-design/icons';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import React from 'react';
 import { nodesApi, routesApi } from '../utils/api';
 import { useNavigate } from 'react-router-dom';
+import { useRouteStats } from '../hooks/useRouteStats';
+import HealthBadge from '../components/HealthBadge';
 
 const { Title } = Typography;
 
 // --- Route Preview Card ---
-const RoutePreviewCard = ({ route }) => {
+const RoutePreviewCard = ({ route, onHealthChange }) => {
   const navigate = useNavigate();
   const [blobUrl, setBlobUrl] = useState(null);
   const intervalRef = useRef(null);
   const blobUrlRef = useRef(null);
   const isRunning = route.status === 'started';
+
+  // Live health via WebSocket
+  const { health } = useRouteStats(route.id, isRunning);
+
+  // Notify Dashboard of health changes so it can aggregate alerts
+  useEffect(() => {
+    onHealthChange(route.id, health);
+  }, [route.id, health, onHealthChange]);
 
   const fetchThumbnail = useCallback(async () => {
     try {
@@ -42,6 +52,14 @@ const RoutePreviewCard = ({ route }) => {
     };
   }, [isRunning, fetchThumbnail]);
 
+  // Card border color based on health
+  const borderColor = {
+    critical: '#ff4d4f',
+    warning:  '#faad14',
+    healthy:  '#303030',
+    disconnected: '#303030',
+  }[health] ?? '#303030';
+
   return (
     <div
       onClick={() => navigate(`/routes/${route.id}`)}
@@ -50,16 +68,15 @@ const RoutePreviewCard = ({ route }) => {
         borderRadius: '8px',
         overflow: 'hidden',
         background: '#141414',
-        border: '1px solid #303030',
-        transition: 'border-color 0.2s, box-shadow 0.2s',
+        border: `1px solid ${borderColor}`,
+        transition: 'border-color 0.3s, box-shadow 0.3s',
+        boxShadow: health === 'critical' ? `0 0 8px ${borderColor}55` : 'none',
       }}
       onMouseEnter={e => {
-        e.currentTarget.style.borderColor = '#434343';
         e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,0.4)';
       }}
       onMouseLeave={e => {
-        e.currentTarget.style.borderColor = '#303030';
-        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.boxShadow = health === 'critical' ? `0 0 8px ${borderColor}55` : 'none';
       }}
     >
       {/* Thumbnail — 16:9 ratio */}
@@ -90,14 +107,18 @@ const RoutePreviewCard = ({ route }) => {
           </div>
         )}
 
-        {/* Live / Stopped badge */}
+        {/* Health badge top-left, LIVE/Stopped top-right */}
         <div style={{ position: 'absolute', top: '8px', left: '8px' }}>
-          <Tag
-            color={isRunning ? 'green' : 'default'}
-            style={{ margin: 0, fontSize: '10px', lineHeight: '16px', padding: '0 6px' }}
-          >
-            {isRunning ? '● LIVE' : '○ Stopped'}
-          </Tag>
+          {isRunning && health ? (
+            <HealthBadge health={health} compact />
+          ) : (
+            <Tag
+              color={isRunning ? 'green' : 'default'}
+              style={{ margin: 0, fontSize: '10px', lineHeight: '16px', padding: '0 6px' }}
+            >
+              {isRunning ? '● LIVE' : '○ Stopped'}
+            </Tag>
+          )}
         </div>
       </div>
 
@@ -119,6 +140,7 @@ const Dashboard = () => {
   const [nodeStats, setNodeStats] = useState({ cpu: null, ram: null, swap: null, la: 'N/A / N/A / N/A' });
   const [routeStats, setRouteStats] = useState({ total: 0, active: 0, stopped: 0, routes: [] });
   const [loading, setLoading] = useState(true);
+  const [healthMap, setHealthMap] = useState({});
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -161,6 +183,18 @@ const Dashboard = () => {
     return () => clearInterval(id);
   }, []);
 
+  // Callback for cards to report health changes
+  const handleHealthChange = useCallback((routeId, health) => {
+    setHealthMap(prev => {
+      if (prev[routeId] === health) return prev;
+      return { ...prev, [routeId]: health };
+    });
+  }, []);
+
+  // Aggregate critical/warning routes for the alert banner
+  const criticalRoutes = routeStats.routes.filter(r => healthMap[r.id] === 'critical');
+  const warningRoutes = routeStats.routes.filter(r => healthMap[r.id] === 'warning');
+
   const getProgressColor = (value) => {
     if (value === null || value === undefined) return undefined;
     if (value > 80) return '#ff4d4f';
@@ -171,6 +205,33 @@ const Dashboard = () => {
   return (
     <div>
       <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Dashboard</Title>
+
+      {/* Health alert banners */}
+      {criticalRoutes.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          icon={<WarningOutlined />}
+          style={{ marginTop: '16px' }}
+          message={
+            criticalRoutes.length === 1
+              ? `Critical: "${criticalRoutes[0].name}" has severe packet loss or very high RTT.`
+              : `Critical: ${criticalRoutes.length} routes have severely degraded metrics.`
+          }
+        />
+      )}
+      {warningRoutes.length > 0 && criticalRoutes.length === 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: '16px' }}
+          message={
+            warningRoutes.length === 1
+              ? `Warning: "${warningRoutes[0].name}" has slightly degraded metrics.`
+              : `Warning: ${warningRoutes.length} routes have slightly degraded metrics.`
+          }
+        />
+      )}
 
       {/* Route Statistics */}
       <Row gutter={[16, 16]} style={{ marginTop: '16px' }}>
@@ -250,7 +311,11 @@ const Dashboard = () => {
                 gap: '16px',
               }}>
                 {routeStats.routes.map(route => (
-                  <RoutePreviewCard key={route.id} route={route} />
+                  <RoutePreviewCard
+                    key={route.id}
+                    route={route}
+                    onHealthChange={handleHealthChange}
+                  />
                 ))}
               </div>
             )}
