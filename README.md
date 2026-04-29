@@ -4,32 +4,32 @@
 
 **High-performance video routing with secure, reliable transport**
 
-> 🚀 **Alpha**: Core features functional. Actively improving based on real-world usage.
+> **Alpha**: Core features functional. Actively improving based on real-world usage.
 
 ---
 
-## ✨ Features
+## Features
 
 ### Core Capabilities
 
 | Category | Features |
 |----------|----------|
-| **🔌 SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
-| **📡 UDP Support** | Source and Destination for local network streaming |
-| **📊 Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
-| **📈 Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
-| **🟢 Connection Status** | Live green/red indicator on the Routes table showing real-time SRT connection health |
-| **🖥️ Dashboard** | System metrics (CPU, RAM, SWAP, Load) with auto-refresh |
-| **🛣️ Route Management** | Create, edit, clone, start, stop, delete routes with multiple destinations |
-| **🔄 Auto-Restart** | Editing a running route automatically restarts the pipeline — no manual stop/start needed |
-| **📦 Bulk Operations** | Select and start/stop multiple routes at once |
-| **🔍 Search & Filter** | Filter routes by name, status, or schema type |
-| **🔐 Credential Management** | Change admin username and password from the Settings UI |
-| **🔧 REST API** | Full programmatic control for automation |
-| **🐳 Docker Ready** | One-command deployment with backup/restore |
-| **⚡ High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
+| **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
+| **UDP Support** | Source and Destination for local network streaming |
+| **Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
+| **Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
+| **Connection Status** | Live indicator on the Routes table showing real-time SRT connection health |
+| **Dashboard** | System metrics (CPU, RAM, SWAP, Load) with auto-refresh and live video preview |
+| **Route Management** | Create, edit, clone, start, stop, delete routes with multiple destinations |
+| **Auto-Restart** | Editing a running route automatically restarts the pipeline — no manual stop/start needed |
+| **Bulk Operations** | Select and start/stop multiple routes at once |
+| **Search & Filter** | Filter routes by name, status, or schema type |
+| **Credential Management** | Change admin username and password from the Settings UI |
+| **REST API** | Full programmatic control for automation |
+| **Docker Ready** | One-command deployment with backup/restore |
+| **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
 
-### 📈 Real-time Statistics
+### Real-time Statistics
 
 #### Source Statistics
 Monitor your input streams with live metrics:
@@ -51,31 +51,31 @@ Track each SRT output destination:
 
 #### Connection Status Indicator
 The Routes table shows a live connection status badge for each route:
-- 🟢 **Connected** — Stream is actively transmitting/receiving
-- 🔴 **Waiting** — Process is running but no active SRT connection
-- ⚪ **Off** — Route process is stopped
+- **Connected** — Stream is actively transmitting/receiving
+- **Waiting** — Process is running but no active SRT connection
+- **Off** — Route process is stopped
 
-### 🚧 Roadmap
+### Roadmap
 
-- [x] ~~SRT Destination Statistics~~ ✅
-- [x] ~~Real-time Connection Status~~ ✅
-- [x] ~~Bulk Route Operations~~ ✅
-- [x] ~~Route Cloning~~ ✅
-- [x] ~~Credential Management~~ ✅
+- [x] ~~SRT Destination Statistics~~
+- [x] ~~Real-time Connection Status~~
+- [x] ~~Bulk Route Operations~~
+- [x] ~~Route Cloning~~
+- [x] ~~Credential Management~~
 - [ ] Cluster Mode for high availability
 - [ ] Dynamic Routing rules
 - [ ] RTSP / RTMP / HLS / WebRTC support
 - [ ] Stream health monitoring & alerts
 
-See [[ROADMAP]] for the full roadmap.
+See [ROADMAP](./ROADMAP.md) for the full roadmap.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-### 🌐 Network Topology
+### Network Topology
 
-#### 📥 SRT Listener Source Workflow
+#### SRT Listener Source Workflow
 
 ```mermaid
 graph TB
@@ -125,7 +125,7 @@ graph TB
     class F streaming
 ```
 
-#### 📤 SRT Caller Source Workflow
+#### SRT Caller Source Workflow
 
 ```mermaid
 graph TB
@@ -173,7 +173,7 @@ graph TB
     class E streaming
 ```
 
-### 🛠️ Technology Stack
+### Technology Stack
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
@@ -187,7 +187,7 @@ graph TB
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### One-Command Installation
 
@@ -203,10 +203,10 @@ make install
 make dev-all
 ```
 
-🌐 **Access:** http://localhost:5173  
-🔐 **Login:** `admin` / `password123`
+Access: http://localhost:5173  
+Default credentials: `admin` / `password123`
 
-### Manual Installation (if make install fails)
+### Manual Installation
 
 #### Ubuntu/Debian
 
@@ -239,7 +239,7 @@ brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ```bash
 # Build and run
@@ -247,11 +247,11 @@ docker compose build
 docker compose up -d
 ```
 
-🌐 **Access:** http://localhost:4000
+Access: http://localhost:4000
 
 ---
 
-## 🚢 Production Deployment
+## Production Deployment
 
 ### Option 1: Docker (Recommended)
 
@@ -316,7 +316,7 @@ make status    # Check if running
 
 ---
 
-## 🔌 API
+## API
 
 ### Authentication
 
@@ -341,6 +341,7 @@ All other endpoints require `Authorization: Bearer <token>` header.
 | `GET` | `/api/routes/:id/restart` | Restart a route |
 | `GET` | `/api/routes/:id/stats` | Get source statistics |
 | `GET` | `/api/routes/:id/destination-stats` | Get destination statistics |
+| `GET` | `/api/routes/:id/preview` | Get live JPEG thumbnail |
 | `POST` | `/api/routes/bulk-action` | Bulk start/stop routes |
 | `POST` | `/api/routes/:id/clone` | Clone a route with destinations |
 
@@ -376,7 +377,7 @@ All other endpoints require `Authorization: Bearer <token>` header.
 
 ---
 
-## ⚙️ Environment Variables
+## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -387,21 +388,17 @@ All other endpoints require `Authorization: Bearer <token>` header.
 
 ---
 
-## 📄 License
+## License
 
-Blackgate is proprietary software developed by [Visual Alchemy](https://github.com/visual-alchemy). All rights reserved. A valid license key is required for production use. See [[docs/USER_GUIDE]] for license activation details.
+Blackgate is proprietary software developed by [Visual Alchemy](https://github.com/visual-alchemy). All rights reserved. A valid license key is required for production use.
 
 ---
 
 ## Related Docs
 
-- [[PRODUCT_KNOWLEDGE]] — Product overview & value proposition
-- [[ROADMAP]] — Development roadmap & feature backlog
-- [[CHANGELOG]] — Version history
-- [[docs/USER_GUIDE]] — End-user guide
-- [[docs/TROUBLESHOOTING]] — Troubleshooting guide
-- [[docs/BLACKGATE_TECHNICAL_ANALYSIS]] — Technical deep-dive
+- [ROADMAP](./ROADMAP.md) — Development roadmap & feature backlog
+- [CHANGELOG](./CHANGELOG.md) — Version history
 
 ---
 
-Made with ❤️ by [Visual Alchemy](https://github.com/visual-alchemy)
+[Visual Alchemy](https://github.com/visual-alchemy)
