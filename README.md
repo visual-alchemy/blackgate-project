@@ -1,30 +1,35 @@
-# Blackgate — Open-source SRT Video Gateway
+# Blackgate — SRT Video Gateway
 
 ![Blackgate Logo](./blackgate-logo.png)
 
 **High-performance video routing with secure, reliable transport**
 
-> 🚀 **Alpha**: Core features functional. Actively improving based on real-world usage.
+> **Alpha**: Core features functional. Actively improving based on real-world usage.
 
 ---
 
-## ✨ Features
+## Features
 
 ### Core Capabilities
 
 | Category | Features |
 |----------|----------|
-| **🔌 SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
-| **📡 UDP Support** | Source and Destination for local network streaming |
-| **📊 Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
-| **📈 Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
-| **🖥️ Dashboard** | System metrics (CPU, RAM, Load) with auto-refresh |
-| **🛣️ Route Management** | Create, edit, start, stop, delete routes with multiple destinations |
-| **🔧 REST API** | Full programmatic control for automation |
-| **🐳 Docker Ready** | One-command deployment with backup/restore |
-| **⚡ High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
+| **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
+| **UDP Support** | Source and Destination for local network streaming |
+| **Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
+| **Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
+| **Connection Status** | Live indicator on the Routes table showing real-time SRT connection health |
+| **Dashboard** | System metrics (CPU, RAM, SWAP, Load) with auto-refresh and live video preview |
+| **Route Management** | Create, edit, clone, start, stop, delete routes with multiple destinations |
+| **Auto-Restart** | Editing a running route automatically restarts the pipeline — no manual stop/start needed |
+| **Bulk Operations** | Select and start/stop multiple routes at once |
+| **Search & Filter** | Filter routes by name, status, or schema type |
+| **Credential Management** | Change admin username and password from the Settings UI |
+| **REST API** | Full programmatic control for automation |
+| **Docker Ready** | One-command deployment with backup/restore |
+| **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
 
-### 📈 Real-time Statistics
+### Real-time Statistics
 
 #### Source Statistics
 Monitor your input streams with live metrics:
@@ -32,6 +37,8 @@ Monitor your input streams with live metrics:
 - **RTT** — Round-trip time for connection quality
 - **Packet Loss** — Percentage of lost packets
 - **Bandwidth** — Available connection bandwidth
+- **Resolution** — Detected video resolution (e.g. 1920×1080, 3840×2160)
+- **Framerate** — Exact or inferred FPS with scan type (progressive/interlaced)
 - **Connected Callers** — Active source connections (listener mode)
 
 #### Destination Statistics
@@ -42,23 +49,33 @@ Track each SRT output destination:
 - **Connected Clients** — Clients pulling streams (listener mode)
 - **Per-client details** — IP address, bitrate, RTT, packets sent
 
-### 🚧 Roadmap
+#### Connection Status Indicator
+The Routes table shows a live connection status badge for each route:
+- **Connected** — Stream is actively transmitting/receiving
+- **Waiting** — Process is running but no active SRT connection
+- **Off** — Route process is stopped
 
-- [x] ~~SRT Destination Statistics~~ ✅
+### Roadmap
+
+- [x] ~~SRT Destination Statistics~~
+- [x] ~~Real-time Connection Status~~
+- [x] ~~Bulk Route Operations~~
+- [x] ~~Route Cloning~~
+- [x] ~~Credential Management~~
 - [ ] Cluster Mode for high availability
 - [ ] Dynamic Routing rules
 - [ ] RTSP / RTMP / HLS / WebRTC support
 - [ ] Stream health monitoring & alerts
 
-See [[ROADMAP]] for the full roadmap.
+See [ROADMAP](./ROADMAP.md) for the full roadmap.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-### 🌐 Network Topology
+### Network Topology
 
-#### 📥 SRT Listener Source Workflow
+#### SRT Listener Source Workflow
 
 ```mermaid
 graph TB
@@ -108,7 +125,7 @@ graph TB
     class F streaming
 ```
 
-#### 📤 SRT Caller Source Workflow
+#### SRT Caller Source Workflow
 
 ```mermaid
 graph TB
@@ -156,7 +173,7 @@ graph TB
     class E streaming
 ```
 
-### 🛠️ Technology Stack
+### Technology Stack
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
@@ -170,7 +187,7 @@ graph TB
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### One-Command Installation
 
@@ -186,10 +203,10 @@ make install
 make dev-all
 ```
 
-🌐 **Access:** http://localhost:5173  
-🔐 **Login:** `admin` / `password123`
+Access: http://localhost:5173  
+Default credentials: `admin` / `password123`
 
-### Manual Installation (if make install fails)
+### Manual Installation
 
 #### Ubuntu/Debian
 
@@ -222,7 +239,7 @@ brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ```bash
 # Build and run
@@ -230,11 +247,11 @@ docker compose build
 docker compose up -d
 ```
 
-🌐 **Access:** http://localhost:4000
+Access: http://localhost:4000
 
 ---
 
-## 🚢 Production Deployment
+## Production Deployment
 
 ### Option 1: Docker (Recommended)
 
@@ -299,21 +316,34 @@ make status    # Check if running
 
 ---
 
-## 🔌 API
+## API
+
+### Authentication
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/login` | Login and receive a Bearer token |
+| `PUT` | `/api/auth/credentials` | Update admin username/password |
+
+All other endpoints require `Authorization: Bearer <token>` header.
 
 ### Routes
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/routes` | List all routes |
+| `GET` | `/api/routes` | List all routes (includes `connected` status) |
 | `POST` | `/api/routes` | Create a route |
 | `GET` | `/api/routes/:id` | Get route details |
 | `PUT` | `/api/routes/:id` | Update a route |
 | `DELETE` | `/api/routes/:id` | Delete a route |
 | `GET` | `/api/routes/:id/start` | Start a route |
 | `GET` | `/api/routes/:id/stop` | Stop a route |
+| `GET` | `/api/routes/:id/restart` | Restart a route |
 | `GET` | `/api/routes/:id/stats` | Get source statistics |
 | `GET` | `/api/routes/:id/destination-stats` | Get destination statistics |
+| `GET` | `/api/routes/:id/preview` | Get live JPEG thumbnail |
+| `POST` | `/api/routes/bulk-action` | Bulk start/stop routes |
+| `POST` | `/api/routes/:id/clone` | Clone a route with destinations |
 
 ### Destinations
 
@@ -324,9 +354,30 @@ make status    # Check if running
 | `PUT` | `/api/routes/:id/destinations/:dest_id` | Update destination |
 | `DELETE` | `/api/routes/:id/destinations/:dest_id` | Remove destination |
 
+### System
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/system/pipelines` | List running GStreamer pipelines |
+| `GET` | `/api/system/pipelines/detailed` | Detailed pipeline information |
+| `POST` | `/api/system/pipelines/:pid/kill` | Kill an orphaned pipeline |
+| `GET` | `/api/nodes` | List cluster nodes |
+| `GET` | `/api/nodes/:id` | Node details |
+| `GET` | `/api/network/interfaces` | List network interfaces |
+
+### Backup & Restore
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/backup/export` | Export routes as JSON |
+| `GET` | `/api/backup/create-download-link` | Create routes download link |
+| `GET` | `/api/backup/create-backup-download-link` | Create full backup download link |
+| `POST` | `/api/backup/import-routes` | Import routes from JSON |
+| `POST` | `/api/restore` | Restore from full backup |
+
 ---
 
-## ⚙️ Environment Variables
+## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -337,21 +388,17 @@ make status    # Check if running
 
 ---
 
-## 📄 License
+## License
 
-MIT License — feel free to use in personal and commercial projects.
+Blackgate is proprietary software developed by [Visual Alchemy](https://github.com/visual-alchemy). All rights reserved. A valid license key is required for production use.
 
 ---
 
 ## Related Docs
 
-- [[PRODUCT_KNOWLEDGE]] — Product overview & value proposition
-- [[ROADMAP]] — Development roadmap & feature backlog
-- [[CHANGELOG]] — Version history
-- [[docs/USER_GUIDE]] — End-user guide
-- [[docs/TROUBLESHOOTING]] — Troubleshooting guide
-- [[docs/BLACKGATE_TECHNICAL_ANALYSIS]] — Technical deep-dive
+- [ROADMAP](./ROADMAP.md) — Development roadmap & feature backlog
+- [CHANGELOG](./CHANGELOG.md) — Version history
 
 ---
 
-Made with ❤️ by [Visual Alchemy](https://github.com/visual-alchemy)
+[Visual Alchemy](https://github.com/visual-alchemy)
