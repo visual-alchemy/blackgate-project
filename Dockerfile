@@ -30,6 +30,7 @@ RUN apt-get update -y \
     libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
     libcjson-dev \
     libsrt-openssl-dev \
     libcmocka-dev \
@@ -106,6 +107,7 @@ RUN apt-get update -y && \
     curl \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
     libcjson1 \
     libsrt1.5-openssl \
     libgstreamer1.0-0 \

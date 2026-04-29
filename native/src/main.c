@@ -57,7 +57,7 @@ int main(int argc, char* argv[])
 
     gst_init(NULL, NULL);
 
-    GstElement* pipeline = create_pipeline(json);
+    GstElement* pipeline = create_pipeline(json, argv[1]);
     if (!pipeline) {
         cJSON_Delete(json);
         return 1;
