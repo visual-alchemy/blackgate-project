@@ -21,3 +21,13 @@ services:
     volumes:
       - ./data/khepri:/app/khepri
       - ./data/backup:/app/backup
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: blackgate_mediamtx
+    restart: unless-stopped
+    # host networking so mediamtx can reach blackgate at localhost:4000 for auth webhook
+    # and GStreamer can pull rtmpsrc from localhost:1935
+    network_mode: host
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro

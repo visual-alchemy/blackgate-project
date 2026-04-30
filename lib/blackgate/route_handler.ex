@@ -234,6 +234,29 @@ defmodule Blackgate.RouteHandler do
     ])
   end
 
+  def sink_from_record(%{"schema" => "RTMP_PUSH", "schema_options" => opts}) do
+    url = Map.get(opts, "url", "")
+
+    if url == "" do
+      {:error, :missing_rtmp_url}
+    else
+      {:ok, %{"type" => "rtmpsink", "location" => url}}
+    end
+  end
+
+  def sink_from_record(%{"schema" => "HLS_RELAY", "schema_options" => opts}) do
+    # Push to MediaMTX local RTMP so it auto-generates HLS on :8888
+    route_id = Map.get(opts, "route_id", "")
+    relay_path = Map.get(opts, "relay_path", route_id)
+
+    if relay_path == "" do
+      {:error, :missing_relay_path}
+    else
+      url = "rtmp://127.0.0.1:1935/#{relay_path}"
+      {:ok, %{"type" => "rtmpsink", "location" => url}}
+    end
+  end
+
   def sink_from_record(_), do: {:error, :invalid_destination}
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
@@ -258,6 +281,19 @@ defmodule Blackgate.RouteHandler do
       |> Enum.into(%{})
 
     {:ok, Map.merge(props, remaining_props)}
+  end
+
+  def source_from_record(%{"schema" => "RTMP", "schema_options" => opts}) do
+    stream_key = Map.get(opts, "stream_key", "")
+    stream_path = Map.get(opts, "stream_path", "live")
+
+    if stream_key == "" do
+      {:error, :missing_stream_key}
+    else
+      # Pull the RTMP stream from local MediaMTX after it has been authorised
+      url = "rtmp://127.0.0.1:1935/#{stream_path}/#{stream_key} live=1"
+      {:ok, %{"type" => "rtmpsrc", "location" => url}}
+    end
   end
 
   def source_from_record(%{"schema" => "UDP", "schema_options" => opts}) do

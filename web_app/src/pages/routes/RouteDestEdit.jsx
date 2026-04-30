@@ -5,7 +5,7 @@ import {
     Switch, Select, Button,
     Row, Col, message, Typography
 } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined, CopyOutlined, GlobalOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
@@ -211,6 +211,8 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
+                                            <Radio.Button value="RTMP_PUSH">RTMP Push</Radio.Button>
+                                            <Radio.Button value="HLS_RELAY">HLS Relay</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -375,6 +377,71 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         </Form.Item>
                                                     </Card>
                                                 </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    {/* RTMP_PUSH specific options */}
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'RTMP_PUSH' && (
+                                                <>
+                                                    <Form.Item
+                                                        label="Destination URL"
+                                                        name={['schema_options', 'url']}
+                                                        required
+                                                        extra="Full RTMP URL including stream key, e.g. rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx-xxxx"
+                                                        rules={[{ required: true, message: 'Destination URL is required' }]}
+                                                    >
+                                                        <Input
+                                                            prefix={<GlobalOutlined style={{ color: '#888' }} />}
+                                                            placeholder="rtmp://a.rtmp.youtube.com/live2/STREAM_KEY"
+                                                            style={{ fontFamily: 'monospace' }}
+                                                        />
+                                                    </Form.Item>
+                                                </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    {/* HLS_RELAY specific options */}
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'HLS_RELAY' && (
+                                                <Card
+                                                    size="small"
+                                                    style={{ background: '#141414', border: '1px solid #303030', marginBottom: '16px' }}
+                                                >
+                                                    <Space align="start">
+                                                        <InfoCircleOutlined style={{ color: '#1890ff', fontSize: '16px', marginTop: '3px' }} />
+                                                        <div>
+                                                            <Typography.Text>
+                                                                HLS Relay pushes this route&apos;s stream to MediaMTX, which automatically generates a public HLS endpoint.
+                                                            </Typography.Text>
+                                                            <br />
+                                                            <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                                                                The HLS URL will be available at{' '}
+                                                                <code style={{ background: '#222', padding: '2px 6px', borderRadius: '4px' }}>
+                                                                    http://[server]:8888/[route-id]/index.m3u8
+                                                                </code>{' '}
+                                                                once the route is started and a source is connected.
+                                                            </Typography.Text>
+                                                            <br />
+                                                            <Form.Item
+                                                                label="Relay Path (optional)"
+                                                                name={['schema_options', 'relay_path']}
+                                                                style={{ marginTop: '12px', marginBottom: '0' }}
+                                                                extra="Custom path segment for HLS URL. Leave blank to use the route ID."
+                                                            >
+                                                                <Input
+                                                                    placeholder="Leave blank to use route ID"
+                                                                    style={{ maxWidth: '300px', fontFamily: 'monospace' }}
+                                                                    prefix={<CopyOutlined style={{ color: '#888' }} />}
+                                                                />
+                                                            </Form.Item>
+                                                        </div>
+                                                    </Space>
+                                                </Card>
                                             )
                                         }
                                     </Form.Item>

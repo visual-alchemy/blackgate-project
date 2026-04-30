@@ -1,0 +1,40 @@
+###############################################
+# Blackgate MediaMTX Configuration
+# RTMP ingest server with Blackgate auth webhook
+
+# Auth: delegate all publish auth to Blackgate API
+authMethod: http
+authHTTPAddress: "http://127.0.0.1:4000/api/rtmp/auth"
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+  - action: read     # HLS/WebRTC playback is public (monitoring only)
+  - action: playback
+
+# MediaMTX management API (internal, not exposed publicly)
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# RTMP ingest
+rtmp: yes
+rtmpAddress: :1935
+
+# HLS playback (public, monitoring/preview)
+hls: yes
+hlsAddress: :8888
+hlsAllowOrigin: "*"
+hlsSegmentDuration: 2s
+hlsPartDuration: 200ms
+
+# WebRTC (bonus, available for free since mediamtx supports it)
+webrtc: yes
+webrtcAddress: :8889
+
+# RTSP (disabled, not needed)
+rtsp: no
+
+###############################################
+# Path settings
+paths:
+  all_others:

@@ -1,5 +1,5 @@
-import { Form, Input, Radio, Card, Space, InputNumber, Switch, Select, Button, Row, Col, message, Typography } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Form, Input, Radio, Card, Space, InputNumber, Switch, Select, Button, Row, Col, message, Typography, Tooltip } from 'antd';
+import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined, CopyOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
@@ -265,6 +265,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     <Radio.Group buttonStyle="solid">
                       <Radio.Button value="SRT">SRT</Radio.Button>
                       <Radio.Button value="UDP">UDP</Radio.Button>
+                      <Radio.Button value="RTMP">RTMP</Radio.Button>
                     </Radio.Group>
                   </Form.Item>
 
@@ -448,6 +449,93 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               />
                             </Form.Item>
                           </Card>
+                        </>
+                      )
+                    }
+                  </Form.Item>
+
+                  {/* RTMP specific options */}
+                  <Form.Item noStyle dependencies={['schema']}>
+                    {({ getFieldValue }) =>
+                      getFieldValue('schema') === 'RTMP' && (
+                        <>
+                          <Form.Item
+                            label="Stream Key"
+                            name={['schema_options', 'stream_key']}
+                            required
+                            extra="Clients push to this key via RTMP. Must be unique across all RTMP routes."
+                            rules={[{ required: true, message: 'Stream key is required' }]}
+                          >
+                            <Input
+                              placeholder="e.g. my-stream-key"
+                              style={{ maxWidth: '400px' }}
+                              suffix={
+                                <Tooltip title="Copy stream key">
+                                  <CopyOutlined
+                                    style={{ cursor: 'pointer', color: '#888' }}
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(getFieldValue(['schema_options', 'stream_key']) || '');
+                                      message.success('Stream key copied');
+                                    }}
+                                  />
+                                </Tooltip>
+                              }
+                            />
+                          </Form.Item>
+
+                          <Form.Item
+                            label="Stream Path"
+                            name={['schema_options', 'stream_path']}
+                            extra="The RTMP application path. Default: live — resulting in rtmp://server:1935/live/STREAM_KEY"
+                          >
+                            <Input
+                              placeholder="Default: live"
+                              style={{ maxWidth: '200px' }}
+                            />
+                          </Form.Item>
+
+                          <Form.Item noStyle dependencies={[['schema_options', 'stream_key'], ['schema_options', 'stream_path']]}>
+                            {({ getFieldValue: gfv }) => {
+                              const key = gfv(['schema_options', 'stream_key']) || '<stream-key>';
+                              const path = gfv(['schema_options', 'stream_path']) || 'live';
+                              const ingestUrl = `rtmp://[server]:1935/${path}/${key}`;
+                              const hlsUrl = `http://[server]:8888/${path}/${key}/index.m3u8`;
+                              return (
+                                <Card
+                                  size="small"
+                                  style={{ background: '#141414', border: '1px solid #303030', marginBottom: '16px' }}
+                                  title={<Typography.Text type="secondary" style={{ fontSize: '13px' }}>Connection Info</Typography.Text>}
+                                >
+                                  <Form.Item label="Ingest URL" style={{ marginBottom: '8px' }}>
+                                    <Input
+                                      readOnly
+                                      value={ingestUrl}
+                                      style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                                      suffix={
+                                        <CopyOutlined
+                                          style={{ cursor: 'pointer', color: '#888' }}
+                                          onClick={() => { navigator.clipboard.writeText(ingestUrl); message.success('Ingest URL copied'); }}
+                                        />
+                                      }
+                                    />
+                                  </Form.Item>
+                                  <Form.Item label="HLS Preview URL" style={{ marginBottom: '0' }}>
+                                    <Input
+                                      readOnly
+                                      value={hlsUrl}
+                                      style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                                      suffix={
+                                        <CopyOutlined
+                                          style={{ cursor: 'pointer', color: '#888' }}
+                                          onClick={() => { navigator.clipboard.writeText(hlsUrl); message.success('HLS URL copied'); }}
+                                        />
+                                      }
+                                    />
+                                  </Form.Item>
+                                </Card>
+                              );
+                            }}
+                          </Form.Item>
                         </>
                       )
                     }

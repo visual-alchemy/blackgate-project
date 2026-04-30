@@ -1108,6 +1108,18 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
+    // RTMP source: location is set via property, not URI
+    // Also skip do-timestamp for rtmpsrc — RTMP carries its own timestamps
+    if (g_strcmp0(source_type->valuestring, "rtmpsrc") == 0) {
+        cJSON *location = cJSON_GetObjectItem(source_obj, "location");
+        if (location && cJSON_IsString(location)) {
+            g_object_set(source, "location", location->valuestring, NULL);
+            g_print("Set RTMP source location=%s\n", location->valuestring);
+        }
+        // Override do-timestamp for RTMP (already set to FALSE above, just log)
+        g_print("RTMP source: using stream timestamps (do-timestamp=FALSE)\n");
+    }
+
     // ULTRA-SIMPLE PIPELINE: source -> tee (no queues, no processing)
     gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
     if (!gst_element_link(source, tee)) {
@@ -1221,6 +1233,18 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             sink_count++;
             g_print("Stored SRT sink element at index %d for stats collection\n", sink_index);
         }
+    }
+
+    if (strcmp(sink_type->valuestring, "rtmpsink") == 0) {
+        // Set location from config (handles both RTMP_PUSH and HLS_RELAY destinations)
+        cJSON *location = cJSON_GetObjectItem(sink_config, "location");
+        if (location && cJSON_IsString(location)) {
+            g_object_set(sink_element, "location", location->valuestring, NULL);
+            g_print("Set RTMP sink location=%s\n", location->valuestring);
+        }
+        g_object_set(sink_element, "sync", FALSE, NULL);
+        g_object_set(sink_element, "async", FALSE, NULL);
+        g_print("Configured RTMP sink with sync=FALSE, async=FALSE\n");
     }
 
     gst_bin_add_many(GST_BIN(pipeline), queue, sink_element, NULL);

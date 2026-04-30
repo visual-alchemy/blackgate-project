@@ -27,6 +27,9 @@ defmodule BlackgateWeb.Router do
 
     post "/login", AuthController, :login
     put "/auth/credentials", AuthController, :update_credentials
+
+    # MediaMTX webhook — no Bearer token, must be in public scope
+    post "/rtmp/auth", RtmpController, :auth
   end
 
   scope "/api", BlackgateWeb do
