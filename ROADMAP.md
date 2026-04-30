@@ -82,3 +82,28 @@
 - [ ] Serve Swagger UI at `/api/docs`
 - [ ] Document all endpoints with request/response schemas
 - [ ] Enable third-party integrations
+
+### 13. RTMP Protocol Support (In Progress 🔨)
+- [x] Add MediaMTX as RTMP ingest server (docker-compose, auth webhook)
+- [x] RTMP source: accept push with user-defined stream key per route
+- [x] RTMP destinations: `RTMP_PUSH` (push to YouTube/Twitch/custom RTMP)
+- [x] HLS relay destination: auto-generate public HLS via MediaMTX (`:8888`)
+- [x] Cross-protocol routing: SRT/UDP → RTMP, RTMP → SRT/UDP (GStreamer passthrough remux)
+- [ ] HLS preview player in dashboard for RTMP source routes (hls.js)
+- [ ] Stream key regeneration UI
+- [ ] RTMP source health monitoring (MediaMTX API integration)
+
+### 14. SDI Output via Blackmagic DeckLink
+> **Hardware:** DeckLink Quad 2 (4x SDI in/out, PCIe) — requires decode step (not passthrough)
+
+- [ ] Bundle Blackmagic Desktop Video SDK in Docker build (manual download required)
+- [ ] Compile `gst-plugins-bad` with `decklink` plugin enabled in Dockerfile
+- [ ] Docker device passthrough (`/dev/blackmagic*` or `--privileged`)
+- [ ] New `SDI` destination schema in `route_handler.ex`
+  - Options: `device_number` (0–3), `video_mode` (1080p25/1080i50/etc.), `decoder`
+- [ ] C pipeline: GstBin sub-pipeline via `gst_parse_bin_from_description`
+  - `tsdemux → h264parse → [hw decoder] → videoconvert → videorate → decklinkvideosink`
+  - `tsdemux → aacparse → avdec_aac → audioconvert → decklinkaudiosink`
+- [ ] Hardware decode support: NVDEC (`nvh264dec`), VA-API (`vaapih264dec`) to minimize CPU
+- [ ] SDI destination UI: device selector (port 0–3), video mode dropdown
+- [ ] Test with DeckLink Quad 2 (4 simultaneous SDI outputs from 4 routes)
