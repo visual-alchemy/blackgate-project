@@ -109,10 +109,8 @@ COPY config/runtime.exs config/
 
 # Compile the Elixir application and build the release in a single layer
 # Explicitly remove any existing release dir instead of using --overwrite,
-# which triggers a chmod bug on Docker Desktop (Mac) overlay FS.
 RUN mix compile \
-    && rm -rf _build/prod/rel \
-    && mix release
+    && mix release --overwrite
 
 # Start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
