@@ -18,6 +18,45 @@ static void set_element_properties(GstElement *element, cJSON *config, const cha
 static void set_srt_mode_property(GstElement *element, const char *mode_str, const char *element_desc);
 static void collect_sink_stats(void);
 
+// SDI pad-added callback context
+typedef struct {
+    GstElement *vqueue;  // head of video decode chain
+    GstElement *aqueue;  // head of audio decode chain
+} SdiPadData;
+
+static void on_sdi_pad_added(GstElement *src, GstPad *new_pad, gpointer user_data)
+{
+    (void)src;
+    SdiPadData *d = (SdiPadData *)user_data;
+
+    GstCaps *caps = gst_pad_get_current_caps(new_pad);
+    if (!caps) caps = gst_pad_query_caps(new_pad, NULL);
+    if (!caps) return;
+
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+    const gchar *name = gst_structure_get_name(s);
+
+    GstPad *sink_pad = NULL;
+    if (g_str_has_prefix(name, "video/")) {
+        sink_pad = gst_element_get_static_pad(d->vqueue, "sink");
+    } else if (g_str_has_prefix(name, "audio/")) {
+        sink_pad = gst_element_get_static_pad(d->aqueue, "sink");
+    }
+
+    if (sink_pad) {
+        if (!gst_pad_is_linked(sink_pad)) {
+            GstPadLinkReturn ret = gst_pad_link(new_pad, sink_pad);
+            if (ret != GST_PAD_LINK_OK) {
+                g_printerr("SDI: pad link failed for caps '%s': %d\n", name, ret);
+            } else {
+                g_print("SDI: linked %s pad\n", name);
+            }
+        }
+        gst_object_unref(sink_pad);
+    }
+    gst_caps_unref(caps);
+}
+
 static pthread_t stats_thread;
 static GstElement *source_element = NULL;
 static gboolean running = TRUE;
@@ -1186,64 +1225,108 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
     }
 
     // =========================================================================
-    // SDI Output via DeckLink (requires decode-to-raw pipeline)
+    // SDI Output via DeckLink (decode MPEG-TS → raw video/audio → SDI port)
     // =========================================================================
     if (strcmp(sink_type->valuestring, "sdisink") == 0) {
         cJSON *device_number_json = cJSON_GetObjectItem(sink_config, "device-number");
-        cJSON *video_mode_json = cJSON_GetObjectItem(sink_config, "video-mode");
+        cJSON *video_mode_json    = cJSON_GetObjectItem(sink_config, "video-mode");
 
-        int device_number = device_number_json && cJSON_IsNumber(device_number_json)
-                                ? device_number_json->valueint : 0;
-        int video_mode = video_mode_json && cJSON_IsNumber(video_mode_json)
-                             ? video_mode_json->valueint : 0;
+        int device_number = (device_number_json && cJSON_IsNumber(device_number_json))
+                            ? device_number_json->valueint : 0;
+        int video_mode    = (video_mode_json    && cJSON_IsNumber(video_mode_json))
+                            ? video_mode_json->valueint : 0;
 
-        // Build the SDI decode-and-output pipeline description
-        // Pipeline: tsdemux → video: h264parse → avdec_h264 → videoconvert → decklinkvideosink
-        //                   → audio: aacparse  → avdec_aac  → audioconvert → decklinkaudiosink
-        char pipeline_desc[2048];
-        snprintf(pipeline_desc, sizeof(pipeline_desc),
-            "tsdemux name=sdi_demux_%d "
-            "sdi_demux_%d. ! queue ! h264parse ! avdec_h264 ! videoconvert ! videoscale ! "
-            "decklinkvideosink device-number=%d mode=%d sync=true "
-            "sdi_demux_%d. ! queue ! aacparse ! avdec_aac ! audioconvert ! audioresample ! "
-            "decklinkaudiosink device-number=%d",
-            sink_index, sink_index, device_number, video_mode,
-            sink_index, device_number);
+        // --- Create elements ---
+        GstElement *queue       = gst_element_factory_make("queue2",          NULL);
+        GstElement *tsdemux     = gst_element_factory_make("tsdemux",         NULL);
+        GstElement *vqueue      = gst_element_factory_make("queue",           NULL);
+        GstElement *h264parse   = gst_element_factory_make("h264parse",       NULL);
+        GstElement *avdec_h264  = gst_element_factory_make("avdec_h264",      NULL);
+        GstElement *vconvert    = gst_element_factory_make("videoconvert",    NULL);
+        GstElement *vscale      = gst_element_factory_make("videoscale",      NULL);
+        GstElement *videosink   = gst_element_factory_make("decklinkvideosink", NULL);
+        GstElement *aqueue      = gst_element_factory_make("queue",           NULL);
+        GstElement *aacparse    = gst_element_factory_make("aacparse",        NULL);
+        GstElement *avdec_aac   = gst_element_factory_make("avdec_aac",       NULL);
+        GstElement *aconvert    = gst_element_factory_make("audioconvert",    NULL);
+        GstElement *aresample   = gst_element_factory_make("audioresample",   NULL);
+        GstElement *audiosink   = gst_element_factory_make("decklinkaudiosink", NULL);
 
-        GError *error = NULL;
-        GstElement *sdi_bin = gst_parse_bin_from_description(pipeline_desc, TRUE, &error);
-        if (!sdi_bin) {
-            g_printerr("SDI sink %d: Failed to create decode pipeline: %s\n",
-                        sink_index, error ? error->message : "unknown error");
-            if (error) g_error_free(error);
+        if (!queue || !tsdemux || !vqueue || !h264parse || !avdec_h264 ||
+            !vconvert || !vscale || !videosink ||
+            !aqueue || !aacparse || !avdec_aac || !aconvert || !aresample || !audiosink) {
+            g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
+            // cleanup anything that was created
+            if (queue)      gst_object_unref(queue);
+            if (tsdemux)    gst_object_unref(tsdemux);
+            if (vqueue)     gst_object_unref(vqueue);
+            if (h264parse)  gst_object_unref(h264parse);
+            if (avdec_h264) gst_object_unref(avdec_h264);
+            if (vconvert)   gst_object_unref(vconvert);
+            if (vscale)     gst_object_unref(vscale);
+            if (videosink)  gst_object_unref(videosink);
+            if (aqueue)     gst_object_unref(aqueue);
+            if (aacparse)   gst_object_unref(aacparse);
+            if (avdec_aac)  gst_object_unref(avdec_aac);
+            if (aconvert)   gst_object_unref(aconvert);
+            if (aresample)  gst_object_unref(aresample);
+            if (audiosink)  gst_object_unref(audiosink);
             return FALSE;
         }
 
-        // Name the bin for debugging
-        char bin_name[64];
-        snprintf(bin_name, sizeof(bin_name), "sdi_bin_%d", sink_index);
-        gst_element_set_name(sdi_bin, bin_name);
+        // --- Configure DeckLink sinks ---
+        g_object_set(videosink, "device-number", device_number, "mode", video_mode, "sync", TRUE, NULL);
+        g_object_set(audiosink, "device-number", device_number, NULL);
 
-        // Create a leaky queue between tee and the SDI decode pipeline
-        GstElement *queue = gst_element_factory_make("queue2", NULL);
-        if (!queue) {
-            g_printerr("SDI sink %d: Failed to create queue\n", sink_index);
-            gst_object_unref(sdi_bin);
+        // --- Configure input queue ---
+        g_object_set(queue,
+                     "use-buffering",    FALSE,
+                     "max-size-buffers", 0,
+                     "max-size-bytes",   (guint)(50 * 1024 * 1024),
+                     "max-size-time",    (guint64)3000000000,
+                     NULL);
+
+        // --- Add all elements to pipeline ---
+        gst_bin_add_many(GST_BIN(pipeline),
+                         queue, tsdemux,
+                         vqueue, h264parse, avdec_h264, vconvert, vscale, videosink,
+                         aqueue, aacparse, avdec_aac, aconvert, aresample, audiosink,
+                         NULL);
+
+        // --- Link static chains (video and audio downstream of tsdemux) ---
+        if (!gst_element_link_many(vqueue, h264parse, avdec_h264, vconvert, vscale, videosink, NULL)) {
+            g_printerr("SDI sink %d: Failed to link video decode chain\n", sink_index);
+            return FALSE;
+        }
+        if (!gst_element_link_many(aqueue, aacparse, avdec_aac, aconvert, aresample, audiosink, NULL)) {
+            g_printerr("SDI sink %d: Failed to link audio decode chain\n", sink_index);
             return FALSE;
         }
 
-        g_object_set(queue, "use-buffering", FALSE, NULL);
-        g_object_set(queue, "max-size-buffers", 0, NULL);
-        g_object_set(queue, "max-size-bytes", 50 * 1024 * 1024, NULL);
-        g_object_set(queue, "max-size-time", (guint64)3000000000, NULL);
-
-        gst_bin_add_many(GST_BIN(pipeline), queue, sdi_bin, NULL);
-        if (!gst_element_link_many(tee, queue, sdi_bin, NULL)) {
-            g_printerr("SDI sink %d: Failed to link tee → queue → sdi_bin\n", sink_index);
+        // --- Link tee → queue → tsdemux (static) ---
+        if (!gst_element_link_many(tee, queue, tsdemux, NULL)) {
+            g_printerr("SDI sink %d: Failed to link tee → queue → tsdemux\n", sink_index);
             return FALSE;
         }
 
-        g_print("SDI sink %d: Created decode pipeline → DeckLink device %d (mode %d)\n",
+        // --- Dynamic pad linking: tsdemux exposes pads at runtime ---
+        // Pack all downstream head elements into a struct for the callback
+        typedef struct {
+            GstElement *vqueue;
+            GstElement *aqueue;
+        } SdiPadData;
+
+        SdiPadData *pad_data = g_new0(SdiPadData, 1);
+        pad_data->vqueue = vqueue;
+        pad_data->aqueue = aqueue;
+
+        g_signal_connect_data(
+            tsdemux, "pad-added",
+            G_CALLBACK(on_sdi_pad_added),
+            pad_data, (GClosureNotify)g_free, (GConnectFlags)0
+        );
+
+        g_print("SDI sink %d: pipeline created → DeckLink device %d (mode %d)\n",
                 sink_index, device_number, video_mode);
         return TRUE;
     }
@@ -1252,7 +1335,6 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
     // Standard passthrough sinks (SRT, UDP)
     // =========================================================================
 
-    // Use queue2 for better streaming performance (supports ring buffer mode)
     GstElement *queue = gst_element_factory_make("queue2", NULL);
     GstElement *sink_element = gst_element_factory_make(sink_type->valuestring, NULL);
 
@@ -1261,12 +1343,10 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         return FALSE;
     }
 
-    // Configure queue2 for high-bitrate streaming (up to 50Mbps)
-    // At 20Mbps: 50MB = ~20 seconds buffer, 3s time limit controls actual latency
-    g_object_set(queue, "use-buffering", FALSE, NULL);               // Don't pause for buffering
-    g_object_set(queue, "max-size-buffers", 0, NULL);                // Unlimited buffer count
-    g_object_set(queue, "max-size-bytes", 50 * 1024 * 1024, NULL);   // 50MB max (handles 20Mbps+)
-    g_object_set(queue, "max-size-time", (guint64)3000000000, NULL); // 3 seconds max
+    g_object_set(queue, "use-buffering", FALSE, NULL);
+    g_object_set(queue, "max-size-buffers", 0, NULL);
+    g_object_set(queue, "max-size-bytes", 50 * 1024 * 1024, NULL);
+    g_object_set(queue, "max-size-time", (guint64)3000000000, NULL);
 
     set_element_properties(sink_element, sink_config, sink_type->valuestring, "type");
 
@@ -1282,7 +1362,6 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         g_object_set(sink_element, "wait-for-connection", FALSE, NULL);
         g_print("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE\n");
 
-        // Store this SRT sink element for stats collection
         if (sink_count < MAX_SINKS) {
             sink_elements[sink_count] = sink_element;
             sink_count++;
