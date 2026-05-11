@@ -235,14 +235,36 @@ defmodule Blackgate.RouteHandler do
   end
 
   def sink_from_record(%{"schema" => "SDI", "schema_options" => opts}) do
+    video_mode = Map.get(opts, "video_mode", 0)
+    {width, height, framerate} = sdi_video_mode_to_resolution(video_mode)
+
     props = %{
       "type" => "sdisink",
       "device-number" => Map.get(opts, "device_number", 0),
-      "video-mode" => Map.get(opts, "video_mode", 0)
+      "video-mode" => video_mode,
+      "width" => width,
+      "height" => height,
+      "framerate" => framerate
     }
 
     {:ok, props}
   end
+
+  defp sdi_video_mode_to_resolution(9), do: {1920, 1080, "25/1"}
+  defp sdi_video_mode_to_resolution(11), do: {1920, 1080, "30/1"}
+  defp sdi_video_mode_to_resolution(12), do: {1920, 1080, "50/1"}
+  defp sdi_video_mode_to_resolution(13), do: {1920, 1080, "60/1"}
+  defp sdi_video_mode_to_resolution(7), do: {1920, 1080, "25/1"}
+  defp sdi_video_mode_to_resolution(8), do: {1920, 1080, "30/1"}
+  defp sdi_video_mode_to_resolution(14), do: {1280, 720, "50/1"}
+  defp sdi_video_mode_to_resolution(15), do: {1280, 720, "60/1"}
+  defp sdi_video_mode_to_resolution(17), do: {720, 576, "25/1"}
+  defp sdi_video_mode_to_resolution(18), do: {720, 480, "30/1"}
+  defp sdi_video_mode_to_resolution(22), do: {3840, 2160, "25/1"}
+  defp sdi_video_mode_to_resolution(23), do: {3840, 2160, "30/1"}
+  defp sdi_video_mode_to_resolution(24), do: {3840, 2160, "50/1"}
+  defp sdi_video_mode_to_resolution(25), do: {3840, 2160, "60/1"}
+  defp sdi_video_mode_to_resolution(_), do: {1920, 1080, "25/1"}
 
   def sink_from_record(_), do: {:error, :invalid_destination}
 

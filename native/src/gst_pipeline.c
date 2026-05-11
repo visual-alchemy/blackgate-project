@@ -1277,41 +1277,23 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         }
 
         // --- Configure caps for DeckLink ---
-        char caps_str[128];
-        strcpy(caps_str, "video/x-raw, format=UYVY");
+        // Read explicit width/height/framerate from JSON so the backend owns the
+        // mode-to-resolution mapping.  Falls back to 1080p25 if not provided.
+        cJSON *width_json      = cJSON_GetObjectItem(sink_config, "width");
+        cJSON *height_json     = cJSON_GetObjectItem(sink_config, "height");
+        cJSON *framerate_json  = cJSON_GetObjectItem(sink_config, "framerate");
 
-        switch (video_mode) {
-            case 1: // 1080p 25fps (PAL)
-                strcat(caps_str, ", width=1920, height=1080, framerate=25/1");
-                break;
-            case 2: // 1080p 30fps (NTSC)
-                strcat(caps_str, ", width=1920, height=1080, framerate=30/1");
-                break;
-            case 3: // 1080p 50fps
-                strcat(caps_str, ", width=1920, height=1080, framerate=50/1");
-                break;
-            case 4: // 1080p 60fps
-                strcat(caps_str, ", width=1920, height=1080, framerate=60/1");
-                break;
-            case 5: // 1080i 50fps (PAL)
-                strcat(caps_str, ", width=1920, height=1080, framerate=25/1"); // field rate 50
-                break;
-            case 6: // 1080i 60fps (NTSC)
-                strcat(caps_str, ", width=1920, height=1080, framerate=30/1"); // field rate 60
-                break;
-            case 7: // 720p 50fps
-                strcat(caps_str, ", width=1280, height=720, framerate=50/1");
-                break;
-            case 8: // 720p 60fps
-                strcat(caps_str, ", width=1280, height=720, framerate=60/1");
-                break;
-            default:
-                // Default to 1080p25 if unknown or Auto
-                strcat(caps_str, ", width=1920, height=1080, framerate=25/1");
-                break;
-        }
+        int width  = (width_json     && cJSON_IsNumber(width_json))     ? width_json->valueint     : 1920;
+        int height = (height_json    && cJSON_IsNumber(height_json))    ? height_json->valueint    : 1080;
+        const char *framerate = (framerate_json && cJSON_IsString(framerate_json))
+                                ? framerate_json->valuestring : "25/1";
 
-        g_print("SDI sink: video_mode=%d -> caps: %s\n", video_mode, caps_str);
+        char caps_str[256];
+        snprintf(caps_str, sizeof(caps_str),
+                 "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
+                 width, height, framerate);
+
+        g_print("SDI sink %d: video_mode=%d -> caps: %s\n", sink_index, video_mode, caps_str);
 
         GstCaps *caps = gst_caps_from_string(caps_str);
         g_object_set(vcaps, "caps", caps, NULL);
