@@ -66,8 +66,8 @@ RUN cd /tmp \
     && meson setup builddir \
         -Ddecklink=enabled \
         --prefix=/usr \
-    && ninja -C builddir -j$(nproc) ext/decklink/libgstdecklink.so \
-    && cp builddir/ext/decklink/libgstdecklink.so \
+    && ninja -C builddir -j$(nproc) sys/decklink/libgstdecklink.so \
+    && cp builddir/sys/decklink/libgstdecklink.so \
         /usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/gstreamer-1.0/ \
     && rm -rf /tmp/gstreamer
 
