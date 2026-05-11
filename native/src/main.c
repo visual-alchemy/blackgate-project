@@ -66,6 +66,40 @@ int main(int argc, char* argv[])
     GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE) {
         g_printerr("Unable to set the pipeline to the playing state.\n");
+
+        // Diagnose which element failed the state change
+        GstIterator *it = gst_bin_iterate_elements(GST_BIN(pipeline));
+        GValue item = G_VALUE_INIT;
+        while (gst_iterator_next(it, &item) == GST_ITERATOR_OK) {
+            GstElement *elem = GST_ELEMENT(g_value_get_object(&item));
+            GstState state, pending;
+            GstStateChangeReturn elem_ret = gst_element_get_state(elem, &state, &pending, GST_CLOCK_TIME_NONE);
+            if (state != GST_STATE_PLAYING) {
+                g_printerr("Element '%s' state=%s pending=%s ret=%d\n",
+                    GST_ELEMENT_NAME(elem),
+                    gst_element_state_get_name(state),
+                    gst_element_state_get_name(pending),
+                    elem_ret);
+            }
+            g_value_reset(&item);
+        }
+        gst_iterator_free(it);
+
+        // Also dump the last bus error if any
+        GstBus *bus = gst_element_get_bus(pipeline);
+        GstMessage *msg = gst_bus_poll(bus, GST_MESSAGE_ERROR, 0);
+        if (msg) {
+            GError *err = NULL;
+            gchar *debug = NULL;
+            gst_message_parse_error(msg, &err, &debug);
+            g_printerr("Bus error from %s: %s | debug: %s\n",
+                       GST_OBJECT_NAME(msg->src), err->message, debug ? debug : "none");
+            g_error_free(err);
+            g_free(debug);
+            gst_message_unref(msg);
+        }
+        gst_object_unref(bus);
+
         cleanup_pipeline(pipeline);
         cJSON_Delete(json);
         return 1;
