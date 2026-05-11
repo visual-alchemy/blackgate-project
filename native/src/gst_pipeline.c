@@ -1244,6 +1244,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *avdec_h264  = gst_element_factory_make("avdec_h264",      NULL);
         GstElement *vconvert    = gst_element_factory_make("videoconvert",    NULL);
         GstElement *vscale      = gst_element_factory_make("videoscale",      NULL);
+        GstElement *vcaps       = gst_element_factory_make("capsfilter",      NULL);
         GstElement *videosink   = gst_element_factory_make("decklinkvideosink", NULL);
         GstElement *aqueue      = gst_element_factory_make("queue",           NULL);
         GstElement *aacparse    = gst_element_factory_make("aacparse",        NULL);
@@ -1253,7 +1254,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *audiosink   = gst_element_factory_make("decklinkaudiosink", NULL);
 
         if (!queue || !tsdemux || !vqueue || !h264parse || !avdec_h264 ||
-            !vconvert || !vscale || !videosink ||
+            !vconvert || !vscale || !vcaps || !videosink ||
             !aqueue || !aacparse || !avdec_aac || !aconvert || !aresample || !audiosink) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
             // cleanup anything that was created
@@ -1264,6 +1265,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             if (avdec_h264) gst_object_unref(avdec_h264);
             if (vconvert)   gst_object_unref(vconvert);
             if (vscale)     gst_object_unref(vscale);
+            if (vcaps)      gst_object_unref(vcaps);
             if (videosink)  gst_object_unref(videosink);
             if (aqueue)     gst_object_unref(aqueue);
             if (aacparse)   gst_object_unref(aacparse);
@@ -1273,6 +1275,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             if (audiosink)  gst_object_unref(audiosink);
             return FALSE;
         }
+
+        // --- Configure caps for DeckLink ---
+        GstCaps *caps = gst_caps_from_string("video/x-raw, format=UYVY");
+        g_object_set(vcaps, "caps", caps, NULL);
+        gst_caps_unref(caps);
 
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, "mode", video_mode, "sync", TRUE, NULL);
@@ -1289,12 +1296,12 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Add all elements to pipeline ---
         gst_bin_add_many(GST_BIN(pipeline),
                          queue, tsdemux,
-                         vqueue, h264parse, avdec_h264, vconvert, vscale, videosink,
+                         vqueue, h264parse, avdec_h264, vconvert, vscale, vcaps, videosink,
                          aqueue, aacparse, avdec_aac, aconvert, aresample, audiosink,
                          NULL);
 
         // --- Link static chains (video and audio downstream of tsdemux) ---
-        if (!gst_element_link_many(vqueue, h264parse, avdec_h264, vconvert, vscale, videosink, NULL)) {
+        if (!gst_element_link_many(vqueue, h264parse, avdec_h264, vconvert, vscale, vcaps, videosink, NULL)) {
             g_printerr("SDI sink %d: Failed to link video decode chain\n", sink_index);
             return FALSE;
         }
