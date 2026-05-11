@@ -236,12 +236,12 @@ defmodule Blackgate.RouteHandler do
 
   def sink_from_record(%{"schema" => "SDI", "schema_options" => opts}) do
     video_mode = Map.get(opts, "video_mode", 0)
-    {gst_mode, width, height, framerate} = sdi_video_mode_to_gst(video_mode)
+    {mode_str, width, height, framerate} = sdi_video_mode_to_gst(video_mode)
 
     props = %{
       "type" => "sdisink",
       "device-number" => Map.get(opts, "device_number", 0),
-      "video-mode" => gst_mode,
+      "video-mode" => mode_str,
       "width" => width,
       "height" => height,
       "framerate" => framerate
@@ -250,30 +250,24 @@ defmodule Blackgate.RouteHandler do
     {:ok, props}
   end
 
-  # UI video_mode value -> {GStreamer GstDecklinkModeEnum integer, width, height, framerate}
-  # GStreamer enum values from gst-plugins-bad/sys/decklink/gstdecklink.h:
-  #   AUTO=0, NTSC=1, NTSC2398=2, PAL=3, NTSC_P=4, PAL_P=5,
-  #   1080p2398=6, 1080p24=7, 1080p25=8, 1080p2997=9, 1080p30=10,
-  #   1080i50=11, 1080i5994=12, 1080i60=13,
-  #   1080p50=14, 1080p5994=15, 1080p60=16,
-  #   720p50=17, 720p5994=18, 720p60=19,
-  #   2160p25=28, 2160p2997=29, 2160p30=30, 2160p50=31, 2160p5994=32, 2160p60=33
-  defp sdi_video_mode_to_gst(0), do: {0, 1920, 1080, "25/1"}
-  defp sdi_video_mode_to_gst(9), do: {8, 1920, 1080, "25/1"}
-  defp sdi_video_mode_to_gst(11), do: {10, 1920, 1080, "30/1"}
-  defp sdi_video_mode_to_gst(12), do: {14, 1920, 1080, "50/1"}
-  defp sdi_video_mode_to_gst(13), do: {16, 1920, 1080, "60/1"}
-  defp sdi_video_mode_to_gst(7), do: {11, 1920, 1080, "25/1"}
-  defp sdi_video_mode_to_gst(8), do: {13, 1920, 1080, "30/1"}
-  defp sdi_video_mode_to_gst(14), do: {17, 1280, 720, "50/1"}
-  defp sdi_video_mode_to_gst(15), do: {19, 1280, 720, "60/1"}
-  defp sdi_video_mode_to_gst(17), do: {3, 720, 576, "25/1"}
-  defp sdi_video_mode_to_gst(18), do: {1, 720, 480, "30/1"}
-  defp sdi_video_mode_to_gst(22), do: {28, 3840, 2160, "25/1"}
-  defp sdi_video_mode_to_gst(23), do: {30, 3840, 2160, "30/1"}
-  defp sdi_video_mode_to_gst(24), do: {31, 3840, 2160, "50/1"}
-  defp sdi_video_mode_to_gst(25), do: {33, 3840, 2160, "60/1"}
-  defp sdi_video_mode_to_gst(_), do: {8, 1920, 1080, "25/1"}
+  # UI video_mode value -> {GStreamer mode string, width, height, framerate}
+  # GStreamer mode strings (enum nicks) work regardless of plugin version.
+  defp sdi_video_mode_to_gst(0), do: {"auto", 1920, 1080, "25/1"}
+  defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
+  defp sdi_video_mode_to_gst(11), do: {"1080p30", 1920, 1080, "30/1"}
+  defp sdi_video_mode_to_gst(12), do: {"1080p50", 1920, 1080, "50/1"}
+  defp sdi_video_mode_to_gst(13), do: {"1080p60", 1920, 1080, "60/1"}
+  defp sdi_video_mode_to_gst(7), do: {"1080i50", 1920, 1080, "25/1"}
+  defp sdi_video_mode_to_gst(8), do: {"1080i60", 1920, 1080, "30/1"}
+  defp sdi_video_mode_to_gst(14), do: {"720p50", 1280, 720, "50/1"}
+  defp sdi_video_mode_to_gst(15), do: {"720p60", 1280, 720, "60/1"}
+  defp sdi_video_mode_to_gst(17), do: {"pal", 720, 576, "25/1"}
+  defp sdi_video_mode_to_gst(18), do: {"ntsc", 720, 480, "30/1"}
+  defp sdi_video_mode_to_gst(22), do: {"2160p25", 3840, 2160, "25/1"}
+  defp sdi_video_mode_to_gst(23), do: {"2160p30", 3840, 2160, "30/1"}
+  defp sdi_video_mode_to_gst(24), do: {"2160p50", 3840, 2160, "50/1"}
+  defp sdi_video_mode_to_gst(25), do: {"2160p60", 3840, 2160, "60/1"}
+  defp sdi_video_mode_to_gst(_), do: {"1080p25", 1920, 1080, "25/1"}
 
   def sink_from_record(_), do: {:error, :invalid_destination}
 

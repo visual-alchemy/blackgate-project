@@ -1233,8 +1233,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 
         int device_number = (device_number_json && cJSON_IsNumber(device_number_json))
                             ? device_number_json->valueint : 0;
-        int video_mode    = (video_mode_json    && cJSON_IsNumber(video_mode_json))
-                            ? video_mode_json->valueint : 0;
+        const char *video_mode_str = (video_mode_json && cJSON_IsString(video_mode_json))
+                                     ? video_mode_json->valuestring : "1080p25";
 
         // --- Create elements ---
         GstElement *queue       = gst_element_factory_make("queue2",          NULL);
@@ -1293,15 +1293,18 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                  "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
                  width, height, framerate);
 
-        g_print("SDI sink %d: video_mode=%d -> caps: %s\n", sink_index, video_mode, caps_str);
+        g_print("SDI sink %d: mode=%s -> caps: %s\n", sink_index, video_mode_str, caps_str);
 
         GstCaps *caps = gst_caps_from_string(caps_str);
         g_object_set(vcaps, "caps", caps, NULL);
         gst_caps_unref(caps);
 
         // --- Configure DeckLink sinks ---
-        g_object_set(videosink, "device-number", device_number, "mode", video_mode, "sync", TRUE, NULL);
-        g_object_set(audiosink, "device-number", device_number, NULL);
+        g_object_set(videosink, "device-number", device_number, NULL);
+        gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
+        // Hardware sinks handle timing internally; software sync conflicts with DeckLink clock
+        g_object_set(videosink, "sync", FALSE, NULL);
+        g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
 
         // --- Configure input queue ---
         g_object_set(queue,
@@ -1351,8 +1354,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             pad_data, (GClosureNotify)g_free, (GConnectFlags)0
         );
 
-        g_print("SDI sink %d: pipeline created → DeckLink device %d (mode %d)\n",
-                sink_index, device_number, video_mode);
+        g_print("SDI sink %d: pipeline created → DeckLink device %d (mode %s)\n",
+                sink_index, device_number, video_mode_str);
         return TRUE;
     }
 
