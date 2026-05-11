@@ -1185,6 +1185,73 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         return FALSE;
     }
 
+    // =========================================================================
+    // SDI Output via DeckLink (requires decode-to-raw pipeline)
+    // =========================================================================
+    if (strcmp(sink_type->valuestring, "sdisink") == 0) {
+        cJSON *device_number_json = cJSON_GetObjectItem(sink_config, "device-number");
+        cJSON *video_mode_json = cJSON_GetObjectItem(sink_config, "video-mode");
+
+        int device_number = device_number_json && cJSON_IsNumber(device_number_json)
+                                ? device_number_json->valueint : 0;
+        int video_mode = video_mode_json && cJSON_IsNumber(video_mode_json)
+                             ? video_mode_json->valueint : 0;
+
+        // Build the SDI decode-and-output pipeline description
+        // Pipeline: tsdemux → video: h264parse → avdec_h264 → videoconvert → decklinkvideosink
+        //                   → audio: aacparse  → avdec_aac  → audioconvert → decklinkaudiosink
+        char pipeline_desc[2048];
+        snprintf(pipeline_desc, sizeof(pipeline_desc),
+            "tsdemux name=sdi_demux_%d "
+            "sdi_demux_%d. ! queue ! h264parse ! avdec_h264 ! videoconvert ! videoscale ! "
+            "decklinkvideosink device-number=%d mode=%d sync=true "
+            "sdi_demux_%d. ! queue ! aacparse ! avdec_aac ! audioconvert ! audioresample ! "
+            "decklinkaudiosink device-number=%d",
+            sink_index, sink_index, device_number, video_mode,
+            sink_index, device_number);
+
+        GError *error = NULL;
+        GstElement *sdi_bin = gst_parse_bin_from_description(pipeline_desc, TRUE, &error);
+        if (!sdi_bin) {
+            g_printerr("SDI sink %d: Failed to create decode pipeline: %s\n",
+                        sink_index, error ? error->message : "unknown error");
+            if (error) g_error_free(error);
+            return FALSE;
+        }
+
+        // Name the bin for debugging
+        char bin_name[64];
+        snprintf(bin_name, sizeof(bin_name), "sdi_bin_%d", sink_index);
+        gst_element_set_name(sdi_bin, bin_name);
+
+        // Create a leaky queue between tee and the SDI decode pipeline
+        GstElement *queue = gst_element_factory_make("queue2", NULL);
+        if (!queue) {
+            g_printerr("SDI sink %d: Failed to create queue\n", sink_index);
+            gst_object_unref(sdi_bin);
+            return FALSE;
+        }
+
+        g_object_set(queue, "use-buffering", FALSE, NULL);
+        g_object_set(queue, "max-size-buffers", 0, NULL);
+        g_object_set(queue, "max-size-bytes", 50 * 1024 * 1024, NULL);
+        g_object_set(queue, "max-size-time", (guint64)3000000000, NULL);
+
+        gst_bin_add_many(GST_BIN(pipeline), queue, sdi_bin, NULL);
+        if (!gst_element_link_many(tee, queue, sdi_bin, NULL)) {
+            g_printerr("SDI sink %d: Failed to link tee → queue → sdi_bin\n", sink_index);
+            return FALSE;
+        }
+
+        g_print("SDI sink %d: Created decode pipeline → DeckLink device %d (mode %d)\n",
+                sink_index, device_number, video_mode);
+        return TRUE;
+    }
+
+    // =========================================================================
+    // Standard passthrough sinks (SRT, UDP)
+    // =========================================================================
+
     // Use queue2 for better streaming performance (supports ring buffer mode)
     GstElement *queue = gst_element_factory_make("queue2", NULL);
     GstElement *sink_element = gst_element_factory_make(sink_type->valuestring, NULL);

@@ -211,6 +211,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
+                                            <Radio.Button value="SDI">SDI</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -450,6 +451,66 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                         value: iface.name
                                                                     }))
                                                             ]}
+                                                        />
+                                                    </Form.Item>
+                                                </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    {/* SDI specific options (DeckLink Quad 2) */}
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'SDI' && (
+                                                <>
+                                                    <Form.Item
+                                                        label="SDI Output Port"
+                                                        name={['schema_options', 'device_number']}
+                                                        required
+                                                        extra="DeckLink Quad 2 port number. Each card provides 8 SDI channels (0-7)."
+                                                    >
+                                                        <Select
+                                                            placeholder="Select SDI port"
+                                                            options={[
+                                                                { label: 'Port 0 (SDI 1)', value: 0 },
+                                                                { label: 'Port 1 (SDI 2)', value: 1 },
+                                                                { label: 'Port 2 (SDI 3)', value: 2 },
+                                                                { label: 'Port 3 (SDI 4)', value: 3 },
+                                                                { label: 'Port 4 (SDI 5)', value: 4 },
+                                                                { label: 'Port 5 (SDI 6)', value: 5 },
+                                                                { label: 'Port 6 (SDI 7)', value: 6 },
+                                                                { label: 'Port 7 (SDI 8)', value: 7 },
+                                                            ]}
+                                                            style={{ width: '200px' }}
+                                                        />
+                                                    </Form.Item>
+
+                                                    <Form.Item
+                                                        label="Video Mode"
+                                                        name={['schema_options', 'video_mode']}
+                                                        required
+                                                        extra="Output video format. Must match source resolution and frame rate."
+                                                    >
+                                                        <Select
+                                                            placeholder="Select video mode"
+                                                            options={[
+                                                                { label: 'Auto Detect', value: 0 },
+                                                                { label: '1080p 25fps (PAL)', value: 9 },
+                                                                { label: '1080p 30fps (NTSC)', value: 11 },
+                                                                { label: '1080p 50fps', value: 12 },
+                                                                { label: '1080p 60fps', value: 13 },
+                                                                { label: '1080i 50fps (PAL)', value: 7 },
+                                                                { label: '1080i 60fps (NTSC)', value: 8 },
+                                                                { label: '720p 50fps', value: 14 },
+                                                                { label: '720p 60fps', value: 15 },
+                                                                { label: '576i 50fps (PAL SD)', value: 17 },
+                                                                { label: '480i 60fps (NTSC SD)', value: 18 },
+                                                                { label: '2160p 25fps (4K)', value: 22 },
+                                                                { label: '2160p 30fps (4K)', value: 23 },
+                                                                { label: '2160p 50fps (4K)', value: 24 },
+                                                                { label: '2160p 60fps (4K)', value: 25 },
+                                                            ]}
+                                                            style={{ width: '250px' }}
                                                         />
                                                     </Form.Item>
                                                 </>

@@ -234,6 +234,16 @@ defmodule Blackgate.RouteHandler do
     ])
   end
 
+  def sink_from_record(%{"schema" => "SDI", "schema_options" => opts}) do
+    props = %{
+      "type" => "sdisink",
+      "device-number" => Map.get(opts, "device_number", 0),
+      "video-mode" => Map.get(opts, "video_mode", 0)
+    }
+
+    {:ok, props}
+  end
+
   def sink_from_record(_), do: {:error, :invalid_destination}
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
