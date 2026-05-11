@@ -55,8 +55,8 @@ RUN apt-get update -y \
     libgstreamer-plugins-bad1.0-dev \
     && apt-get clean
 
-# Copy DeckLink SDK headers into the build context
-COPY native/decklink-sdk /opt/decklink-sdk
+# Copy DeckLink SDK headers into the system include path
+COPY native/decklink-sdk /usr/include/decklink
 
 # Clone, configure, and build ONLY the decklink plugin from gst-plugins-bad
 # Version pinned to 1.22.0 to match system GStreamer on Debian Bookworm
@@ -65,9 +65,7 @@ RUN cd /tmp \
     && cd gstreamer/subprojects/gst-plugins-bad \
     && meson setup builddir \
         -Ddecklink=enabled \
-        -Dauto_features=disabled \
         --prefix=/usr \
-        -Dextra_headers="/opt/decklink-sdk" \
     && ninja -C builddir -j$(nproc) ext/decklink/libgstdecklink.so \
     && cp builddir/ext/decklink/libgstdecklink.so \
         /usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/gstreamer-1.0/ \
