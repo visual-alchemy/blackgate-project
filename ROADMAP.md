@@ -49,14 +49,14 @@
 - [x] Reduce server load (HTTP polling dropped from 1.5s to 3s fallback; WS handles live updates)
 - [x] Hybrid fallback: HTTP on mount + WebSocket push for reliability
 
-### 8. Routes Table — Replace "Last Updated" with "Output" column
-- [ ] Remove "Last Updated" column (low-value for live monitoring)
-- [ ] Add "Output" column showing compact destination summary
+### 8. ~~Routes Table — Replace "Last Updated" with "Output" column~~ ✅
+- [x] Remove "Last Updated" column (low-value for live monitoring)
+- [x] Add "Output" column showing compact destination summary
   - SRT: `SRT:15000` (listener port)
   - SDI: `SDI 1 · 1080p25` (port + mode)
   - UDP: `UDP:239.0.0.1:1234`
   - Multiple: `SRT:15000 · SDI 1` or `SRT:15000 (+2)` if many
-- [ ] SDI destinations in table: show `SDI 1 · 1080p25` in Destination column, `—` for Latency
+- [x] SDI destinations in detail table: show `SDI 1 · 1080p25` in Destination column, `—` for Latency
 
 ### 9. Route Groups / Tags
 - [ ] Add `tags` or `group` field to route schema
