@@ -216,6 +216,18 @@ const Routes = () => {
             return (`${record.schema}:${record?.schema_options?.mode || 'N/A'}:${record?.schema_options?.localport || 'N/A'}`);
           case 'UDP':
             return (`${record.schema}:${record?.schema_options?.address || 'N/A'}:${record?.schema_options?.port || 'N/A'}`);
+          case 'RTMP':
+          case 'HTTP':
+          case 'HLS': {
+            const url = record?.schema_options?.url || '';
+            try {
+              const parsed = new URL(url);
+              const short = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+              return short.length > 40 ? short.substring(0, 37) + '...' : short;
+            } catch {
+              return url.length > 40 ? url.substring(0, 37) + '...' : url;
+            }
+          }
           default:
             return ('Unknown');
         }

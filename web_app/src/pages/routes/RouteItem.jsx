@@ -507,7 +507,7 @@ const RouteItem = () => {
           styles={{ content: { textAlign: 'left' } }}
         >
           <Descriptions.Item label="Source">
-            <Tag color={routeData.schema === 'SRT' ? 'blue' : 'orange'}>
+            <Tag color={routeData.schema === 'SRT' ? 'blue' : routeData.schema === 'RTMP' ? 'purple' : 'orange'}>
               {routeData.schema}
             </Tag>
             {' '}
@@ -515,7 +515,7 @@ const RouteItem = () => {
               `${routeData.schema_options?.localaddress || 'N/A'}:${routeData.schema_options?.localport || 'N/A'}:${routeData.schema_options?.mode || 'N/A'}` :
               routeData.schema === 'UDP' ?
                 `${routeData.schema_options?.address || 'N/A'}:${routeData.schema_options?.port || 'N/A'}` :
-                'N/A'
+                (routeData.schema_options?.url || 'N/A')
             }
           </Descriptions.Item>
           <Descriptions.Item label="Node">{routeData.node}</Descriptions.Item>

@@ -22,6 +22,7 @@ defmodule Blackgate.RouteHandler do
     data = %{
       id: args.id,
       port: nil,
+      ffmpeg_port: nil,
       route: route
     }
 
@@ -30,7 +31,10 @@ defmodule Blackgate.RouteHandler do
 
   @impl true
   def handle_event(:internal, :start, _state, data) do
-    port = start_native_pipeline(data.route)
+    # For RTMP/HTTP/HLS sources, spawn ffmpeg sidecar to convert to SRT
+    {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(data.route)
+
+    port = start_native_pipeline(route_for_pipeline)
     Logger.info("RouteHandler: Started port: #{inspect(port)}")
 
     case send_initial_command(port, data.id) do
@@ -40,10 +44,12 @@ defmodule Blackgate.RouteHandler do
           route_id: data.id,
           route_name: data.route["name"]
         })
-        {:next_state, :started, %{data | port: port}}
+        {:next_state, :started, %{data | port: port, ffmpeg_port: ffmpeg_port}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
+        # Kill ffmpeg if it was started
+        if ffmpeg_port, do: close_port(ffmpeg_port)
         Blackgate.EventLog.log(:critical, "route_start_failed", "Route failed to start: #{inspect(reason)}", %{
           route_id: data.id,
           route_name: data.route["name"]
@@ -82,6 +88,8 @@ defmodule Blackgate.RouteHandler do
   def terminate(reason, _state, %{port: port, id: id} = data) when is_port(port) do
     Logger.info("RouteHandler: reason: #{inspect(reason)} Closing port #{inspect(port)}")
     close_port(port)
+    # Also kill ffmpeg sidecar if running
+    if data[:ffmpeg_port] && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
     Blackgate.set_route_status(id, "stopped")
 
     route_name = get_in(data, [:route, "name"]) || id
@@ -315,6 +323,87 @@ defmodule Blackgate.RouteHandler do
   defp sdi_video_mode_to_gst(_), do: {"1080p25", 1920, 1080, "25/1"}
 
   def sink_from_record(_), do: {:error, :invalid_destination}
+
+  # ===========================================================================
+  # FFmpeg Sidecar for RTMP/HTTP/HLS Sources
+  # ===========================================================================
+
+  @internal_port_range 39000..39999
+
+  defp maybe_start_ffmpeg_sidecar(%{"schema" => schema, "schema_options" => opts} = route)
+       when schema in ["RTMP", "HTTP", "HLS"] do
+    url = Map.get(opts, "url", "")
+
+    if url == "" do
+      Logger.error("RouteHandler: RTMP source has no URL")
+      {route, nil}
+    else
+      # Pick an available internal port for SRT loopback
+      internal_port = find_available_port()
+      Logger.info("RouteHandler: Starting ffmpeg sidecar: #{url} → srt://127.0.0.1:#{internal_port}")
+
+      # Spawn ffmpeg: pull source URL → remux to MPEG-TS → push SRT to internal port
+      ffmpeg_cmd = build_ffmpeg_command(url, internal_port)
+      Logger.info("RouteHandler: ffmpeg command: #{ffmpeg_cmd}")
+
+      ffmpeg_port = Port.open({:spawn, ffmpeg_cmd}, [
+        :stderr_to_stdout,
+        :use_stdio,
+        :binary,
+        :exit_status,
+        :stream
+      ])
+
+      # Give ffmpeg a moment to connect and start pushing
+      Process.sleep(2000)
+
+      # Rewrite the route to use SRT listener on the internal port
+      modified_route = route
+        |> Map.put("schema", "SRT")
+        |> Map.put("schema_options", %{
+          "localaddress" => "127.0.0.1",
+          "localport" => internal_port,
+          "mode" => "listener",
+          "latency" => 125,
+          "keep-listening" => true
+        })
+
+      Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started: #{url}", %{
+        route_id: route["id"],
+        route_name: route["name"],
+        internal_port: internal_port
+      })
+
+      {modified_route, ffmpeg_port}
+    end
+  end
+
+  defp maybe_start_ffmpeg_sidecar(route), do: {route, nil}
+
+  defp build_ffmpeg_command(url, internal_port) do
+    # -reconnect flags for HTTP sources (auto-retry on disconnect)
+    reconnect_flags = if String.starts_with?(url, "http") do
+      "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+    else
+      ""
+    end
+
+    "ffmpeg -hide_banner -loglevel warning " <>
+      "#{reconnect_flags} " <>
+      "-i \"#{url}\" " <>
+      "-c copy -f mpegts " <>
+      "\"srt://127.0.0.1:#{internal_port}?mode=caller&latency=125\""
+  end
+
+  defp find_available_port do
+    # Simple approach: pick a random port in the range and hope it's free
+    # For production, could check with :gen_tcp.listen/2
+    Enum.random(@internal_port_range)
+  end
+
+  # ===========================================================================
+  # Source/Sink Configuration
+  # ===========================================================================
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
     props = %{

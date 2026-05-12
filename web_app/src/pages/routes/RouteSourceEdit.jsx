@@ -265,6 +265,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     <Radio.Group buttonStyle="solid">
                       <Radio.Button value="SRT">SRT</Radio.Button>
                       <Radio.Button value="UDP">UDP</Radio.Button>
+                      <Radio.Button value="RTMP">RTMP</Radio.Button>
                     </Radio.Group>
                   </Form.Item>
 
@@ -529,6 +530,25 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                   }))
                               ]}
                             />
+                          </Form.Item>
+                        </>
+                      )
+                    }
+                  </Form.Item>
+
+                  {/* RTMP/HTTP-FLV/HLS Source Options */}
+                  <Form.Item noStyle dependencies={['schema']}>
+                    {({ getFieldValue }) =>
+                      getFieldValue('schema') === 'RTMP' && (
+                        <>
+                          <Form.Item
+                            label="Stream URL"
+                            name={['schema_options', 'url']}
+                            required
+                            extra="Supports RTMP, HTTP-FLV, and HLS URLs. Examples: rtmp://server/live/key, http://server/stream.flv, http://server/stream.m3u8"
+                            rules={[{ required: true, message: 'Stream URL is required' }]}
+                          >
+                            <Input placeholder="rtmp://server:1935/live/stream_key" />
                           </Form.Item>
                         </>
                       )
