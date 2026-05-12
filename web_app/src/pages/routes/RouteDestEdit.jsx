@@ -472,14 +472,14 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         <Select
                                                             placeholder="Select SDI port"
                                                             options={[
-                                                                { label: 'Port 0 (SDI 1)', value: 0 },
-                                                                { label: 'Port 1 (SDI 2)', value: 1 },
-                                                                { label: 'Port 2 (SDI 3)', value: 2 },
-                                                                { label: 'Port 3 (SDI 4)', value: 3 },
-                                                                { label: 'Port 4 (SDI 5)', value: 4 },
-                                                                { label: 'Port 5 (SDI 6)', value: 5 },
-                                                                { label: 'Port 6 (SDI 7)', value: 6 },
-                                                                { label: 'Port 7 (SDI 8)', value: 7 },
+                                                                { label: 'SDI 1', value: 0 },
+                                                                { label: 'SDI 2', value: 2 },
+                                                                { label: 'SDI 3', value: 4 },
+                                                                { label: 'SDI 4', value: 6 },
+                                                                { label: 'SDI 5', value: 1 },
+                                                                { label: 'SDI 6', value: 3 },
+                                                                { label: 'SDI 7', value: 5 },
+                                                                { label: 'SDI 8', value: 7 },
                                                             ]}
                                                             style={{ width: '200px' }}
                                                         />
