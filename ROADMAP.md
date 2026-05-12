@@ -128,6 +128,7 @@
 - [x] Tested with DeckLink Quad 2 on baremetal (Ubuntu 24.04, GStreamer 1.24.2)
 - [x] Simultaneous SRT passthrough + SDI decode output from same route
 - [x] Graceful SDI failure: if SDI sink fails, SRT/UDP outputs continue working
+- [x] SDI port conflict prevention: dropdown disables ports in use, shows which route is using them
 - [ ] Hardware decode support: NVDEC (`nvh264dec`), VA-API (`vaapih264dec`) to minimize CPU
 - [ ] True auto-detect: match SDI output mode to input source resolution/framerate
 - [ ] Test with Docker deployment (requires host DeckLink driver + device passthrough)

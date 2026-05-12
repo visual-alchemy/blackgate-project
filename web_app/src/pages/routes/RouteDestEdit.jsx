@@ -25,6 +25,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     const [destData, setDestData] = useState(null);
     const [routeLoading, setRouteLoading] = useState(true);
     const [interfaces, setInterfaces] = useState([]);
+    const [sdiPortUsage, setSdiPortUsage] = useState({});
 
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
@@ -97,6 +98,27 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 console.error('Error fetching network interfaces:', error);
             });
     }, []);
+
+    // Fetch SDI port usage across all routes
+    useEffect(() => {
+        routesApi.getAll()
+            .then(result => {
+                const usage = {};
+                (result.data || []).forEach(route => {
+                    (route.destinations || []).forEach(dest => {
+                        if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
+                            // Skip if this is the current destination being edited
+                            if (dest.id === destId) return;
+                            usage[dest.schema_options.device_number] = route.name;
+                        }
+                    });
+                });
+                setSdiPortUsage(usage);
+            })
+            .catch(error => {
+                console.error('Error fetching SDI port usage:', error);
+            });
+    }, [destId]);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -480,8 +502,14 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                 { label: 'SDI 6', value: 6 },
                                                                 { label: 'SDI 7', value: 3 },
                                                                 { label: 'SDI 8', value: 7 },
-                                                            ]}
-                                                            style={{ width: '200px' }}
+                                                            ].map(opt => ({
+                                                                ...opt,
+                                                                label: sdiPortUsage[opt.value]
+                                                                    ? `${opt.label} (used by ${sdiPortUsage[opt.value]})`
+                                                                    : opt.label,
+                                                                disabled: !!sdiPortUsage[opt.value],
+                                                            }))}
+                                                            style={{ width: '280px' }}
                                                         />
                                                     </Form.Item>
 
