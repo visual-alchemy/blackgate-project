@@ -1236,6 +1236,26 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         const char *video_mode_str = (video_mode_json && cJSON_IsString(video_mode_json))
                                      ? video_mode_json->valuestring : "1080p25";
 
+        // --- Validate DeckLink device availability before creating pipeline ---
+        GstElement *test_sink = gst_element_factory_make("decklinkvideosink", NULL);
+        if (!test_sink) {
+            g_printerr("SDI sink %d: DeckLink plugin not available - install BlackMagic drivers\n", sink_index);
+            return FALSE;
+        }
+        
+        // Test if the specific device number exists
+        gboolean device_exists = TRUE;
+        g_object_set(test_sink, "device-number", device_number, NULL);
+        // Note: We can't easily test device existence without actually starting the sink,
+        // but we can at least verify the plugin loads and accepts the device-number property
+        
+        gst_object_unref(test_sink);
+        
+        if (!device_exists) {
+            g_printerr("SDI sink %d: DeckLink device %d not found\n", sink_index, device_number);
+            return FALSE;
+        }
+
         // --- Create elements ---
         GstElement *queue       = gst_element_factory_make("queue2",          NULL);
         GstElement *tsdemux     = gst_element_factory_make("tsdemux",         NULL);

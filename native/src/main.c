@@ -85,20 +85,8 @@ int main(int argc, char* argv[])
         }
         gst_iterator_free(it);
 
-        // Also dump the last bus error if any
-        GstBus *bus = gst_element_get_bus(pipeline);
-        GstMessage *msg = gst_bus_poll(bus, GST_MESSAGE_ERROR, 0);
-        if (msg) {
-            GError *err = NULL;
-            gchar *debug = NULL;
-            gst_message_parse_error(msg, &err, &debug);
-            g_printerr("Bus error from %s: %s | debug: %s\n",
-                       GST_OBJECT_NAME(msg->src), err->message, debug ? debug : "none");
-            g_error_free(err);
-            g_free(debug);
-            gst_message_unref(msg);
-        }
-        gst_object_unref(bus);
+        // Note: Don't poll bus here to avoid race condition with existing bus watch
+        // The bus_callback in gst_pipeline.c will handle error messages
 
         cleanup_pipeline(pipeline);
         cJSON_Delete(json);

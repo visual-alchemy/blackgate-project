@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     network_mode: host # Use host networking for direct access to all network interfaces
+    privileged: true # Required for DeckLink kernel module access
     # Note: With network_mode: host, ports are exposed directly on the host
     # No port mapping needed - container uses host ports directly
     environment:

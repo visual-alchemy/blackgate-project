@@ -21,7 +21,7 @@ defmodule Blackgate.MixProject do
     [
       mod: {Blackgate.Application, []},
       extra_applications:
-        [:logger, :os_mon, :ssl, :runtime_tools] ++ extra_applications(Mix.env())
+        [:logger, :os_mon, :ssl, :runtime_tools, :crypto] ++ extra_applications(Mix.env())
     ]
   end
 
