@@ -61,6 +61,11 @@ defmodule BlackgateWeb.Router do
 
     get "/network/interfaces", NetworkController, :index
 
+    # Events
+    get "/events", EventController, :index
+    get "/events/counts", EventController, :counts
+    delete "/events", EventController, :clear
+
     # License management
     get "/license", LicenseController, :show
     post "/license/activate", LicenseController, :activate

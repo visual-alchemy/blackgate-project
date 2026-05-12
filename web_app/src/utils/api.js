@@ -60,6 +60,25 @@ export const nodesApi = {
   },
 };
 
+// Events API
+export const eventsApi = {
+  getAll: async (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    const response = await authFetch(`/api/events${query ? '?' + query : ''}`);
+    return response.json();
+  },
+
+  getCounts: async () => {
+    const response = await authFetch('/api/events/counts');
+    return response.json();
+  },
+
+  clear: async () => {
+    const response = await authFetch('/api/events', { method: 'DELETE' });
+    return response.json();
+  },
+};
+
 // Routes API
 export const routesApi = {
   // Get all routes

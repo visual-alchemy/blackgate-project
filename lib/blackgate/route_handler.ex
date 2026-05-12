@@ -36,18 +36,34 @@ defmodule Blackgate.RouteHandler do
     case send_initial_command(port, data.id) do
       :ok ->
         Blackgate.set_route_status(data.id, "started")
+        Blackgate.EventLog.log(:info, "route_started", "Route started", %{
+          route_id: data.id,
+          route_name: data.route["name"]
+        })
         {:next_state, :started, %{data | port: port}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
+        Blackgate.EventLog.log(:critical, "route_start_failed", "Route failed to start: #{inspect(reason)}", %{
+          route_id: data.id,
+          route_name: data.route["name"]
+        })
         {:stop, reason, data}
     end
   end
 
-  def handle_event(:info, {_port, {:data, info}}, _state, _data) do
+  def handle_event(:info, {_port, {:data, info}}, _state, data) do
     String.split(info, "\n")
     |> Enum.each(fn line ->
       Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
+
+      # Detect SDI graceful failure from C pipeline output
+      if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
+        Blackgate.EventLog.log(:warning, "sdi_failed", String.trim(line), %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        })
+      end
     end)
 
     :keep_state_and_data
@@ -63,16 +79,46 @@ defmodule Blackgate.RouteHandler do
   end
 
   @impl true
-  def terminate(reason, _state, %{port: port, id: id}) when is_port(port) do
+  def terminate(reason, _state, %{port: port, id: id} = data) when is_port(port) do
     Logger.info("RouteHandler: reason: #{inspect(reason)} Closing port #{inspect(port)}")
     close_port(port)
     Blackgate.set_route_status(id, "stopped")
+
+    route_name = get_in(data, [:route, "name"]) || id
+    case reason do
+      :shutdown ->
+        Blackgate.EventLog.log(:info, "route_stopped", "Route stopped", %{
+          route_id: id,
+          route_name: route_name
+        })
+      _ ->
+        Blackgate.EventLog.log(:critical, "route_crashed", "Route crashed: #{inspect(reason)}", %{
+          route_id: id,
+          route_name: route_name
+        })
+    end
+
     :ok
   end
 
   def terminate(reason, _state, data) do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
     Blackgate.set_route_status(data.id, "stopped")
+
+    route_name = get_in(data, [:route, "name"]) || data.id
+    case reason do
+      :shutdown ->
+        Blackgate.EventLog.log(:info, "route_stopped", "Route stopped", %{
+          route_id: data.id,
+          route_name: route_name
+        })
+      _ ->
+        Blackgate.EventLog.log(:critical, "route_crashed", "Route crashed: #{inspect(reason)}", %{
+          route_id: data.id,
+          route_name: route_name
+        })
+    end
+
     :ok
   end
 

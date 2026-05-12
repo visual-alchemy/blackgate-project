@@ -11,6 +11,7 @@ import RouteSourceEdit from './pages/routes/RouteSourceEdit';
 import RouteDestEdit from './pages/routes/RouteDestEdit';
 import SystemPipelines from './pages/system/SystemPipelines';
 import SystemNodes from './pages/system/SystemNodes';
+import Events from './pages/events/Events';
 import Login from './pages/Login';
 import License from './pages/License';
 import { isAuthenticated } from './utils/auth';
@@ -145,6 +146,14 @@ const App = () => {
           <ProtectedRoute>
             <MainLayout>
               <SystemPipelines />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+
+        <Route path={ROUTES.EVENTS} element={
+          <ProtectedRoute>
+            <MainLayout>
+              <Events />
             </MainLayout>
           </ProtectedRoute>
         } />

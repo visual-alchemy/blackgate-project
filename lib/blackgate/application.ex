@@ -41,6 +41,7 @@ defmodule Blackgate.Application do
 
     children = [
       Blackgate.RouteStatsRegistry,
+      Blackgate.EventLog,
       Blackgate.ErlSysMon,
       Blackgate.License,
       {PartitionSupervisor,

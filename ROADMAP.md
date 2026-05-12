@@ -58,7 +58,17 @@
   - Multiple: `SRT:15000 · SDI 1` or `SRT:15000 (+2)` if many
 - [x] SDI destinations in detail table: show `SDI 1 · 1080p25` in Destination column, `—` for Latency
 
-### 9. Route Groups / Tags
+### 9. ~~Event Log~~ ✅
+- [x] `Blackgate.EventLog` GenServer — in-memory ring buffer (last 500 events) in ETS
+- [x] Events emitted from RouteHandler: route started, stopped, crashed, SDI failed
+- [x] API endpoints: `GET /api/events`, `GET /api/events/counts`, `DELETE /api/events`
+- [x] Filter by severity (info/warning/critical), route_id, event type
+- [x] New "Events" page in sidebar with severity badges and auto-refresh
+- [ ] PubSub broadcast for real-time event push to frontend (WebSocket)
+- [ ] Connection lost/established events from stats monitoring
+- [ ] Health threshold events (high packet loss, high RTT)
+
+### 10. Route Groups / Tags
 - [ ] Add `tags` or `group` field to route schema
 - [ ] Allow creating/naming groups (e.g., "ATP Stadium", "Studio A")
 - [ ] Filter routes table by group/tag
@@ -68,31 +78,31 @@
 
 ## 🏗️ Strategic / Long-Term
 
-### 10. Multi-Node Clustering
+### 11. Multi-Node Clustering
 - [ ] Leverage Khepri's built-in Raft consensus for multi-node state sync
 - [ ] Route discovery across nodes
 - [ ] Failover: if one node goes down, routes can be started on another
 - [ ] Cluster management UI in Settings
 
-### 11. Alerting & Webhooks
+### 12. Alerting & Webhooks
 - [ ] Define alert rules (stream disconnect, high packet loss, route crash)
 - [ ] Webhook integration (POST to external URL on alert)
 - [ ] Slack/Discord notification support
 - [ ] Alert history log in the dashboard
 
-### 12. Stream Recording (DVR)
+### 13. Stream Recording (DVR)
 - [ ] Add optional "Record" toggle per route
 - [ ] GStreamer: tee → filesink for recording to disk
 - [ ] Configurable recording directory and retention policy
 - [ ] Recordings browser in the UI with download/delete
 
-### 13. REST API Documentation (Swagger/OpenAPI)
+### 14. REST API Documentation (Swagger/OpenAPI)
 - [ ] Auto-generate OpenAPI spec from Phoenix routes
 - [ ] Serve Swagger UI at `/api/docs`
 - [ ] Document all endpoints with request/response schemas
 - [ ] Enable third-party integrations
 
-### 14. RTMP Protocol Support (In Progress 🔨)
+### 15. RTMP Protocol Support (In Progress 🔨)
 - [x] Add MediaMTX as RTMP ingest server (docker-compose, auth webhook)
 - [x] RTMP source: accept push with user-defined stream key per route
 - [x] RTMP destinations: `RTMP_PUSH` (push to YouTube/Twitch/custom RTMP)
@@ -102,7 +112,7 @@
 - [ ] Stream key regeneration UI
 - [ ] RTMP source health monitoring (MediaMTX API integration)
 
-### 15. ~~SDI Output via Blackmagic DeckLink~~ ✅
+### 16. ~~SDI Output via Blackmagic DeckLink~~ ✅
 > **Hardware:** DeckLink Quad 2 (8x SDI output, PCIe) — requires decode step (not passthrough)
 
 - [x] Bundle Blackmagic Desktop Video SDK headers in build (`native/decklink-sdk/`)

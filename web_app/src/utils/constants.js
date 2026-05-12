@@ -14,6 +14,7 @@ export const ROUTES = {
   LOGIN: '/login',
   DASHBOARD: '/',
   ROUTES: '/routes',
+  EVENTS: '/events',
   SETTINGS: '/settings',
   SYSTEM_PIPELINES: '/system/pipelines',
   SYSTEM_NODES: '/system/nodes',

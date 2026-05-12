@@ -15,6 +15,7 @@ import {
   ApiOutlined,
   CodeOutlined,
   SafetyCertificateOutlined,
+  AlertOutlined,
 } from '@ant-design/icons';
 import { Button, Layout, Menu, theme, Grid, Avatar, Dropdown, Space, message, Breadcrumb } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -176,6 +177,11 @@ const MainLayout = ({ children }) => {
       label: 'Pipelines',
     },
     {
+      key: ROUTES.EVENTS,
+      icon: <AlertOutlined />,
+      label: 'Events',
+    },
+    {
       key: ROUTES.SYSTEM_NODES,
       icon: <ApiOutlined />,
       label: 'Nodes',
@@ -282,6 +288,7 @@ const MainLayout = ({ children }) => {
               location.pathname.startsWith('/routes/') ? ROUTES.ROUTES :
                 location.pathname.startsWith('/settings/') ? ROUTES.SETTINGS :
                   location.pathname.startsWith('/system/pipelines') ? ROUTES.SYSTEM_PIPELINES :
+                    location.pathname.startsWith('/events') ? ROUTES.EVENTS :
                     location.pathname.startsWith('/system/nodes') ? ROUTES.SYSTEM_NODES :
                       location.pathname
             ]}
