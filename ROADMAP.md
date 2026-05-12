@@ -93,17 +93,22 @@
 - [ ] Stream key regeneration UI
 - [ ] RTMP source health monitoring (MediaMTX API integration)
 
-### 14. SDI Output via Blackmagic DeckLink
-> **Hardware:** DeckLink Quad 2 (4x SDI in/out, PCIe) — requires decode step (not passthrough)
+### 14. ~~SDI Output via Blackmagic DeckLink~~ ✅
+> **Hardware:** DeckLink Quad 2 (8x SDI output, PCIe) — requires decode step (not passthrough)
 
-- [ ] Bundle Blackmagic Desktop Video SDK in Docker build (manual download required)
-- [ ] Compile `gst-plugins-bad` with `decklink` plugin enabled in Dockerfile
-- [ ] Docker device passthrough (`/dev/blackmagic*` or `--privileged`)
-- [ ] New `SDI` destination schema in `route_handler.ex`
-  - Options: `device_number` (0–3), `video_mode` (1080p25/1080i50/etc.), `decoder`
-- [ ] C pipeline: GstBin sub-pipeline via `gst_parse_bin_from_description`
-  - `tsdemux → h264parse → [hw decoder] → videoconvert → videorate → decklinkvideosink`
-  - `tsdemux → aacparse → avdec_aac → audioconvert → decklinkaudiosink`
+- [x] Bundle Blackmagic Desktop Video SDK headers in build (`native/decklink-sdk/`)
+- [x] Compile `gst-plugins-bad` with `decklink` plugin enabled in Dockerfile (pinned to GStreamer 1.22.0)
+- [x] Docker device passthrough (`/dev/blackmagic/*` + `privileged: true`)
+- [x] New `SDI` destination schema in `route_handler.ex`
+  - Options: `device_number` (0–7), `video_mode` (1080p25/1080p50/720p50/etc.)
+- [x] C pipeline: codec-agnostic decode via `decodebin`
+  - `tsdemux → decodebin (video) → videoconvert → videorate → videoscale → capsfilter(UYVY) → decklinkvideosink`
+  - `tsdemux → decodebin (audio) → audioconvert → audioresample → decklinkaudiosink`
+- [x] Supports any input codec: H.264, HEVC (H.265), MPEG-2 video; AAC, MP2, Opus audio
+- [x] SDI destination UI: device selector (port 0–7), video mode dropdown (1080p/720p/SD/4K)
+- [x] Tested with DeckLink Quad 2 on baremetal (Ubuntu 24.04, GStreamer 1.24.2)
+- [x] Simultaneous SRT passthrough + SDI decode output from same route
 - [ ] Hardware decode support: NVDEC (`nvh264dec`), VA-API (`vaapih264dec`) to minimize CPU
-- [ ] SDI destination UI: device selector (port 0–3), video mode dropdown
-- [ ] Test with DeckLink Quad 2 (4 simultaneous SDI outputs from 4 routes)
+- [ ] True auto-detect: match SDI output mode to input source resolution/framerate
+- [ ] Test with Docker deployment (requires host DeckLink driver + device passthrough)
+- [ ] Test 4+ simultaneous SDI outputs from different routes
