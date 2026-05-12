@@ -146,11 +146,13 @@ start:
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app \
+	RELEASE_COOKIE=blackgate_production_cookie \
 	_build/prod/rel/blackgate/bin/blackgate daemon
 
 .PHONY: stop
 stop:
 	@echo "Stopping Blackgate..."
+	RELEASE_COOKIE=blackgate_production_cookie \
 	_build/prod/rel/blackgate/bin/blackgate stop || true
 
 .PHONY: restart
@@ -158,7 +160,7 @@ restart: stop start
 
 .PHONY: status
 status:
-	@_build/prod/rel/blackgate/bin/blackgate pid > /dev/null 2>&1 && echo "Blackgate is running" || echo "Blackgate is not running"
+	@RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate pid > /dev/null 2>&1 && echo "Blackgate is running" || echo "Blackgate is not running"
 
 # =============================================================================
 # DEVELOPMENT TARGETS
