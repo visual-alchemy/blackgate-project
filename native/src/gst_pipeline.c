@@ -1250,8 +1250,17 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     cJSON_ArrayForEach(sink, sinks_array)
     {
         if (!add_sink_to_pipeline(pipeline, tee, sink, sink_idx)) {
-            gst_object_unref(pipeline);
-            return NULL;
+            // Check if this is an SDI sink — SDI failures are non-fatal
+            cJSON *sink_type = cJSON_GetObjectItem(sink, "type");
+            if (sink_type && cJSON_IsString(sink_type) &&
+                strcmp(sink_type->valuestring, "sdisink") == 0) {
+                g_printerr("WARNING: SDI sink %d failed — continuing without SDI output\n", sink_idx);
+                // Don't destroy pipeline, just skip this sink
+            } else {
+                // SRT/UDP sink failure is fatal
+                gst_object_unref(pipeline);
+                return NULL;
+            }
         }
         sink_idx++;
     }
