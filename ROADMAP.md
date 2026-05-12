@@ -108,6 +108,7 @@
 - [x] SDI destination UI: device selector (port 0–7), video mode dropdown (1080p/720p/SD/4K)
 - [x] Tested with DeckLink Quad 2 on baremetal (Ubuntu 24.04, GStreamer 1.24.2)
 - [x] Simultaneous SRT passthrough + SDI decode output from same route
+- [ ] SDI destination table display: show `SDI 1 · 1080p25` in Destination column, `—` for Latency
 - [ ] Hardware decode support: NVDEC (`nvh264dec`), VA-API (`vaapih264dec`) to minimize CPU
 - [ ] True auto-detect: match SDI output mode to input source resolution/framerate
 - [ ] Test with Docker deployment (requires host DeckLink driver + device passthrough)
