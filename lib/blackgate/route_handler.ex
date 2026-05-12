@@ -252,7 +252,6 @@ defmodule Blackgate.RouteHandler do
 
   # UI video_mode value -> {GStreamer mode string, width, height, framerate}
   # GStreamer mode strings (enum nicks) work regardless of plugin version.
-  defp sdi_video_mode_to_gst(0), do: {"auto", 1920, 1080, "25/1"}
   defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
   defp sdi_video_mode_to_gst(11), do: {"1080p30", 1920, 1080, "30/1"}
   defp sdi_video_mode_to_gst(12), do: {"1080p50", 1920, 1080, "50/1"}

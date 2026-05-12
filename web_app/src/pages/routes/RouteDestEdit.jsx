@@ -494,7 +494,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         <Select
                                                             placeholder="Select video mode"
                                                             options={[
-                                                                { label: 'Auto Detect', value: 0 },
                                                                 { label: '1080p 25fps (PAL)', value: 9 },
                                                                 { label: '1080p 30fps (NTSC)', value: 11 },
                                                                 { label: '1080p 50fps', value: 12 },

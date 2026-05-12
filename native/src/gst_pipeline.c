@@ -18,16 +18,22 @@ static void set_element_properties(GstElement *element, cJSON *config, const cha
 static void set_srt_mode_property(GstElement *element, const char *mode_str, const char *element_desc);
 static void collect_sink_stats(void);
 
-// SDI pad-added callback context
-typedef struct {
-    GstElement *vqueue;  // head of video decode chain
-    GstElement *aqueue;  // head of audio decode chain
-} SdiPadData;
+// Forward declarations for SDI decodebin callbacks
+static void on_sdi_tsdemux_pad_added(GstElement *src, GstPad *new_pad, gpointer user_data);
+static void on_sdi_decodebin_video_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
+static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 
-static void on_sdi_pad_added(GstElement *src, GstPad *new_pad, gpointer user_data)
+// SDI decodebin callbacks: tsdemux → decodebin (codec-agnostic)
+typedef struct {
+    GstElement *vdecodebin;
+    GstElement *adecodebin;
+} TsdemuxPadData;
+
+// Called when tsdemux exposes a new pad — routes video to vdecodebin, audio to adecodebin
+static void on_sdi_tsdemux_pad_added(GstElement *src, GstPad *new_pad, gpointer user_data)
 {
     (void)src;
-    SdiPadData *d = (SdiPadData *)user_data;
+    TsdemuxPadData *d = (TsdemuxPadData *)user_data;
 
     GstCaps *caps = gst_pad_get_current_caps(new_pad);
     if (!caps) caps = gst_pad_query_caps(new_pad, NULL);
@@ -36,25 +42,82 @@ static void on_sdi_pad_added(GstElement *src, GstPad *new_pad, gpointer user_dat
     GstStructure *s = gst_caps_get_structure(caps, 0);
     const gchar *name = gst_structure_get_name(s);
 
-    GstPad *sink_pad = NULL;
+    GstElement *target = NULL;
     if (g_str_has_prefix(name, "video/")) {
-        sink_pad = gst_element_get_static_pad(d->vqueue, "sink");
+        target = d->vdecodebin;
     } else if (g_str_has_prefix(name, "audio/")) {
-        sink_pad = gst_element_get_static_pad(d->aqueue, "sink");
+        target = d->adecodebin;
     }
 
-    if (sink_pad) {
-        if (!gst_pad_is_linked(sink_pad)) {
+    if (target) {
+        GstPad *sink_pad = gst_element_get_static_pad(target, "sink");
+        if (sink_pad && !gst_pad_is_linked(sink_pad)) {
             GstPadLinkReturn ret = gst_pad_link(new_pad, sink_pad);
             if (ret != GST_PAD_LINK_OK) {
-                g_printerr("SDI: pad link failed for caps '%s': %d\n", name, ret);
+                g_printerr("SDI tsdemux: pad link failed for '%s': %d\n", name, ret);
             } else {
-                g_print("SDI: linked %s pad\n", name);
+                g_print("SDI tsdemux: linked %s → decodebin\n", name);
             }
         }
-        gst_object_unref(sink_pad);
+        if (sink_pad) gst_object_unref(sink_pad);
     }
     gst_caps_unref(caps);
+}
+
+// Called when video decodebin exposes a decoded raw video pad
+static void on_sdi_decodebin_video_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data)
+{
+    (void)decodebin;
+    GstElement *vqueue = (GstElement *)user_data;
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) caps = gst_pad_query_caps(pad, NULL);
+    if (!caps) return;
+
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+    const gchar *name = gst_structure_get_name(s);
+    gst_caps_unref(caps);
+
+    if (!g_str_has_prefix(name, "video/x-raw")) return;
+
+    GstPad *sink_pad = gst_element_get_static_pad(vqueue, "sink");
+    if (sink_pad && !gst_pad_is_linked(sink_pad)) {
+        GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+        if (ret == GST_PAD_LINK_OK) {
+            g_print("SDI: decodebin video → output chain linked\n");
+        } else {
+            g_printerr("SDI: decodebin video pad link failed: %d\n", ret);
+        }
+    }
+    if (sink_pad) gst_object_unref(sink_pad);
+}
+
+// Called when audio decodebin exposes a decoded raw audio pad
+static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data)
+{
+    (void)decodebin;
+    GstElement *aqueue = (GstElement *)user_data;
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) caps = gst_pad_query_caps(pad, NULL);
+    if (!caps) return;
+
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+    const gchar *name = gst_structure_get_name(s);
+    gst_caps_unref(caps);
+
+    if (!g_str_has_prefix(name, "audio/x-raw")) return;
+
+    GstPad *sink_pad = gst_element_get_static_pad(aqueue, "sink");
+    if (sink_pad && !gst_pad_is_linked(sink_pad)) {
+        GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+        if (ret == GST_PAD_LINK_OK) {
+            g_print("SDI: decodebin audio → output chain linked\n");
+        } else {
+            g_printerr("SDI: decodebin audio pad link failed: %d\n", ret);
+        }
+    }
+    if (sink_pad) gst_object_unref(sink_pad);
 }
 
 static pthread_t stats_thread;
@@ -1226,6 +1289,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 
     // =========================================================================
     // SDI Output via DeckLink (decode MPEG-TS → raw video/audio → SDI port)
+    // Uses decodebin for codec-agnostic decoding (H.264, HEVC, MPEG-2, etc.)
     // =========================================================================
     if (strcmp(sink_type->valuestring, "sdisink") == 0) {
         cJSON *device_number_json = cJSON_GetObjectItem(sink_config, "device-number");
@@ -1242,54 +1306,42 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             g_printerr("SDI sink %d: DeckLink plugin not available - install BlackMagic drivers\n", sink_index);
             return FALSE;
         }
-        
-        // Test if the specific device number exists
-        gboolean device_exists = TRUE;
         g_object_set(test_sink, "device-number", device_number, NULL);
-        // Note: We can't easily test device existence without actually starting the sink,
-        // but we can at least verify the plugin loads and accepts the device-number property
-        
         gst_object_unref(test_sink);
-        
-        if (!device_exists) {
-            g_printerr("SDI sink %d: DeckLink device %d not found\n", sink_index, device_number);
-            return FALSE;
-        }
 
         // --- Create elements ---
-        GstElement *queue       = gst_element_factory_make("queue2",          NULL);
-        GstElement *tsdemux     = gst_element_factory_make("tsdemux",         NULL);
-        GstElement *vqueue      = gst_element_factory_make("queue",           NULL);
-        GstElement *h264parse   = gst_element_factory_make("h264parse",       NULL);
-        GstElement *avdec_h264  = gst_element_factory_make("avdec_h264",      NULL);
-        GstElement *vconvert    = gst_element_factory_make("videoconvert",    NULL);
-        GstElement *vscale      = gst_element_factory_make("videoscale",      NULL);
-        GstElement *vcaps       = gst_element_factory_make("capsfilter",      NULL);
+        GstElement *queue       = gst_element_factory_make("queue2",            NULL);
+        GstElement *tsdemux     = gst_element_factory_make("tsdemux",           NULL);
+        // Video chain: decodebin handles any video codec (H.264, HEVC, MPEG-2)
+        GstElement *vdecodebin  = gst_element_factory_make("decodebin",         NULL);
+        GstElement *vqueue      = gst_element_factory_make("queue",             NULL);
+        GstElement *vconvert    = gst_element_factory_make("videoconvert",      NULL);
+        GstElement *vrate       = gst_element_factory_make("videorate",         NULL);
+        GstElement *vscale      = gst_element_factory_make("videoscale",        NULL);
+        GstElement *vcaps       = gst_element_factory_make("capsfilter",        NULL);
         GstElement *videosink   = gst_element_factory_make("decklinkvideosink", NULL);
-        GstElement *aqueue      = gst_element_factory_make("queue",           NULL);
-        GstElement *aacparse    = gst_element_factory_make("aacparse",        NULL);
-        GstElement *avdec_aac   = gst_element_factory_make("avdec_aac",       NULL);
-        GstElement *aconvert    = gst_element_factory_make("audioconvert",    NULL);
-        GstElement *aresample   = gst_element_factory_make("audioresample",   NULL);
+        // Audio chain: decodebin handles any audio codec (AAC, MP2, Opus)
+        GstElement *adecodebin  = gst_element_factory_make("decodebin",         NULL);
+        GstElement *aqueue      = gst_element_factory_make("queue",             NULL);
+        GstElement *aconvert    = gst_element_factory_make("audioconvert",      NULL);
+        GstElement *aresample   = gst_element_factory_make("audioresample",     NULL);
         GstElement *audiosink   = gst_element_factory_make("decklinkaudiosink", NULL);
 
-        if (!queue || !tsdemux || !vqueue || !h264parse || !avdec_h264 ||
-            !vconvert || !vscale || !vcaps || !videosink ||
-            !aqueue || !aacparse || !avdec_aac || !aconvert || !aresample || !audiosink) {
+        if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
+            !vscale || !vcaps || !videosink ||
+            !adecodebin || !aqueue || !aconvert || !aresample || !audiosink) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
-            // cleanup anything that was created
             if (queue)      gst_object_unref(queue);
             if (tsdemux)    gst_object_unref(tsdemux);
+            if (vdecodebin) gst_object_unref(vdecodebin);
             if (vqueue)     gst_object_unref(vqueue);
-            if (h264parse)  gst_object_unref(h264parse);
-            if (avdec_h264) gst_object_unref(avdec_h264);
             if (vconvert)   gst_object_unref(vconvert);
+            if (vrate)      gst_object_unref(vrate);
             if (vscale)     gst_object_unref(vscale);
             if (vcaps)      gst_object_unref(vcaps);
             if (videosink)  gst_object_unref(videosink);
+            if (adecodebin) gst_object_unref(adecodebin);
             if (aqueue)     gst_object_unref(aqueue);
-            if (aacparse)   gst_object_unref(aacparse);
-            if (avdec_aac)  gst_object_unref(avdec_aac);
             if (aconvert)   gst_object_unref(aconvert);
             if (aresample)  gst_object_unref(aresample);
             if (audiosink)  gst_object_unref(audiosink);
@@ -1297,8 +1349,6 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         }
 
         // --- Configure caps for DeckLink ---
-        // Read explicit width/height/framerate from JSON so the backend owns the
-        // mode-to-resolution mapping.  Falls back to 1080p25 if not provided.
         cJSON *width_json      = cJSON_GetObjectItem(sink_config, "width");
         cJSON *height_json     = cJSON_GetObjectItem(sink_config, "height");
         cJSON *framerate_json  = cJSON_GetObjectItem(sink_config, "framerate");
@@ -1322,7 +1372,6 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, NULL);
         gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
-        // Hardware sinks handle timing internally; software sync conflicts with DeckLink clock
         g_object_set(videosink, "sync", FALSE, NULL);
         g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
 
@@ -1334,20 +1383,26 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                      "max-size-time",    (guint64)3000000000,
                      NULL);
 
+        // --- Configure leaky queues after decodebin to prevent backpressure ---
+        g_object_set(vqueue, "max-size-buffers", 5, "leaky", 2, NULL);
+        g_object_set(aqueue, "max-size-buffers", 5, "leaky", 2, NULL);
+
         // --- Add all elements to pipeline ---
         gst_bin_add_many(GST_BIN(pipeline),
                          queue, tsdemux,
-                         vqueue, h264parse, avdec_h264, vconvert, vscale, vcaps, videosink,
-                         aqueue, aacparse, avdec_aac, aconvert, aresample, audiosink,
+                         vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, videosink,
+                         adecodebin, aqueue, aconvert, aresample, audiosink,
                          NULL);
 
-        // --- Link static chains (video and audio downstream of tsdemux) ---
-        if (!gst_element_link_many(vqueue, h264parse, avdec_h264, vconvert, vscale, vcaps, videosink, NULL)) {
-            g_printerr("SDI sink %d: Failed to link video decode chain\n", sink_index);
+        // --- Link static chains downstream of decodebin ---
+        // Video: vqueue → videoconvert → videorate → videoscale → capsfilter → decklinkvideosink
+        if (!gst_element_link_many(vqueue, vconvert, vrate, vscale, vcaps, videosink, NULL)) {
+            g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
             return FALSE;
         }
-        if (!gst_element_link_many(aqueue, aacparse, avdec_aac, aconvert, aresample, audiosink, NULL)) {
-            g_printerr("SDI sink %d: Failed to link audio decode chain\n", sink_index);
+        // Audio: aqueue → audioconvert → audioresample → decklinkaudiosink
+        if (!gst_element_link_many(aqueue, aconvert, aresample, audiosink, NULL)) {
+            g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
             return FALSE;
         }
 
@@ -1357,24 +1412,24 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             return FALSE;
         }
 
-        // --- Dynamic pad linking: tsdemux exposes pads at runtime ---
-        // Pack all downstream head elements into a struct for the callback
-        typedef struct {
-            GstElement *vqueue;
-            GstElement *aqueue;
-        } SdiPadData;
-
-        SdiPadData *pad_data = g_new0(SdiPadData, 1);
-        pad_data->vqueue = vqueue;
-        pad_data->aqueue = aqueue;
+        // --- Dynamic pad linking for tsdemux → decodebin ---
+        // tsdemux exposes video/audio pads at runtime, link them to the appropriate decodebin
+        TsdemuxPadData *ts_pad_data = g_new0(TsdemuxPadData, 1);
+        ts_pad_data->vdecodebin = vdecodebin;
+        ts_pad_data->adecodebin = adecodebin;
 
         g_signal_connect_data(
             tsdemux, "pad-added",
-            G_CALLBACK(on_sdi_pad_added),
-            pad_data, (GClosureNotify)g_free, (GConnectFlags)0
+            G_CALLBACK(on_sdi_tsdemux_pad_added),
+            ts_pad_data, (GClosureNotify)g_free, (GConnectFlags)0
         );
 
-        g_print("SDI sink %d: pipeline created → DeckLink device %d (mode %s)\n",
+        // --- Dynamic pad linking for decodebin → output queues ---
+        // decodebin exposes decoded raw pads, link them to the output queues
+        g_signal_connect(vdecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_video_pad_added), vqueue);
+        g_signal_connect(adecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_audio_pad_added), aqueue);
+
+        g_print("SDI sink %d: pipeline created (decodebin) → DeckLink device %d (mode %s)\n",
                 sink_index, device_number, video_mode_str);
         return TRUE;
     }
