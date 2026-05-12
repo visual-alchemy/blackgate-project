@@ -37,7 +37,7 @@ defmodule Blackgate.RouteHandler do
     port = start_native_pipeline(route_for_pipeline)
     Logger.info("RouteHandler: Started port: #{inspect(port)}")
 
-    case send_initial_command(port, data.id) do
+    case send_initial_command(port, route_for_pipeline) do
       :ok ->
         Blackgate.set_route_status(data.id, "started")
         Blackgate.EventLog.log(:info, "route_started", "Route started", %{
@@ -162,9 +162,10 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  defp send_initial_command(port, route_id) do
-    with {:ok, params} <- route_data_to_params(route_id),
-         {:ok, params} <- Jason.encode(params),
+  defp send_initial_command(port, route) when is_map(route) do
+    with {:ok, source} <- source_from_record(route),
+         {:ok, sinks} <- sinks_from_record(route),
+         {:ok, params} <- Jason.encode(%{"source" => source, "sinks" => sinks}),
          true <- Port.command(port, params <> "\n") do
       Logger.info("RouteHandler: sent initial command")
       :ok
