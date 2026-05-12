@@ -26,12 +26,17 @@ defmodule BlackgateWeb.RouteController do
         callers = Map.get(stats, "callers", [])
         connected_callers = Map.get(stats, "connected-callers", 0)
         receive_mbps = Map.get(stats, "receive-rate-mbps", 0)
+        bytes_received = Map.get(stats, "bytes-received", 0)
+        total_bytes_received = Map.get(stats, "total-bytes-received", 0)
         caller_mbps = case callers do
           [first_caller | _] -> Map.get(first_caller, "receive-rate-mbps", 0)
           _ -> 0
         end
 
-        connected_callers > 0 or receive_mbps > 0 or caller_mbps > 0
+        # In caller mode, connected-callers is 0 and receive-rate-mbps may report 0
+        # even when data is flowing. Check bytes-received as a reliable fallback.
+        connected_callers > 0 or receive_mbps > 0 or caller_mbps > 0 or
+          bytes_received > 0 or total_bytes_received > 0
 
       nil -> false
     end

@@ -146,7 +146,7 @@ start:
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app \
-	_build/prod/rel/blackgate/bin/blackgate start
+	_build/prod/rel/blackgate/bin/blackgate daemon
 
 .PHONY: stop
 stop:
