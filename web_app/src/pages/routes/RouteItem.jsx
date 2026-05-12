@@ -189,7 +189,7 @@ const RouteItem = () => {
           case 'UDP':
             return (`${record.schema_options?.host}:${record.schema_options?.port}`)
           case 'SDI': {
-            const deviceToSdi = { 0: 1, 2: 2, 4: 3, 6: 4, 1: 5, 3: 6, 5: 7, 7: 8 };
+            const deviceToSdi = { 0: 1, 4: 2, 1: 3, 5: 4, 2: 5, 6: 6, 3: 7, 7: 8 };
             const port = deviceToSdi[record.schema_options?.device_number] ?? '?';
             const modeMap = { 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60' };
             const mode = modeMap[record.schema_options?.video_mode] || '1080p25';

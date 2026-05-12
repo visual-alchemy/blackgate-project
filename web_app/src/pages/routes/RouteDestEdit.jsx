@@ -473,12 +473,12 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             placeholder="Select SDI port"
                                                             options={[
                                                                 { label: 'SDI 1', value: 0 },
-                                                                { label: 'SDI 2', value: 2 },
-                                                                { label: 'SDI 3', value: 4 },
-                                                                { label: 'SDI 4', value: 6 },
-                                                                { label: 'SDI 5', value: 1 },
-                                                                { label: 'SDI 6', value: 3 },
-                                                                { label: 'SDI 7', value: 5 },
+                                                                { label: 'SDI 2', value: 4 },
+                                                                { label: 'SDI 3', value: 1 },
+                                                                { label: 'SDI 4', value: 5 },
+                                                                { label: 'SDI 5', value: 2 },
+                                                                { label: 'SDI 6', value: 6 },
+                                                                { label: 'SDI 7', value: 3 },
                                                                 { label: 'SDI 8', value: 7 },
                                                             ]}
                                                             style={{ width: '200px' }}
