@@ -120,7 +120,7 @@ const SystemPipelines = () => {
       key: 'swap',
       render: (_, record) => (
         <Tooltip title={`${record.swap_bytes} bytes`}>
-          {formatBytes(record.swap_bytes)} ({record.swap_percent})
+          {record.swap || formatBytes(record.swap_bytes)}
         </Tooltip>
       ),
       sorter: (a, b) => a.swap_bytes - b.swap_bytes,
@@ -168,7 +168,7 @@ const SystemPipelines = () => {
       { label: 'CPU Usage', value: record.cpu },
       { label: 'Memory Usage', value: `${record.memory} (${record.memory_percent})` },
       { label: 'Memory in Bytes', value: record.memory_bytes.toLocaleString() },
-      { label: 'Swap Usage', value: `${formatBytes(record.swap_bytes)} (${record.swap_percent})` },
+      { label: 'Swap Usage', value: record.swap || formatBytes(record.swap_bytes) },
       { label: 'Swap in Bytes', value: record.swap_bytes.toLocaleString() },
       { label: 'User', value: record.user },
       { label: 'Start Time', value: record.start_time },

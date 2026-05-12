@@ -162,10 +162,8 @@ defmodule Blackgate.ProcessMonitor do
     user = Enum.at(parts, 5)
 
     memory_bytes = rss * 1024
-    swap_bytes = max(0, (vsz - rss) * 1024)
-
-    swap_percent =
-      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
+    virtual_bytes = vsz * 1024
+    swap_bytes = read_proc_swap(pid)
 
     start_time_parts = Enum.slice(parts, 6..11)
     start_time = Enum.join(start_time_parts, " ")
@@ -179,7 +177,8 @@ defmodule Blackgate.ProcessMonitor do
       memory: format_memory(memory_bytes),
       memory_percent: memory_percent,
       memory_bytes: memory_bytes,
-      swap_percent: swap_percent,
+      virtual_memory: format_memory(virtual_bytes),
+      swap: format_memory(swap_bytes),
       swap_bytes: swap_bytes,
       user: user,
       start_time: start_time,
@@ -197,12 +196,10 @@ defmodule Blackgate.ProcessMonitor do
     rss = Enum.at(parts, 4) |> String.to_integer()
 
     memory_bytes = rss * 1024
-    swap_bytes = max(0, (vsz - rss) * 1024)
+    virtual_bytes = vsz * 1024
+    swap_bytes = read_proc_swap(pid)
 
-    swap_percent =
-      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
-
-    virtual_memory = format_memory(vsz * 1024)
+    virtual_memory = format_memory(virtual_bytes)
     resident_memory = format_memory(memory_bytes)
 
     cpu_time = Enum.at(parts, 5)
@@ -223,7 +220,7 @@ defmodule Blackgate.ProcessMonitor do
       memory_bytes: memory_bytes,
       virtual_memory: virtual_memory,
       resident_memory: resident_memory,
-      swap_percent: swap_percent,
+      swap: format_memory(swap_bytes),
       swap_bytes: swap_bytes,
       cpu_time: cpu_time,
       state: state,
@@ -240,6 +237,20 @@ defmodule Blackgate.ProcessMonitor do
       bytes > 1_048_576 -> "#{Float.round(bytes / 1_048_576, 2)} MB"
       bytes > 1_024 -> "#{Float.round(bytes / 1_024, 2)} KB"
       true -> "#{bytes} B"
+    end
+  end
+
+  # Read actual swap usage from /proc/<pid>/status (Linux only)
+  defp read_proc_swap(pid) do
+    case File.read("/proc/#{pid}/status") do
+      {:ok, content} ->
+        case Regex.run(~r/VmSwap:\s+(\d+)\s+kB/, content) do
+          [_, kb_str] -> String.to_integer(kb_str) * 1024
+          _ -> 0
+        end
+
+      _ ->
+        0
     end
   end
 end
