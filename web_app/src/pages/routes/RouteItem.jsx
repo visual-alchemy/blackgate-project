@@ -183,14 +183,19 @@ const RouteItem = () => {
       title: 'Destination',
       key: 'host_port',
       render: (_, record) => {
-        console.log(record);
         switch (record.schema) {
           case 'SRT':
             return (`${record.schema_options?.localaddress}:${record.schema_options?.localport}:${record.schema_options?.mode}`)
           case 'UDP':
             return (`${record.schema_options?.host}:${record.schema_options?.port}`)
+          case 'SDI': {
+            const port = (record.schema_options?.device_number ?? 0) + 1;
+            const modeMap = { 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60' };
+            const mode = modeMap[record.schema_options?.video_mode] || '1080p25';
+            return `SDI ${port} · ${mode}`;
+          }
           default:
-            return 'N/A'
+            return '—'
         }
       },
       sorter: (a, b) => a.port - b.port,
@@ -199,8 +204,9 @@ const RouteItem = () => {
       title: 'Latency',
       key: 'latency',
       render: (_, record) => {
+        if (record.schema === 'SDI') return '—';
         const latency = record.schema_options?.latency || record.latency;
-        return latency ? `${latency}ms` : 'N/A';
+        return latency ? `${latency}ms` : '—';
       },
       sorter: (a, b) => {
         const aLatency = a.schema_options?.latency || a.latency;

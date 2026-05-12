@@ -6,7 +6,7 @@ defmodule BlackgateWeb.RouteController do
   action_fallback BlackgateWeb.FallbackController
 
   def index(conn, _params) do
-    with {:ok, routes} <- Db.get_all_routes() do
+    with {:ok, routes} <- Db.get_all_routes(true) do
       enriched_routes = Enum.map(routes, fn route ->
         is_connected = route_connected?(route["id"])
         Map.put(route, "connected", is_connected)
