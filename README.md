@@ -16,6 +16,7 @@
 |----------|----------|
 | **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
 | **UDP Support** | Source and Destination for local network streaming |
+| **SDI Output** | Blackmagic DeckLink hardware output (decode + scale to SDI) |
 | **Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
 | **Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
 | **Connection Status** | Live indicator on the Routes table showing real-time SRT connection health |
@@ -24,10 +25,20 @@
 | **Auto-Restart** | Editing a running route automatically restarts the pipeline — no manual stop/start needed |
 | **Bulk Operations** | Select and start/stop multiple routes at once |
 | **Search & Filter** | Filter routes by name, status, or schema type |
+| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, SDI failures) |
 | **Credential Management** | Change admin username and password from the Settings UI |
 | **REST API** | Full programmatic control for automation |
 | **Docker Ready** | One-command deployment with backup/restore |
 | **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
+
+### SDI Output (Blackmagic DeckLink)
+
+Route SRT streams directly to SDI hardware outputs:
+- **Codec-agnostic** — Supports H.264, HEVC (H.265), MPEG-2 video; AAC, MP2, Opus audio
+- **Multiple modes** — 1080p25/30/50/60, 1080i, 720p, PAL/NTSC SD, 4K (2160p)
+- **Multi-output** — DeckLink Quad 2 provides up to 8 SDI channels
+- **Graceful failure** — SDI issues don't affect SRT passthrough outputs
+- **Simultaneous** — SRT passthrough + SDI decode from the same route
 
 ### Real-time Statistics
 
@@ -62,6 +73,8 @@ The Routes table shows a live connection status badge for each route:
 - [x] ~~Bulk Route Operations~~
 - [x] ~~Route Cloning~~
 - [x] ~~Credential Management~~
+- [x] ~~SDI Output (DeckLink)~~
+- [x] ~~Event Log~~
 - [ ] Cluster Mode for high availability
 - [ ] Dynamic Routing rules
 - [ ] RTSP / RTMP / HLS / WebRTC support
@@ -102,11 +115,13 @@ graph TB
     subgraph "External Destinations"
         G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
         H["SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
+        I["SDI Output<br/>(DeckLink Quad 2)<br/>Hardware"]
     end
     
     A -->|"SRT Stream<br/>(Listener Mode)"| F
     F -->|"SRT Stream<br/>(Listener Mode)"| G
     F -->|"SRT Stream<br/>(Listener Mode)"| H
+    F -->|"Decode → SDI"| I
     
     B <-->|"HTTP/REST API"| C
     C <-->|"Database Ops"| E
@@ -119,7 +134,7 @@ graph TB
     classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
     classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
     
-    class A,G,H external
+    class A,G,H,I external
     class B ui
     class C,D,E backend
     class F streaming
@@ -149,12 +164,14 @@ graph TB
         F["SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
         G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
         H["SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
+        I["SDI Output<br/>(DeckLink Quad 2)<br/>Hardware"]
     end
     
     E -->|"SRT Connection<br/>(Caller Mode)"| F
     F -->|"SRT Stream"| E
     E -->|"SRT Connection<br/>(Caller Mode)"| G
     E -->|"SRT Connection<br/>(Caller Mode)"| H
+    E -->|"Decode → SDI"| I
     
     A <-->|"HTTP/REST API"| B
     B <-->|"Database Ops"| D
@@ -167,7 +184,7 @@ graph TB
     classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
     classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
     
-    class F,G,H external
+    class F,G,H,I external
     class A ui
     class B,C,D backend
     class E streaming
@@ -183,6 +200,7 @@ graph TB
 | **Stats** | ETS + Registry | In-memory real-time statistics |
 | **Streaming** | C + GStreamer | High-performance video processing |
 | **Transport** | Haivision SRT | Secure, reliable UDP-based streaming |
+| **SDI Output** | Blackmagic DeckLink + GStreamer | Hardware video output via decodebin |
 | **IPC** | Unix Socket | Low-latency backend ↔ pipeline communication |
 
 ---
@@ -217,15 +235,15 @@ sudo apt-get update
 
 # 2. Install System Libraries
 sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
   libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential git curl wget
 
-# 3. Install Node.js 18+ and Yarn
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+# 3. Install Node.js 20+ and Yarn
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 sudo npm install --global yarn --force
 
-# 4. Install Elixir 1.17+ & Erlang 27+
+# 4. Install Elixir 1.17+ & Erlang 25+
 wget https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb && sudo dpkg -i erlang-solutions_2.0_all.deb
 sudo apt-get update
 sudo apt-get install -y esl-erlang elixir
@@ -239,52 +257,9 @@ brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
 
 ---
 
-## Docker
-
-```bash
-# Build and run
-docker compose build
-docker compose up -d
-```
-
-Access: http://localhost:4000
-
----
-
 ## Production Deployment
 
-### Option 1: Docker (Recommended)
-
-```bash
-# Build production image
-docker compose build
-
-# Start in background
-docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# Stop
-docker compose down
-```
-
-#### Auto-Start on Reboot
-
-To ensure Blackgate automatically starts when the host machine reboots:
-
-1. **Enable Docker Daemon on Boot:**
-   ```bash
-   sudo systemctl enable docker
-   ```
-
-2. **Compose Restart Policy:**
-   Ensure your `docker-compose.yml` file contains `restart: unless-stopped`, and run:
-   ```bash
-   docker compose up -d
-   ```
-
-### Option 2: Baremetal (Linux/macOS)
+### Option 1: Baremetal (Recommended for SDI)
 
 ```bash
 # 1. Install dependencies
@@ -302,6 +277,39 @@ make restart   # Restart the server
 make status    # Check if running
 ```
 
+#### Auto-Start on Boot (systemd)
+
+```bash
+# Install the systemd service
+sudo cp blackgate.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable blackgate
+sudo systemctl start blackgate
+
+# Management
+sudo systemctl status blackgate     # Check status
+sudo systemctl restart blackgate    # Restart
+journalctl -u blackgate -f          # View logs
+```
+
+### Option 2: Docker
+
+```bash
+# Build and run
+docker compose build
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop
+docker compose down
+```
+
+Access: http://localhost:4000
+
+> **Note:** For SDI output via Docker, the host must have Blackmagic Desktop Video drivers installed and device passthrough configured in `docker-compose.yml`.
+
 ### Commands Reference
 
 | Command | Purpose |
@@ -309,10 +317,10 @@ make status    # Check if running
 | `make install` | Install all dependencies (system + elixir + frontend) |
 | `make dev-all` | Development (hot-reload, debug) |
 | `make build` | Build production release |
-| `make start` | Start production server |
+| `make start` | Start production server (daemon) |
 | `make stop` | Stop production server |
+| `make restart` | Restart the server |
 | `make status` | Check server status |
-| `docker compose up -d` | Production (Docker) |
 
 ---
 
@@ -331,7 +339,7 @@ All other endpoints require `Authorization: Bearer <token>` header.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/routes` | List all routes (includes `connected` status) |
+| `GET` | `/api/routes` | List all routes (includes destinations and `connected` status) |
 | `POST` | `/api/routes` | Create a route |
 | `GET` | `/api/routes/:id` | Get route details |
 | `PUT` | `/api/routes/:id` | Update a route |
@@ -350,9 +358,17 @@ All other endpoints require `Authorization: Bearer <token>` header.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/routes/:id/destinations` | List destinations |
-| `POST` | `/api/routes/:id/destinations` | Add destination |
+| `POST` | `/api/routes/:id/destinations` | Add destination (SRT, UDP, or SDI) |
 | `PUT` | `/api/routes/:id/destinations/:dest_id` | Update destination |
 | `DELETE` | `/api/routes/:id/destinations/:dest_id` | Remove destination |
+
+### Events
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/events` | List events (filter: severity, route_id, type, limit) |
+| `GET` | `/api/events/counts` | Get event counts by severity |
+| `DELETE` | `/api/events` | Clear all events |
 
 ### System
 
@@ -384,7 +400,24 @@ All other endpoints require `Authorization: Bearer <token>` header.
 | `API_AUTH_USERNAME` | Auth username | *(required)* |
 | `API_AUTH_PASSWORD` | Auth password | *(required)* |
 | `PORT` | API port | `4000` |
-| `DATABASE_DATA_DIR` | Database path | `./khepri` |
+| `PHX_HOST` | Listen address | `0.0.0.0` |
+| `DATABASE_DATA_DIR` | Database path | `./khepri#<node>` |
+| `RELEASE_COOKIE` | Erlang distribution cookie | `blackgate_production_cookie` |
+| `NODE_IP` | Node IP for Erlang distribution | `127.0.0.1` |
+| `LICENSE_SERVER_URL` | License validation server | *(optional)* |
+
+---
+
+## SDI Hardware Setup
+
+For SDI output via Blackmagic DeckLink:
+
+1. **Install Blackmagic Desktop Video driver** on the host (creates `/dev/blackmagic/*`)
+2. **Install GStreamer libav**: `sudo apt install gstreamer1.0-libav`
+3. **Verify**: `gst-inspect-1.0 decklinkvideosink`
+4. **Test**: `gst-launch-1.0 videotestsrc ! videoconvert ! "video/x-raw,format=UYVY,width=1920,height=1080,framerate=25/1" ! decklinkvideosink device-number=0 mode=1080p25`
+
+See [SDI_FIXES.md](./SDI_FIXES.md) for detailed hardware setup, device mapping, and troubleshooting.
 
 ---
 
@@ -398,6 +431,7 @@ Blackgate is proprietary software developed by [Visual Alchemy](https://github.c
 
 - [ROADMAP](./ROADMAP.md) — Development roadmap & feature backlog
 - [CHANGELOG](./CHANGELOG.md) — Version history
+- [SDI_FIXES](./SDI_FIXES.md) — SDI output setup, device mapping, troubleshooting
 
 ---
 
