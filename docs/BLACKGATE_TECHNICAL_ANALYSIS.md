@@ -605,3 +605,92 @@ end
 | `POST` | `/api/system/pipelines/:pid/kill` | Yes | `SystemController` | Kill C process |
 | `GET` | `/api/nodes` | Yes | `NodeController` | List cluster nodes |
 | `GET` | `/api/network/interfaces` | Yes | `NetworkController` | List network interfaces |
+
+
+---
+
+## 6. FFmpeg Sidecar Architecture (RTMP/HLS/HTTP-FLV → SDI)
+
+### 6.1 Overview
+
+RTMP, HLS, and HTTP-FLV sources cannot be directly decoded to SDI output via GStreamer's native elements due to timestamp drift and preroll deadlock issues. The solution uses ffmpeg as a sidecar process to normalize the stream into SRT, which then feeds the proven SRT→SDI pipeline.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Blackgate Route Process                                                  │
+│                                                                          │
+│  ┌──────────┐    SRT loopback     ┌──────────────────────────────────┐  │
+│  │  ffmpeg   │──────────────────→ │  GStreamer Pipeline               │  │
+│  │           │  127.0.0.1:39xxx   │                                    │  │
+│  │ RTMP pull │  mode=listener     │  srtsrc(caller) → tee ─┬→ srtsink │  │
+│  │ → MPEG-TS │  latency=125ms    │                         ├→ SDI     │  │
+│  │ → SRT out │                    │                         └→ thumb   │  │
+│  └──────────┘                     └──────────────────────────────────┘  │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Startup Sequence
+
+1. `RouteHandler` detects RTMP/HLS/HTTP-FLV schema
+2. `maybe_start_ffmpeg_sidecar()` picks a random port (39000-39999)
+3. ffmpeg spawned via Erlang Port: `ffmpeg -i "rtmp://..." -c copy -f mpegts "srt://127.0.0.1:{port}?mode=listener&latency=125"`
+4. 3-second sleep to allow ffmpeg to start listening
+5. Route config rewritten: `schema: "RTMP"` → `schema: "SRT", mode: "caller", port: {port}`
+6. GStreamer pipeline starts with `srtsrc uri="srt://127.0.0.1:{port}?mode=caller"`
+7. Pipeline sees a normal SRT source — standard tee → SDI/SRT/thumbnail paths
+
+### 6.3 Why ffmpeg Sidecar Works
+
+| Problem with native GStreamer | How ffmpeg solves it |
+|-------------------------------|---------------------|
+| `flvdemux` + compressed tee causes timestamp drift after 10-20 min | ffmpeg remuxes to MPEG-TS with normalized PTS/DTS timestamps |
+| `rtmpsrc` is a live source — DeckLink preroll deadlocks | SRT loopback is not live — normal preroll works |
+| `identity sync=true` drifts for audio after several minutes | SRT protocol adds latency buffer, smoothing timing |
+| Standard tee path (mpegtsmux → tsdemux) freezes video for RTMP | ffmpeg's mpegtsmux is battle-tested, produces clean MPEG-TS |
+
+### 6.4 ffmpeg Command
+
+```bash
+ffmpeg -hide_banner -loglevel warning \
+  [-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5]  # HTTP sources only
+  -i "{source_url}" \
+  -c copy -f mpegts \
+  "srt://127.0.0.1:{port}?mode=listener&latency=125"
+```
+
+- `-c copy`: No re-encoding (zero CPU for transcode)
+- `-f mpegts`: Remuxes into MPEG-TS container (compatible with GStreamer's tsdemux)
+- `mode=listener`: ffmpeg listens, GStreamer calls in
+- `latency=125`: 125ms SRT latency buffer
+
+### 6.5 SDI Pipeline Configuration (Proven Stable)
+
+```
+srtsrc(caller) → tee → queue(5s, non-leaky) → tsdemux → decodebin → queue(5s, non-leaky)
+  → videoconvert → videorate(skip-to-first=true) → videoscale → caps(UYVY) → decklinkvideosink(sync=true)
+  → audioconvert → audioresample → decklinkaudiosink(sync=true)
+```
+
+Critical settings that make it work:
+- **`sync=true`** on DeckLink sinks: hardware clock paces output
+- **`skip-to-first=true`** on videorate: prevents initial frame burst from overwhelming DeckLink
+- **Non-leaky 5-second queues**: absorbs timing variations without dropping frames
+- **No `identity sync=true`**: not needed when DeckLink sync=true handles timing
+
+### 6.6 Lifecycle Management
+
+- **Start**: Spawn ffmpeg → wait 3s → start GStreamer pipeline
+- **Stop**: Kill GStreamer pipeline (Port.close) → kill ffmpeg (sys_kill by OS PID)
+- **ffmpeg crash**: Erlang Port detects `:exit_status` → route process crashes → can be restarted via UI
+- **GStreamer crash**: Bus error callback → route stops → logged in Event Log
+
+### 6.7 Supported Source Protocols
+
+| Protocol | ffmpeg input | Example URL |
+|----------|-------------|-------------|
+| RTMP | `rtmpsrc` → ffmpeg | `rtmp://server:1935/live/key` |
+| HLS (.m3u8) | `souphttpsrc` → ffmpeg | `https://server/stream/playlist.m3u8` |
+| HTTP-FLV | `souphttpsrc` → ffmpeg | `http://server:8085/stream.flv` |
+
+All protocols are normalized to SRT MPEG-TS before entering the GStreamer pipeline.
