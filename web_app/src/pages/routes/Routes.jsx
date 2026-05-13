@@ -270,6 +270,9 @@ const Routes = () => {
       key: 'connection',
       align: 'center',
       render: (_, record) => {
+        if (record.status === 'reconnecting') {
+           return <Badge status="warning" text="Reconnecting" />;
+        }
         if (record.status !== 'started') {
            return <Badge status="default" text="Off" />;
         }

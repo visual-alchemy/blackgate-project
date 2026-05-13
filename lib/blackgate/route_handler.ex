@@ -83,19 +83,32 @@ defmodule Blackgate.RouteHandler do
 
   # Pipeline process exited — enter reconnecting state
   def handle_event(:info, {port, {:exit_status, status}}, :started, data)
-      when port == data.port do
-    Logger.warning("RouteHandler: Pipeline exited with status #{status}, entering reconnect mode")
+      when is_port(port) do
+    cond do
+      port == data.port ->
+        # GStreamer pipeline exited
+        Logger.warning("RouteHandler: Pipeline exited with status #{status}, entering reconnect mode")
+        enter_reconnecting(data)
 
-    # Clean up ffmpeg sidecar if running
-    if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+      port == data.ffmpeg_port ->
+        # ffmpeg sidecar exited — pipeline will likely follow
+        Logger.warning("RouteHandler: FFmpeg sidecar exited with status #{status}, entering reconnect mode")
+        # Kill the pipeline too since it depends on ffmpeg
+        if data.port && is_port(data.port), do: close_port(data.port)
+        enter_reconnecting(data)
 
+      true ->
+        :keep_state_and_data
+    end
+  end
+
+  defp enter_reconnecting(data) do
     Blackgate.set_route_status(data.id, "reconnecting")
     Blackgate.EventLog.log(:warning, "route_reconnecting", "Source disconnected, attempting reconnect...", %{
       route_id: data.id,
       route_name: get_in(data, [:route, "name"]) || data.id
     })
 
-    # Start reconnect timer
     {:next_state, :reconnecting,
      %{data | port: nil, ffmpeg_port: nil, reconnect_started_at: System.monotonic_time(:millisecond), reconnect_count: 0},
      {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}

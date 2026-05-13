@@ -95,11 +95,19 @@ const RouteItem = () => {
 
     // Check if status field exists and use it as the primary indicator
     if (routeData.status) {
-      const isStarted = routeData.status.toLowerCase() === 'started';
+      const status = routeData.status.toLowerCase();
 
-      if (isStarted) {
+      if (status === 'started') {
         return {
           color: 'success',
+          buttonColor: 'default',
+          buttonIcon: <PauseCircleOutlined />,
+          buttonText: 'Stop',
+          buttonType: 'default'
+        };
+      } else if (status === 'reconnecting') {
+        return {
+          color: 'warning',
           buttonColor: 'default',
           buttonIcon: <PauseCircleOutlined />,
           buttonText: 'Stop',
