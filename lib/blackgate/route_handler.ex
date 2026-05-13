@@ -9,6 +9,10 @@ defmodule Blackgate.RouteHandler do
 
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
 
+  # Reconnect configuration
+  @reconnect_interval_ms 10_000   # Retry every 10 seconds
+  @reconnect_timeout_ms 180_000   # Give up after 3 minutes
+
   @impl true
   def callback_mode, do: [:handle_event_function]
 
@@ -23,7 +27,9 @@ defmodule Blackgate.RouteHandler do
       id: args.id,
       port: nil,
       ffmpeg_port: nil,
-      route: route
+      route: route,
+      reconnect_started_at: nil,
+      reconnect_count: 0
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -72,6 +78,81 @@ defmodule Blackgate.RouteHandler do
       end
     end)
 
+    :keep_state_and_data
+  end
+
+  # Pipeline process exited — enter reconnecting state
+  def handle_event(:info, {port, {:exit_status, status}}, :started, data)
+      when port == data.port do
+    Logger.warning("RouteHandler: Pipeline exited with status #{status}, entering reconnect mode")
+
+    # Clean up ffmpeg sidecar if running
+    if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+
+    Blackgate.set_route_status(data.id, "reconnecting")
+    Blackgate.EventLog.log(:warning, "route_reconnecting", "Source disconnected, attempting reconnect...", %{
+      route_id: data.id,
+      route_name: get_in(data, [:route, "name"]) || data.id
+    })
+
+    # Start reconnect timer
+    {:next_state, :reconnecting,
+     %{data | port: nil, ffmpeg_port: nil, reconnect_started_at: System.monotonic_time(:millisecond), reconnect_count: 0},
+     {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+  end
+
+  # Reconnect timer fired — attempt to restart the pipeline
+  def handle_event({:timeout, :reconnect}, :retry, :reconnecting, data) do
+    elapsed = System.monotonic_time(:millisecond) - data.reconnect_started_at
+
+    if elapsed >= @reconnect_timeout_ms do
+      # Timeout exceeded — give up
+      Logger.error("RouteHandler: Reconnect timeout (#{div(elapsed, 1000)}s), stopping route")
+      Blackgate.set_route_status(data.id, "stopped")
+      Blackgate.EventLog.log(:critical, "reconnect_failed",
+        "Reconnect failed after #{data.reconnect_count} attempts (#{div(elapsed, 1000)}s), route stopped", %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        })
+      {:stop, :normal, data}
+    else
+      # Attempt reconnect
+      count = data.reconnect_count + 1
+      Logger.info("RouteHandler: Reconnect attempt ##{count} (#{div(elapsed, 1000)}s elapsed)")
+
+      try do
+        {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(data.route)
+        port = start_native_pipeline(route_for_pipeline)
+
+        case send_initial_command(port, route_for_pipeline) do
+          :ok ->
+            Logger.info("RouteHandler: Reconnect successful on attempt ##{count}")
+            Blackgate.set_route_status(data.id, "started")
+            Blackgate.EventLog.log(:info, "route_reconnected",
+              "Route reconnected after #{count} attempts", %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              })
+            {:next_state, :started,
+             %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0}}
+
+          {:error, _reason} ->
+            if ffmpeg_port, do: close_port(ffmpeg_port)
+            close_port(port)
+            {:keep_state, %{data | reconnect_count: count},
+             {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+        end
+      rescue
+        e ->
+          Logger.error("RouteHandler: Reconnect attempt ##{count} failed: #{inspect(e)}")
+          {:keep_state, %{data | reconnect_count: count},
+           {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+      end
+    end
+  end
+
+  # Ignore port messages during reconnecting state
+  def handle_event(:info, {_port, _msg}, :reconnecting, _data) do
     :keep_state_and_data
   end
 
