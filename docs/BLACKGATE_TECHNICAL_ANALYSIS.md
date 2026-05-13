@@ -40,7 +40,7 @@ graph TB
 
     subgraph "Native C Processes (per-route)"
         NATIVE["blackgate_pipeline<br/>(C + GStreamer)"]
-        GST["GStreamer Pipeline<br/>(srtsrc → tee → srtsink/udpsink)"]
+        GST["GStreamer Pipeline<br/>srtsrc - tee - srtsink/udpsink"]
     end
 
     subgraph "Frontend"
@@ -61,10 +61,10 @@ graph TB
     PHOENIX -->|Start/Stop| DS
 
     DS --> RS --> RH
-    RH -->|Erlang Port<br/>(stdin/stdout)| NATIVE
+    RH -->|"Erlang Port (stdin/stdout)"| NATIVE
     RH -->|Process Lookup| SYN
 
-    NATIVE -->|Unix Domain Socket<br/>(AF_UNIX, SOCK_STREAM)| RANCH
+    NATIVE -->|"Unix Domain Socket (AF_UNIX)"| RANCH
     RANCH --> USH
     USH -->|JSON Stats| RSR
     USH -->|Metrics Export| METRICS
