@@ -1381,8 +1381,10 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, NULL);
         gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
-        g_object_set(videosink, "sync", FALSE, NULL);
-        g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
+        // DeckLink hardware clock paces output (sync=TRUE)
+        // Proven with gst-launch: fixes audio stuttering and timing issues
+        g_object_set(videosink, "sync", TRUE, NULL);
+        g_object_set(audiosink, "device-number", device_number, "sync", TRUE, NULL);
 
         // --- Configure input queue ---
         g_object_set(queue,
