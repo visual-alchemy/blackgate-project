@@ -355,18 +355,17 @@ defmodule Blackgate.RouteHandler do
         :stream
       ])
 
-      # Give ffmpeg a moment to connect and start pushing
-      Process.sleep(2000)
+      # Give ffmpeg time to start listening on the SRT port
+      Process.sleep(3000)
 
-      # Rewrite the route to use SRT listener on the internal port
+      # Rewrite the route to use SRT caller on the internal port
       modified_route = route
         |> Map.put("schema", "SRT")
         |> Map.put("schema_options", %{
           "localaddress" => "127.0.0.1",
           "localport" => internal_port,
-          "mode" => "listener",
-          "latency" => 125,
-          "keep-listening" => true
+          "mode" => "caller",
+          "latency" => 125
         })
 
       Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started: #{url}", %{
@@ -393,7 +392,7 @@ defmodule Blackgate.RouteHandler do
       "#{reconnect_flags} " <>
       "-i \"#{url}\" " <>
       "-c copy -f mpegts " <>
-      "\"srt://127.0.0.1:#{internal_port}?mode=caller&latency=125\""
+      "\"srt://127.0.0.1:#{internal_port}?mode=listener&latency=125\""
   end
 
   defp find_available_port do
