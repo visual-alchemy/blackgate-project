@@ -1386,17 +1386,30 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         g_object_set(videosink, "sync", TRUE, NULL);
         g_object_set(audiosink, "device-number", device_number, "sync", TRUE, NULL);
 
-        // --- Configure input queue ---
+        // --- Configure input queue (match proven gst-launch: 5s buffer) ---
         g_object_set(queue,
                      "use-buffering",    FALSE,
                      "max-size-buffers", 0,
-                     "max-size-bytes",   (guint)(50 * 1024 * 1024),
-                     "max-size-time",    (guint64)3000000000,
+                     "max-size-bytes",   0,
+                     "max-size-time",    (guint64)5000000000,
                      NULL);
 
-        // --- Configure leaky queues after decodebin to prevent backpressure ---
-        g_object_set(vqueue, "max-size-buffers", 5, "leaky", 2, NULL);
-        g_object_set(aqueue, "max-size-buffers", 5, "leaky", 2, NULL);
+        // --- Configure queues after decodebin (match gst-launch: large non-leaky) ---
+        g_object_set(vqueue,
+                     "max-size-buffers", 0,
+                     "max-size-time",    (guint64)5000000000,
+                     "max-size-bytes",   0,
+                     "leaky",            0,
+                     NULL);
+        g_object_set(aqueue,
+                     "max-size-buffers", 0,
+                     "max-size-time",    (guint64)5000000000,
+                     "max-size-bytes",   0,
+                     "leaky",            0,
+                     NULL);
+
+        // Configure videorate: skip corrupted frames until first keyframe
+        g_object_set(vrate, "skip-to-first", TRUE, NULL);
 
         // --- Add all elements to pipeline ---
         gst_bin_add_many(GST_BIN(pipeline),
