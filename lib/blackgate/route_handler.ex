@@ -459,7 +459,7 @@ defmodule Blackgate.RouteHandler do
           "localaddress" => "127.0.0.1",
           "localport" => internal_port,
           "mode" => "caller",
-          "latency" => 125
+          "latency" => 500
         })
 
       Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started: #{url}", %{
@@ -486,7 +486,7 @@ defmodule Blackgate.RouteHandler do
       "#{reconnect_flags} " <>
       "-i \"#{url}\" " <>
       "-c copy -f mpegts " <>
-      "\"srt://127.0.0.1:#{internal_port}?mode=listener&latency=125\""
+      "\"srt://127.0.0.1:#{internal_port}?mode=listener&latency=500\""
   end
 
   defp find_available_port do
