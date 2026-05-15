@@ -1381,10 +1381,9 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, NULL);
         gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
-        // DeckLink sync=false, identity sync=true handles video frame pacing
-        // Audio: no identity needed (sync=false outputs immediately)
+        // DeckLink sync=false for video (identity handles pacing), sync=true for audio
         g_object_set(videosink, "sync", FALSE, NULL);
-        g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
+        g_object_set(audiosink, "device-number", device_number, "sync", TRUE, NULL);
 
         // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
