@@ -1334,11 +1334,12 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *aqueue      = gst_element_factory_make("queue",             NULL);
         GstElement *aconvert    = gst_element_factory_make("audioconvert",      NULL);
         GstElement *aresample   = gst_element_factory_make("audioresample",     NULL);
+        GstElement *arate       = gst_element_factory_make("audiorate",         NULL);
         GstElement *audiosink   = gst_element_factory_make("decklinkaudiosink", NULL);
 
         if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
             !vscale || !vcaps || !videosink ||
-            !adecodebin || !aqueue || !aconvert || !aresample || !audiosink) {
+            !adecodebin || !aqueue || !aconvert || !aresample || !arate || !audiosink) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
             if (queue)      gst_object_unref(queue);
             if (tsdemux)    gst_object_unref(tsdemux);
@@ -1418,7 +1419,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         gst_bin_add_many(GST_BIN(pipeline),
                          queue, tsdemux,
                          vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
-                         adecodebin, aqueue, aconvert, aresample, audiosink,
+                         adecodebin, aqueue, aconvert, aresample, arate, audiosink,
                          NULL);
 
         // --- Link static chains downstream of decodebin ---
@@ -1427,8 +1428,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
             return FALSE;
         }
-        // Audio: aqueue → audioconvert → audioresample → decklinkaudiosink
-        if (!gst_element_link_many(aqueue, aconvert, aresample, audiosink, NULL)) {
+        // Audio: aqueue → audioconvert → audioresample → audiorate → decklinkaudiosink
+        if (!gst_element_link_many(aqueue, aconvert, aresample, arate, audiosink, NULL)) {
             g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
             return FALSE;
         }
