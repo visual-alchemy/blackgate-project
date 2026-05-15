@@ -1381,16 +1381,14 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, NULL);
         gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
-        // DeckLink sync=false, identity sync=true handles frame pacing
-        // Proven stable 30+ min with gst-launch (prevents timestamp drift freeze)
+        // DeckLink sync=false, identity sync=true handles video frame pacing
+        // Audio: no identity needed (sync=false outputs immediately)
         g_object_set(videosink, "sync", FALSE, NULL);
         g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
 
-        // Create identity elements for frame pacing via system clock
+        // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
-        GstElement *aud_identity = gst_element_factory_make("identity", NULL);
         g_object_set(vid_identity, "sync", TRUE, NULL);
-        g_object_set(aud_identity, "sync", TRUE, NULL);
 
         // --- Configure input queue (match proven gst-launch: 5s buffer) ---
         g_object_set(queue,
@@ -1421,7 +1419,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         gst_bin_add_many(GST_BIN(pipeline),
                          queue, tsdemux,
                          vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
-                         adecodebin, aqueue, aconvert, aresample, aud_identity, audiosink,
+                         adecodebin, aqueue, aconvert, aresample, audiosink,
                          NULL);
 
         // --- Link static chains downstream of decodebin ---
@@ -1430,8 +1428,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
             return FALSE;
         }
-        // Audio: aqueue → audioconvert → audioresample → identity(sync) → decklinkaudiosink
-        if (!gst_element_link_many(aqueue, aconvert, aresample, aud_identity, audiosink, NULL)) {
+        // Audio: aqueue → audioconvert → audioresample → decklinkaudiosink
+        if (!gst_element_link_many(aqueue, aconvert, aresample, audiosink, NULL)) {
             g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
             return FALSE;
         }
