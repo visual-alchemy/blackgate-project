@@ -14,7 +14,6 @@ Environment=API_AUTH_USERNAME=admin
 Environment=API_AUTH_PASSWORD=password123
 Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
 Environment=RELEASE_COOKIE=blackgate_production_cookie
-Environment=GST_PLUGIN_FEATURE_RANK=vah264dec:0,vaapih264dec:0,vah265dec:0,vaapih265dec:0
 ExecStart=/home/woi/Downloads/blackgate-project/_build/prod/rel/blackgate/bin/blackgate start
 ExecStop=/home/woi/Downloads/blackgate-project/_build/prod/rel/blackgate/bin/blackgate stop
 Restart=on-failure
