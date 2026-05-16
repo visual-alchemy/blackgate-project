@@ -13,6 +13,11 @@ defmodule Blackgate.RouteHandler do
   @reconnect_interval_ms 10_000   # Retry every 10 seconds
   @reconnect_timeout_ms 180_000   # Give up after 3 minutes
 
+  # Watchdog configuration
+  @watchdog_check_interval_ms 30_000  # Check every 30 seconds
+  @watchdog_stall_threshold_ms 60_000 # Restart if no data for 60 seconds
+  @watchdog_grace_period_ms 30_000    # Don't check for first 30 seconds after start
+
   @impl true
   def callback_mode, do: [:handle_event_function]
 
@@ -29,7 +34,10 @@ defmodule Blackgate.RouteHandler do
       ffmpeg_port: nil,
       route: route,
       reconnect_started_at: nil,
-      reconnect_count: 0
+      reconnect_count: 0,
+      last_bytes_received: 0,
+      last_bytes_changed_at: nil,
+      started_at: nil
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -50,7 +58,10 @@ defmodule Blackgate.RouteHandler do
           route_id: data.id,
           route_name: data.route["name"]
         })
-        {:next_state, :started, %{data | port: port, ffmpeg_port: ffmpeg_port}}
+        now = System.monotonic_time(:millisecond)
+        {:next_state, :started,
+         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now},
+         {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
@@ -79,6 +90,56 @@ defmodule Blackgate.RouteHandler do
     end)
 
     :keep_state_and_data
+  end
+
+  # Watchdog: check if data is still flowing
+  def handle_event({:timeout, :watchdog}, :check, :started, data) do
+    now = System.monotonic_time(:millisecond)
+
+    # Skip check during grace period
+    if now - data.started_at < @watchdog_grace_period_ms do
+      {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+    else
+      # Get current bytes from stats registry
+      current_bytes = get_total_bytes_received(data.id)
+
+      if current_bytes > data.last_bytes_received do
+        # Data is flowing — update and schedule next check
+        {:keep_state, %{data | last_bytes_received: current_bytes, last_bytes_changed_at: now},
+         {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+      else
+        # No new data — check how long it's been stalled
+        stall_duration = now - data.last_bytes_changed_at
+
+        if stall_duration >= @watchdog_stall_threshold_ms do
+          # Stalled too long — trigger reconnect
+          Logger.warning("RouteHandler: Watchdog detected stall (#{div(stall_duration, 1000)}s no data), restarting route")
+          Blackgate.EventLog.log(:warning, "watchdog_restart",
+            "No data for #{div(stall_duration, 1000)}s, restarting route", %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            })
+
+          # Kill current pipeline and ffmpeg
+          if data.port && is_port(data.port), do: close_port(data.port)
+          if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+
+          # Enter reconnecting state
+          enter_reconnecting(%{data | port: nil, ffmpeg_port: nil})
+        else
+          # Still within threshold — keep waiting
+          {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+        end
+      end
+    end
+  end
+
+  defp get_total_bytes_received(route_id) do
+    case Blackgate.RouteStatsRegistry.get_stats(route_id) do
+      %{stats: stats} when is_map(stats) ->
+        Map.get(stats, "total-bytes-received", 0)
+      _ -> 0
+    end
   end
 
   # Pipeline process exited — enter reconnecting state
@@ -146,8 +207,11 @@ defmodule Blackgate.RouteHandler do
                 route_id: data.id,
                 route_name: get_in(data, [:route, "name"]) || data.id
               })
+            now = System.monotonic_time(:millisecond)
             {:next_state, :started,
-             %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0}}
+             %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0,
+               started_at: now, last_bytes_changed_at: now, last_bytes_received: 0},
+             {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
             if ffmpeg_port, do: close_port(ffmpeg_port)
