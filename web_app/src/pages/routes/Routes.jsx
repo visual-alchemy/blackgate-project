@@ -132,6 +132,59 @@ const Routes = () => {
     }
   };
 
+  // Bulk delete handler
+  const handleBulkDelete = () => {
+    if (selectedRowKeys.length === 0) return;
+
+    const selectedNames = routes
+      .filter(r => selectedRowKeys.includes(r.id))
+      .map(r => r.name)
+      .join(', ');
+
+    modal.confirm({
+      title: `Delete ${selectedRowKeys.length} route(s)?`,
+      icon: <ExclamationCircleFilled />,
+      content: `This will permanently delete: ${selectedNames}. Running routes will be stopped first.`,
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        setBulkLoading(true);
+        try {
+          let successCount = 0;
+          let failCount = 0;
+
+          for (const id of selectedRowKeys) {
+            try {
+              // Stop if running
+              const route = routes.find(r => r.id === id);
+              if (route && route.status === 'started') {
+                await routesApi.stop(id);
+              }
+              await routesApi.delete(id);
+              successCount++;
+            } catch {
+              failCount++;
+            }
+          }
+
+          if (failCount > 0) {
+            messageApi.warning(`${successCount} routes deleted, ${failCount} failed`);
+          } else {
+            messageApi.success(`${successCount} routes deleted successfully`);
+          }
+
+          setSelectedRowKeys([]);
+          fetchRoutes();
+        } catch (error) {
+          messageApi.error(`Bulk delete failed: ${error.message}`);
+        } finally {
+          setBulkLoading(false);
+        }
+      },
+    });
+  };
+
   // Clone handler
   const handleClone = async (id, name) => {
     const loadingMessage = messageApi.loading(`Cloning "${name}"...`, 0);
@@ -362,6 +415,14 @@ const Routes = () => {
                   onClick={() => handleBulkAction('stop')}
                 >
                   Stop Selected
+                </Button>
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  loading={bulkLoading}
+                  onClick={() => handleBulkDelete()}
+                >
+                  Delete Selected
                 </Button>
               </>
             )}
