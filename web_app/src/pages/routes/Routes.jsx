@@ -3,6 +3,7 @@ import { Table, Card, Button, Tag, Space, Typography, message, Modal, Input, Sel
 import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
+import OutputPopover from './OutputPopover';
 
 const { Title } = Typography;
 
@@ -237,33 +238,9 @@ const Routes = () => {
     {
       title: 'Output',
       key: 'output',
-      render: (_, record) => {
-        const destinations = record.destinations || [];
-        if (destinations.length === 0) return <span style={{ color: '#666' }}>—</span>;
-
-        const formatDest = (dest) => {
-          switch (dest.schema) {
-            case 'SRT':
-              return `SRT:${dest.schema_options?.localport || '?'}`;
-            case 'UDP':
-              return `UDP:${dest.schema_options?.host || dest.schema_options?.address || '?'}:${dest.schema_options?.port || '?'}`;
-            case 'SDI': {
-              const deviceToSdi = { 0: 1, 4: 2, 1: 3, 5: 4, 2: 5, 6: 6, 3: 7, 7: 8 };
-              const port = deviceToSdi[dest.schema_options?.device_number] ?? '?';
-              const modeMap = { 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60' };
-              const mode = modeMap[dest.schema_options?.video_mode] || '1080p25';
-              return `SDI ${port} · ${mode}`;
-            }
-            default:
-              return dest.schema || '?';
-          }
-        };
-
-        if (destinations.length <= 2) {
-          return destinations.map(formatDest).join(' · ');
-        }
-        return `${formatDest(destinations[0])} (+${destinations.length - 1})`;
-      }
+      render: (_, record) => (
+        <OutputPopover route={record} allRoutes={routes} onUpdate={() => fetchRoutes(true)} />
+      )
     },
     {
       title: 'Connection',

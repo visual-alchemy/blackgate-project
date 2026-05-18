@@ -68,7 +68,14 @@
 - [ ] Connection lost/established events from stats monitoring
 - [ ] Health threshold events (high packet loss, high RTT)
 
-### 10. Route Groups / Tags
+### 10. SDI Audio Channel Selection
+- [ ] Allow selecting which audio channels to output on SDI (e.g., Ch 1+2, Ch 3+4, Ch 5+6, or custom pairs)
+- [ ] Use GStreamer `deinterleave` → pick channels → `interleave` or `audiomixmatrix` for channel mapping
+- [ ] Add `audio_channels` config to SDI destination schema (default: channels 1+2)
+- [ ] UI: dropdown on SDI destination — "Audio: 1+2 / 3+4 / 5+6 / Custom"
+- [ ] Support international broadcast feeds with 6+ channel layouts (international mix, atmo, commentary)
+
+### 11. Route Groups / Tags
 - [ ] Add `tags` or `group` field to route schema
 - [ ] Allow creating/naming groups (e.g., "ATP Stadium", "Studio A")
 - [ ] Filter routes table by group/tag
@@ -78,31 +85,31 @@
 
 ## 🏗️ Strategic / Long-Term
 
-### 11. Multi-Node Clustering
+### 12. Multi-Node Clustering
 - [ ] Leverage Khepri's built-in Raft consensus for multi-node state sync
 - [ ] Route discovery across nodes
 - [ ] Failover: if one node goes down, routes can be started on another
 - [ ] Cluster management UI in Settings
 
-### 12. Alerting & Webhooks
+### 13. Alerting & Webhooks
 - [ ] Define alert rules (stream disconnect, high packet loss, route crash)
 - [ ] Webhook integration (POST to external URL on alert)
 - [ ] Slack/Discord notification support
 - [ ] Alert history log in the dashboard
 
-### 13. Stream Recording (DVR)
+### 14. Stream Recording (DVR)
 - [ ] Add optional "Record" toggle per route
 - [ ] GStreamer: tee → filesink for recording to disk
 - [ ] Configurable recording directory and retention policy
 - [ ] Recordings browser in the UI with download/delete
 
-### 14. REST API Documentation (Swagger/OpenAPI)
+### 15. REST API Documentation (Swagger/OpenAPI)
 - [ ] Auto-generate OpenAPI spec from Phoenix routes
 - [ ] Serve Swagger UI at `/api/docs`
 - [ ] Document all endpoints with request/response schemas
 - [ ] Enable third-party integrations
 
-### 15. RTMP Protocol Support (In Progress 🔨)
+### 16. RTMP Protocol Support (In Progress 🔨)
 - [x] Add MediaMTX as RTMP ingest server (docker-compose, auth webhook)
 - [x] RTMP source: accept push with user-defined stream key per route
 - [x] RTMP destinations: `RTMP_PUSH` (push to YouTube/Twitch/custom RTMP)
@@ -112,7 +119,7 @@
 - [ ] Stream key regeneration UI
 - [ ] RTMP source health monitoring (MediaMTX API integration)
 
-### 16. ~~SDI Output via Blackmagic DeckLink~~ ✅
+### 17. ~~SDI Output via Blackmagic DeckLink~~ ✅
 > **Hardware:** DeckLink Quad 2 (8x SDI output, PCIe) — requires decode step (not passthrough)
 
 - [x] Bundle Blackmagic Desktop Video SDK headers in build (`native/decklink-sdk/`)
