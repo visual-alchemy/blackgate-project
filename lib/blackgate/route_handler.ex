@@ -87,6 +87,24 @@ defmodule Blackgate.RouteHandler do
           route_name: get_in(data, [:route, "name"]) || data.id
         })
       end
+
+      # Detect SDI audio silence
+      if String.contains?(line, "SDI_AUDIO_SILENT:") do
+        Blackgate.EventLog.log(:warning, "sdi_audio_silent",
+          "SDI audio stopped: #{String.trim(line)}", %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        })
+      end
+
+      # Detect SDI audio recovery
+      if String.contains?(line, "SDI_AUDIO_RECOVERED:") do
+        Blackgate.EventLog.log(:info, "sdi_audio_recovered",
+          "SDI audio recovered: #{String.trim(line)}", %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        })
+      end
     end)
 
     :keep_state_and_data

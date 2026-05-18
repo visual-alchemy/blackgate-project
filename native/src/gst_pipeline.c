@@ -23,6 +23,33 @@ static void on_sdi_tsdemux_pad_added(GstElement *src, GstPad *new_pad, gpointer 
 static void on_sdi_decodebin_video_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 
+// SDI Audio Health Monitor — tracks last audio buffer time per device
+// Only prints a warning when audio stops flowing (not every buffer)
+#define SDI_AUDIO_HEALTH_INTERVAL_SEC 10
+static volatile gint64 sdi_audio_last_buffer_time[8] = {0};
+static volatile gint64 sdi_audio_buffer_count[8] = {0};
+static volatile gboolean sdi_audio_silence_reported[8] = {FALSE};
+
+static GstPadProbeReturn sdi_audio_health_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    (void)info;
+    int device_number = GPOINTER_TO_INT(user_data);
+    if (device_number < 0 || device_number > 7) return GST_PAD_PROBE_OK;
+
+    gint64 now = g_get_monotonic_time(); // microseconds
+    sdi_audio_last_buffer_time[device_number] = now;
+    sdi_audio_buffer_count[device_number]++;
+
+    // If we previously reported silence, log that audio is back
+    if (sdi_audio_silence_reported[device_number]) {
+        sdi_audio_silence_reported[device_number] = FALSE;
+        g_print("SDI_AUDIO_RECOVERED: device=%d audio_buffers_flowing_again\n", device_number);
+    }
+
+    return GST_PAD_PROBE_OK;
+}
+
 // SDI decodebin callbacks: tsdemux → decodebin (codec-agnostic)
 typedef struct {
     GstElement *vdecodebin;
@@ -183,6 +210,23 @@ static void *print_stats(void *src)
 
     while (running) {
         sleep(1);
+
+        // --- SDI Audio Health Check (every cycle) ---
+        gint64 now_us = g_get_monotonic_time();
+        for (int i = 0; i < 8; i++) {
+            gint64 last = sdi_audio_last_buffer_time[i];
+            if (last == 0) continue; // never received audio on this device
+
+            gint64 silence_us = now_us - last;
+            if (silence_us > (SDI_AUDIO_HEALTH_INTERVAL_SEC * G_USEC_PER_SEC)) {
+                if (!sdi_audio_silence_reported[i]) {
+                    sdi_audio_silence_reported[i] = TRUE;
+                    g_print("SDI_AUDIO_SILENT: device=%d no_audio_for=%.1fs total_buffers=%lld\n",
+                            i, (double)silence_us / G_USEC_PER_SEC,
+                            (long long)sdi_audio_buffer_count[i]);
+                }
+            }
+        }
 
         GstStructure *stats = NULL;
         g_object_get(source, "stats", &stats, NULL);
@@ -1382,9 +1426,12 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, NULL);
         gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
-        // DeckLink sync=false for video (identity handles pacing), sync=true for audio
+        // DeckLink sync=false for both video and audio
+        // The DeckLink output clock drifts from the pipeline clock over time,
+        // causing audio buffers to be dropped as "too late" when sync=true.
+        // Evidence: decklinkaudiosink debug shows 7+ second clock divergence.
         g_object_set(videosink, "sync", FALSE, NULL);
-        g_object_set(audiosink, "device-number", device_number, "sync", TRUE, NULL);
+        g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
 
         // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
@@ -1456,6 +1503,15 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // decodebin exposes decoded raw pads, link them to the output queues
         g_signal_connect(vdecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_video_pad_added), vqueue);
         g_signal_connect(adecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_audio_pad_added), aqueue);
+
+        // --- Audio health monitor: probe on audiosink to detect when audio stops ---
+        GstPad *audio_sink_pad = gst_element_get_static_pad(audiosink, "sink");
+        if (audio_sink_pad) {
+            gst_pad_add_probe(audio_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                              sdi_audio_health_probe, GINT_TO_POINTER(device_number), NULL);
+            gst_object_unref(audio_sink_pad);
+            g_print("SDI sink %d: Audio health monitor installed\n", sink_index);
+        }
 
         g_print("SDI sink %d: pipeline created (decodebin) → DeckLink device %d (mode %s)\n",
                 sink_index, device_number, video_mode_str);
