@@ -415,6 +415,7 @@ defmodule Blackgate.RouteHandler do
       |> maybe_add_param(opts, "passphrase")
       |> maybe_add_param(opts, "pbkeylen")
       |> maybe_add_param(opts, "poll-timeout")
+      |> maybe_add_param(opts, "streamid")
 
     URI.to_string(%URI{
       scheme: "srt",
@@ -446,7 +447,8 @@ defmodule Blackgate.RouteHandler do
         "mode",
         "passphrase",
         "pbkeylen",
-        "poll-timeout"
+        "poll-timeout",
+        "streamid"
       ])
       |> Enum.filter(fn {key, _} ->
         key in ["latency"]

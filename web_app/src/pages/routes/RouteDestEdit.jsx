@@ -297,6 +297,14 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                     </Form.Item>
 
                                                     <Form.Item
+                                                        label="Stream ID"
+                                                        name={['schema_options', 'streamid']}
+                                                        extra="Optional SRT Stream ID. Required by some services (e.g., SRS/Vidio) for stream identification."
+                                                    >
+                                                        <Input placeholder="e.g., publish:live/1000000001:client_id:abc123" />
+                                                    </Form.Item>
+
+                                                    <Form.Item
                                                         label="Authentication"
                                                         name={['schema_options', 'authentication']}
                                                         valuePropName="checked"
