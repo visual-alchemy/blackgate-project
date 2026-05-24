@@ -4,7 +4,7 @@
 
 **High-performance video routing with secure, reliable transport**
 
-> **Alpha**: Core features functional. Actively improving based on real-world usage.
+> **v0.3.0**: SDI output, RTMP/ffmpeg sidecar, event log, watchdog, auto-reconnect. Actively improving based on real-world usage.
 
 ---
 
@@ -14,19 +14,22 @@
 
 | Category | Features |
 |----------|----------|
-| **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication |
+| **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication, StreamID support |
+| **RTMP/HLS/HTTP-FLV** | Ingest RTMP push or pull HLS/FLV streams via ffmpeg sidecar with SRT loopback normalization |
 | **UDP Support** | Source and Destination for local network streaming |
 | **SDI Output** | Blackmagic DeckLink hardware output (decode + scale to SDI) |
 | **Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
 | **Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
-| **Connection Status** | Live indicator on the Routes table showing real-time SRT connection health |
+| **Connection Status** | Live green/red/yellow/grey badge showing real-time SRT connection health including "Reconnecting" state |
 | **Dashboard** | System metrics (CPU, RAM, SWAP, Load) with auto-refresh and live video preview |
 | **Route Management** | Create, edit, clone, start, stop, delete routes with multiple destinations |
-| **Auto-Restart** | Editing a running route automatically restarts the pipeline — no manual stop/start needed |
-| **Bulk Operations** | Select and start/stop multiple routes at once |
+| **Watchdog** | Automatic stalled pipeline detection and restart (60s heartbeat) |
+| **Auto-Restart & Reconnect** | Editing a running route auto-restarts; RTMP sources auto-reconnect on disconnect |
+| **Bulk Operations** | Select and start/stop/delete multiple routes at once |
 | **Search & Filter** | Filter routes by name, status, or schema type |
-| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, SDI failures) |
+| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, SDI failures, reconnects) |
 | **Credential Management** | Change admin username and password from the Settings UI |
+| **Systemd Service** | Auto-start on boot for baremetal production deployments |
 | **REST API** | Full programmatic control for automation |
 | **Docker Ready** | One-command deployment with backup/restore |
 | **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
@@ -75,10 +78,13 @@ The Routes table shows a live connection status badge for each route:
 - [x] ~~Credential Management~~
 - [x] ~~SDI Output (DeckLink)~~
 - [x] ~~Event Log~~
+- [x] ~~Watchdog (Stalled Pipeline Detection)~~
+- [x] ~~RTMP/HTTP-FLV/HLS Ingestion (ffmpeg sidecar)~~
 - [ ] Cluster Mode for high availability
 - [ ] Dynamic Routing rules
-- [ ] RTSP / RTMP / HLS / WebRTC support
+- [ ] RTSP / HLS / WebRTC support
 - [ ] Stream health monitoring & alerts
+- [ ] Hardware decode (NVDEC/VA-API)
 
 See [ROADMAP](./ROADMAP.md) for the full roadmap.
 

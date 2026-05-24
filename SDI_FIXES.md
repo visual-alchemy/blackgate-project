@@ -1,9 +1,9 @@
 # SDI Output — BlackGate Project
 
-## Status: ✅ Working (Baremetal, May 12 2026)
+## Status: ✅ Working (Baremetal, May 2026)
 
 SDI output via Blackmagic DeckLink Quad 2 is fully functional on baremetal deployment.
-Tested with H.264/AAC and HEVC/MP2 input sources outputting to 1080p25 SDI.
+Tested with H.264/AAC and HEVC/MP2 input sources outputting to 1080p25 SDI. Multiple rounds of audio and decode pipeline tuning completed.
 
 ---
 
@@ -98,6 +98,24 @@ The DeckLink Quad 2 has 4 sub-devices, each with input + output. Not all device 
 
 **Fix:** Default `NODE_IP` to `127.0.0.1` instead of `hostname -f` in `rel/env.sh.eex`.
 
+### 8. Audio dropout after ~30 minutes (`de4e65d`, `c012fcd`, `edf8075`)
+
+**Symptom:** SDI audio would drop out after approximately 30 minutes of continuous playback.
+
+**Root cause:** Audio timing drift between GStreamer pipeline and DeckLink hardware clock. `identity sync=true` on audio path caused the drift.
+
+**Fix:** Multiple rounds of tuning:
+- Removed `identity` from audio path entirely (was a dead-end)
+- Set `decklinkaudiosink sync=FALSE` — let hardware manage its own timing
+- Added `audiorate` element to prevent sample rate drift
+- Added audio health monitor to detect silent audio outputs
+
+### 9. VA-API Hardware Decode Attempts (`32a1803`, `25e7f22`)
+
+**Attempt:** Enable Intel VA-API hardware decode (`vah264dec`, `vaapidecodebin`) to reduce CPU load from software avdec.
+
+**Result:** Disabled. Intel HD 630 on test hardware was too weak for real-time 1080p decode. Software avdec (libav) provides stable performance at ~70% CPU for 720p. VA-API may work with newer Intel Arc or NVIDIA NVDEC hardware.
+
 ---
 
 ## Supported Video Modes
@@ -149,8 +167,10 @@ ps aux | grep blackgate_pipeline
 
 ## Remaining Work
 
-- [ ] **Hardware decode** — Use NVDEC or VA-API instead of software decode to reduce CPU (currently ~70% for 720p H.264)
+- [ ] **Hardware decode** — NVDEC (`nvh264dec`) for NVIDIA GPUs. VA-API tested but disabled (Intel HD 630 too weak).
 - [ ] **True auto-detect** — Read input resolution/framerate and set DeckLink mode dynamically
 - [ ] **Docker deployment** — Verify DeckLink works inside container with device passthrough
 - [ ] **Multi-output test** — Run 4+ routes with SDI outputs simultaneously
-- [ ] **Graceful SDI failure** — If SDI sink fails, don't kill the entire pipeline (let SRT output continue)
+- [x] ~~Graceful SDI failure~~ — SDI sink failure no longer kills SRT/UDP outputs (`bbe6460`)
+- [x] ~~Bulk delete button~~ — Added (`5d4863f`)
+- [x] ~~Inline output popover~~ — Added (`ffa8169`)

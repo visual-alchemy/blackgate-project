@@ -1,9 +1,9 @@
 # Blackgate — Software Design Review: Technical Analysis
 
-> **Document Version**: 1.0  
-> **Date**: 2026-02-14  
-> **Source Codebase**: `visual-alchemy/blackgate-project` (hydra-srt)  
-> **Analysis Method**: Static code analysis of all source files
+> **Document Version**: 2.0
+> **Date**: 2026-05-24
+> **Source Codebase**: `visual-alchemy/blackgate-project` (blackgate v0.3.0)
+> **Analysis Method**: Static code analysis of all source files, updated for SDI output, RTMP/ffmpeg sidecar, event log, watchdog, and connection monitoring
 
 ---
 
@@ -28,19 +28,22 @@ graph TB
         RANCH["Ranch TCP Listener<br/>/tmp/hydra_unix_sock"]
         USH["UnixSockHandler<br/>(:gen_statem)"]
         RSR["RouteStatsRegistry<br/>(GenServer + ETS)"]
+        EVL["EventLog<br/>(GenServer + ETS)"]
+        LIC["License<br/>(GenServer)"]
         DS["DynamicSupervisor<br/>(PartitionSupervisor)"]
         RS["RoutesSupervisor<br/>(per-route Supervisor)"]
-        RH["RouteHandler<br/>(:gen_statem)"]
+        RH["RouteHandler<br/>(:gen_statem + watchdog)"]
         KHEPRI["Khepri DB<br/>(Raft Consensus)"]
         CACHEX["Cachex<br/>(In-Memory Cache)"]
         SYN["Syn<br/>(Process Registry)"]
-        PHOENIX["Phoenix Endpoint<br/>(HTTP API)"]
+        PHOENIX["Phoenix Endpoint<br/>(HTTP API + WebSocket)"]
         METRICS["Metrics.Connection<br/>(Instream/InfluxDB)"]
     end
 
     subgraph "Native C Processes (per-route)"
         NATIVE["blackgate_pipeline<br/>(C + GStreamer)"]
-        GST["GStreamer Pipeline<br/>srtsrc - tee - srtsink/udpsink"]
+        FFMPEG["ffmpeg Sidecar<br/>(RTMP/HLS/FLV only)"]
+        GST["GStreamer Pipeline<br/>srtsrc - tee - srtsink/udpsink/sdisink"]
     end
 
     subgraph "Frontend"
@@ -49,20 +52,28 @@ graph TB
 
     subgraph "External"
         SRT_IN["SRT Source<br/>(Encoder/Gateway)"]
+        RTMP_IN["RTMP/FLV Source<br/>(Encoder/OBS)"]
         SRT_OUT["SRT Destination<br/>(Decoder/Gateway)"]
         UDP_OUT["UDP Destination<br/>(Multicast)"]
+        SDI_OUT["SDI Output<br/>(DeckLink Hardware)"]
         VM["VictoriaMetrics<br/>(TSDB)"]
     end
 
-    REACT -->|REST API| PHOENIX
+    REACT -->|REST API + WebSocket| PHOENIX
     PHOENIX -->|CRUD| KHEPRI
     PHOENIX -->|Auth Sessions| CACHEX
     PHOENIX -->|Read Stats| RSR
+    PHOENIX -->|Read Events| EVL
+    PHOENIX -->|Read License| LIC
     PHOENIX -->|Start/Stop| DS
 
     DS --> RS --> RH
     RH -->|"Erlang Port (stdin/stdout)"| NATIVE
+    RH -->|"Erlang Port (stdin/stdout)"| FFMPEG
     RH -->|Process Lookup| SYN
+    RH -->|Emit Events| EVL
+
+    FFMPEG -->|"SRT loopback (127.0.0.1:39xxx)"| NATIVE
 
     NATIVE -->|"Unix Domain Socket (AF_UNIX)"| RANCH
     RANCH --> USH
@@ -71,20 +82,22 @@ graph TB
     METRICS --> VM
 
     SRT_IN -->|SRT Protocol| GST
+    RTMP_IN -->|RTMP/FLV| FFMPEG
     GST -->|SRT Protocol| SRT_OUT
     GST -->|UDP Multicast| UDP_OUT
+    GST -->|Decode → SDI| SDI_OUT
 ```
 
 ### 1.2 Backend: Elixir + Phoenix
 
-**✅ CONFIRMED** — The backend is built on **Elixir 1.14+ / OTP 27** with **Phoenix 1.7.14**.
+**✅ CONFIRMED** — The backend is built on **Elixir 1.18 / OTP 27** with **Phoenix 1.7.14**.
 
 **Evidence from `mix.exs`:**
 ```elixir
 {:phoenix, "~> 1.7.14"},
 {:plug_cowboy, "~> 2.7"},
-{:phoenix_ecto, "~> 4.5"},
 ```
+**Note:** Ecto/SQLite3 dependencies exist in `mix.exs` (`phoenix_ecto`, `ecto_sqlite3`) but are vestigial — production data is stored exclusively in Khepri.
 
 #### Concurrency Model
 
@@ -92,9 +105,11 @@ Blackgate uses advanced OTP concurrency patterns, **not** basic GenServer:
 
 | Pattern | Module | Purpose |
 |---------|--------|---------|
-| **`:gen_statem`** (State Machine) | `RouteHandler` | Manages lifecycle of each C pipeline process with state transitions (`start` → `started`) |
+| **`:gen_statem`** (State Machine) | `RouteHandler` | Manages lifecycle of each C pipeline process with state transitions (`start` → `started` → `reconnecting`). Includes 60s watchdog for stalled pipeline detection. |
 | **`:gen_statem`** (State Machine) | `UnixSockHandler` | Handles bidirectional communication over Unix socket with state (`exchange`) |
 | **`GenServer`** | `RouteStatsRegistry` | Owns the ETS table for real-time stats storage |
+| **`GenServer`** | `EventLog` | In-memory ring buffer (ETS, 500 events) for route lifecycle events |
+| **`GenServer`** | `License` | License validation, trial mode, RSA key verification, heartbeat re-verification |
 | **`GenServer`** | `ErlSysMon` | Monitors BEAM VM health (GC pauses, scheduling delays, busy ports) |
 | **`PartitionSupervisor`** | `Blackgate.DynamicSupervisor` | Distributes route processes across all scheduler threads to avoid bottlenecks |
 | **`DynamicSupervisor`** | (child of PartitionSupervisor) | Dynamically starts/stops per-route supervisors |
@@ -110,11 +125,13 @@ Blackgate uses advanced OTP concurrency patterns, **not** basic GenServer:
 Blackgate.Supervisor (one_for_one)
 ├── Cachex (auth session cache)
 ├── RouteStatsRegistry (ETS owner)
+├── EventLog (ETS ring buffer, 500 events)
+├── License (trial mode + RSA validation GenServer)
 ├── ErlSysMon (VM health monitor)
 ├── PartitionSupervisor
 │   └── DynamicSupervisor (per-partition)
 │       └── RoutesSupervisor (per-route, registered via Syn)
-│           └── RouteHandler (:gen_statem, transient restart)
+│           └── RouteHandler (:gen_statem + watchdog, transient restart)
 ├── Registry (MsgHandlers, partitioned)
 ├── Telemetry
 ├── Phoenix.PubSub (partitioned)
@@ -122,16 +139,16 @@ Blackgate.Supervisor (one_for_one)
 └── Metrics.Connection (Instream/InfluxDB)
 ```
 
-### 1.3 Streaming Engine: C + GStreamer
+### 1.3 Streaming Engine: C + GStreamer + ffmpeg Sidecar
 
-**✅ CONFIRMED** — The native streaming engine is implemented in **C** using **GStreamer 1.0** and compiled to a standalone binary (`blackgate_pipeline`).
+**✅ CONFIRMED** — The native streaming engine is implemented in **C** using **GStreamer 1.0** and compiled to a standalone binary (`blackgate_pipeline`). For RTMP/HLS/HTTP-FLV sources, an **ffmpeg sidecar** process normalizes the stream to SRT before entering the GStreamer pipeline.
 
 **Source Files:**
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `native/src/gst_pipeline.c` | 1,063 | Core pipeline: SRT stats collection, MPEG-TS parsing (PAT/PMT/PES), H.264/HEVC/MPEG-2 video info extraction, pipeline construction |
-| `native/src/main.c` | 83 | Entry point: reads route_id from argv, JSON config from stdin, initializes GStreamer and Unix socket |
+| `native/src/gst_pipeline.c` | 1,591 | Core pipeline: SRT stats collection, MPEG-TS parsing (PAT/PMT/PES), H.264/HEVC/MPEG-2 video info extraction, SDI output via decodebin, pipeline construction |
+| `native/src/main.c` | 104 | Entry point: reads route_id from argv, JSON config from stdin, initializes GStreamer and Unix socket |
 | `native/src/unix_socket.c` | 47 | Unix Domain Socket client: connects to `/tmp/hydra_unix_sock`, sends stats and metadata |
 
 #### IPC Mechanism: Dual-Channel Communication
@@ -268,12 +285,51 @@ else if (strcmp(mode_str, "rendezvous") == 0) mode_value = 3;
 
 | Source Type | Sink Type | Supported Properties |
 |-------------|-----------|---------------------|
-| `srtsrc` | `srtsink` | `uri`, `latency`, `auto-reconnect`, `keep-listening`, `mode`, `passphrase`, `pbkeylen`, `poll-timeout` |
+| `srtsrc` | `srtsink` | `uri`, `latency`, `auto-reconnect`, `keep-listening`, `mode`, `passphrase`, `pbkeylen`, `poll-timeout`, `streamid` |
 | `udpsrc` | `udpsink` | `address`/`host`, `port`, `buffer-size`, `mtu` |
+| `rtmp` / `hls` / `http-flv` (via ffmpeg sidecar → SRT loopback) | `srtsink` / `udpsink` / `sdisink` | Ffmpeg sidecar normalizes to SRT: `url`, `stream_key`, reconnect options |
+| — | `sdisink` (DeckLink) | `device_number` (0–7), `video_mode` (1080p25…2160p60), `audio_channels` |
 
-### 2.2 Authentication
+### 2.1b SDI Output Pipeline
 
-**Two-layer authentication:**
+SDI output uses a GStreamer decode pipeline parallel to the SRT passthrough tee:
+
+```
+srtsrc → tee ─┬─→ queue2 → srtsink/udpsink (passthrough, no decode)
+              ├─→ queue2 → tsdemux ─┬─→ decodebin(video) → videoconvert → videorate → videoscale → capsfilter(UYVY) → decklinkvideosink
+              │                     └─→ decodebin(audio) → audioconvert → audioresample → decklinkaudiosink
+              └─→ thumbnail branch (JPEG preview)
+```
+
+**Key design decisions:**
+- **`decodebin`** for codec-agnostic decode — handles H.264, HEVC, MPEG-2 video; AAC, MP2, Opus audio
+- **`sync=FALSE`** on DeckLink sinks — hardware manages its own timing clock
+- **Graceful failure**: If SDI sink fails, SRT/UDP outputs continue unaffected
+- **SDI port conflict prevention**: UI dropdown disables ports already in use, shows which route uses them
+
+### 2.1c Watchdog (Stalled Pipeline Detection)
+
+**✅ CONFIRMED** — `RouteHandler` includes a 60-second heartbeat watchdog (`2113456`).
+
+The watchdog timer fires every 60 seconds. On each tick, `RouteHandler` checks whether the pipeline has produced any new stats (bytes received) since the last check. If not, the pipeline is considered stalled and the route is automatically restarted. This recovers from GStreamer deadlocks, decoder freezes, and network stalls without manual intervention.
+
+### 2.2 Connection Monitoring & Auto-Reconnect
+
+`RouteHandler` monitors SRT connection status in real time:
+- **Connected**: `connected-callers > 0` (listener mode) or `bytes-received > 0` (caller mode)
+- **Waiting**: Pipeline is running but no active SRT connection
+- **Reconnecting**: Pipeline detected disconnect and is attempting auto-recovery (10s retry, 3-minute timeout)
+- **Off**: Route process is stopped
+
+Connection status is exposed via the API, displayed in the UI as a colored badge, and tracked in the Event Log.
+
+### 2.3 ffmpeg Sidecar (RTMP/HLS/HTTP-FLV Sources)
+
+RTMP, HLS, and HTTP-FLV sources are not natively handled by GStreamer. Instead, an ffmpeg sidecar process normalizes them to SRT MPEG-TS via localhost loopback before entering the GStreamer pipeline. See [Section 6: FFmpeg Sidecar Architecture](#6-ffmpeg-sidecar-architecture-rtmphlshttp-flv--sdi) for the detailed architecture.
+
+**Supported protocols:** RTMP push/pull, HLS (.m3u8), HTTP-FLV (.flv)
+
+### 2.4 Authentication
 
 #### Layer 1: API Authentication (Bearer Token)
 
@@ -336,6 +392,27 @@ C Pipeline → Unix Socket → UnixSockHandler → stats_to_metrics() → Metric
 ```
 
 Uses the **Instream** library with InfluxDB v2 protocol. Configurable via `VICTORIOMETRICS_HOST` and `VICTORIOMETRICS_PORT` environment variables.
+
+### 2.5 Event Log System
+
+**✅ CONFIRMED** — `Blackgate.EventLog` is a GenServer with an ETS-based ring buffer (max 500 events).
+
+Events are emitted from `RouteHandler` (route started, stopped, crashed, reconnecting, SDI failed) and stored with:
+- `id` (integer), `timestamp` (ISO8601), `severity` (`:info`, `:warning`, `:critical`)
+- `type` (atom: `:route_started`, `:route_stopped`, `:route_crashed`, `:sdi_failed`, `:reconnecting`, etc.)
+- `route_id`, `message` (human-readable), `details` (map)
+
+**API endpoints:** `GET /api/events` (filterable by severity, route_id, type), `GET /api/events/counts`, `DELETE /api/events`
+
+**Future:** PubSub broadcast for real-time event push to frontend via WebSocket (planned).
+
+### 2.6 License Management
+
+**✅ CONFIRMED** — `Blackgate.License` GenServer manages licensing with:
+- **Trial mode**: 30-day trial, max 2 routes
+- **RSA-encrypted license keys**: Validated against a license server over HTTP
+- **Offline resilience**: License cached in Khepri, re-verified via heartbeat every 6 hours
+- **Machine ID**: Hardware-based identifier (MAC + SHA-256) for license locking
 
 ---
 
@@ -473,13 +550,24 @@ Based on code analysis:
 
 | Feature | Status | Evidence |
 |---------|--------|----------|
-| **Cluster Mode** | 🟡 Partially Prepared | Khepri (Raft-based) supports multi-node. Syn configured for `:routes` scope. `node_controller.ex` exists for node management. `NodeController` exposes node info API. **But**: no actual clustering logic implemented yet. |
-| **RTMP Input** | 🔴 Not Implemented | No RTMP source type in `route_handler.ex`. Only SRT and UDP sources are handled. |
-| **HLS Output** | 🔴 Not Implemented | No HLS sink type. Only `srtsink` and `udpsink` exist. |
-| **Ecto/SQL Database** | 🟡 Vestigial | `api.ex` contains full Ecto CRUD operations (`Repo.all`, `Repo.insert`, etc.) but `Blackgate.Repo` is **commented out** in the supervision tree. `ecto_sqlite3` is listed as a dependency but unused in production. |
-| **Proper Authentication** | 🔴 Basic Implementation | Auth uses env-var credentials with Cachex session tokens. No JWT, no role-based access, no user management. |
-| **Metrics Dashboard** | 🟡 Infrastructure Ready | VictoriaMetrics/InfluxDB integration exists (`Instream`), Grafana provisioning directory exists. But exportStats must be explicitly enabled per-route. |
+| **Cluster Mode** | 🟡 Partially Prepared | Khepri (Raft-based) supports multi-node. Syn configured for `:routes` scope. `node_controller.ex` exists for node management. **But**: no actual clustering logic implemented yet. |
+| **RTMP Input** | ✅ Implemented (v0.3.0) | RTMP, HLS, and HTTP-FLV sources via ffmpeg sidecar → SRT loopback. Cross-protocol routing to SRT/UDP/SDI. |
+| **SDI Output** | ✅ Implemented (v0.3.0) | Blackmagic DeckLink output via codec-agnostic decodebin pipeline. 12 video modes from 480i SD to 2160p60 4K. |
+| **Event Log** | ✅ Implemented (v0.3.0) | In-memory ring buffer (ETS, 500 events). Route lifecycle, SDI failures, reconnects. API + UI page. |
+| **Watchdog** | ✅ Implemented (v0.3.0) | 60-second heartbeat to detect stalled pipelines, auto-restart. |
+| **ffmpeg Auto-Reconnect** | ✅ Implemented (v0.3.0) | Auto-reconnect for RTMP/HLS/HTTP-FLV sources (10s retry, 3min timeout). |
+| **Credential Management** | ✅ Implemented (v0.2.0) | Settings UI allows changing admin username/password, persisted in Khepri. |
+| **Bulk Operations** | ✅ Implemented (v0.2.0) | Bulk start/stop + bulk delete via table checkboxes. |
+| **Route Cloning** | ✅ Implemented (v0.2.0) | Clone routes with all destinations via button. |
+| **Search & Filter** | ✅ Implemented (v0.2.0) | Filter by name, status, schema. Persisted across navigation. |
+| **WebSocket Live Stats** | ✅ Implemented (v0.2.0) | Phoenix Channels push real-time stats; HTTP polling as fallback. |
+| **StreamID Support** | ✅ Implemented (Unreleased) | Optional Stream ID field for SRT Caller sources/destinations (`391b189`). |
+| **HLS Output** | 🔴 Not Implemented | No HLS sink type. Only `srtsink`, `udpsink`, and `sdisink` exist. HLS relay via MediaMTX planned. |
+| **Ecto/SQL Database** | 🟡 Vestigial | `api.ex` contains full Ecto CRUD operations but `Blackgate.Repo` is commented out in the supervision tree. |
+| **Proper Authentication** | 🟡 Basic Implementation | Auth uses env-var credentials with Cachex session tokens, plus credential management UI. No JWT, no role-based access. |
+| **Metrics Dashboard** | 🟡 Infrastructure Ready | VictoriaMetrics/InfluxDB integration exists (`Instream`), Grafana provisioning directory exists. |
 | **DNS Cluster Discovery** | 🔴 Commented Out | `dns_cluster_query` config line exists but is commented out in `runtime.exs`. |
+| **Hardware Decode (VA-API/NVDEC)** | 🔴 Not Implemented | VA-API tested but disabled — Intel HD 630 too weak for real-time decode. NVDEC not yet tested. |
 
 ### 5.3 Identified Risks
 
@@ -536,6 +624,13 @@ end
 - `ecto_sqlite3` dependency is still included in `mix.exs`
 - **Risk**: Dead code may cause confusion; dependency adds to build size
 
+#### Risk 6: ffmpeg Sidecar Crash Handling
+
+- ffmpeg sidecar processes for RTMP/HLS/HTTP-FLV sources are spawned via Erlang Port
+- If ffmpeg crashes, the Port closes → RouteHandler detects exit → auto-reconnect logic triggers
+- If the source URL becomes permanently unavailable, the route may repeatedly restart (mitigated by 10 restart/60s supervisor limit)
+- **Mitigation**: Watchdog detects stalled pipelines even after ffmpeg restart
+
 ---
 
 ## Appendix A: File Inventory
@@ -544,13 +639,20 @@ end
 
 | File | Lines | Role |
 |------|-------|------|
-| `lib/blackgate/application.ex` | 81 | OTP Application (supervision tree, Ranch, Khepri) |
+| `lib/blackgate/application.ex` | 82 | OTP Application (supervision tree, Ranch, Khepri, EventLog, License) |
 | `lib/blackgate.ex` | 56 | Public API (start/stop/restart routes) |
-| `lib/blackgate/route_handler.ex` | 305 | Pipeline lifecycle (gen_statem), SRT URI building |
-| `lib/blackgate/unix_sock_handler.ex` | 234 | Stats receiver (gen_statem + Ranch protocol) |
+| `lib/blackgate/route_handler.ex` | 653 | Pipeline lifecycle (gen_statem + watchdog), ffmpeg sidecar, SRT URI building, SDI output config |
+| `lib/blackgate/unix_sock_handler.ex` | 233 | Stats receiver (gen_statem + Ranch protocol) |
 | `lib/blackgate/db.ex` | 209 | Khepri CRUD operations |
-| `lib/blackgate/route_stats_registry.ex` | 96 | ETS stats storage (GenServer) |
+| `lib/blackgate/route_stats_registry.ex` | 103 | ETS stats storage (GenServer) |
+| `lib/blackgate/event_log.ex` | 113 | In-memory event timeline (GenServer + ETS ring buffer, 500 events) |
+| `lib/blackgate/license.ex` | 327 | License management (trial mode, RSA validation, heartbeat) |
+| `lib/blackgate/route_health.ex` | 63 | Health evaluation from stats (healthy/warning/critical/disconnected) |
 | `lib/blackgate/process_monitor.ex` | 246 | OS-level process stats for C pipelines |
+| `lib/blackgate/monitoring/os_mon.ex` | — | OS monitoring (RAM%, CPU%, load averages, swap) |
+| `lib/blackgate/machine_id.ex` | — | Hardware-based machine identifier (MAC + SHA-256) |
+| `lib/blackgate/release.ex` | — | Release tasks (DB migrations) |
+| `lib/blackgate/signal_handler.ex` | — | OS signal handler (SIGTERM) |
 | `lib/blackgate/routes_supervisor.ex` | 39 | Per-route supervisor |
 | `lib/blackgate/helpers.ex` | 21 | Utility functions (heap limits, kill) |
 | `lib/blackgate/erl_sys_mon.ex` | 30 | BEAM VM health monitor |
@@ -559,13 +661,14 @@ end
 | `lib/blackgate/api.ex` | 201 | Ecto context (vestigial, unused) |
 | `lib/blackgate_web/router.ex` | 106 | API routes and auth middleware |
 | `lib/blackgate_web/controllers/` | 14 files | REST API controllers |
+| `lib/blackgate_web/channels/stats_channel.ex` | — | WebSocket channel for per-route real-time stats |
 
 ### Native (C)
 
 | File | Lines | Role |
 |------|-------|------|
-| `native/src/gst_pipeline.c` | 1,063 | GStreamer pipeline, stats, MPEG-TS parsing |
-| `native/src/main.c` | 83 | Entry point, JSON config reader |
+| `native/src/gst_pipeline.c` | 1,591 | GStreamer pipeline, SDI decodebin, SRT stats, MPEG-TS parsing |
+| `native/src/main.c` | 104 | Entry point, JSON config reader |
 | `native/src/unix_socket.c` | 47 | UDS client for stats communication |
 
 ### Configuration
@@ -598,13 +701,29 @@ end
 | `GET` | `/api/routes/:id/restart` | Yes | `RouteController` | Restart pipeline |
 | `GET` | `/api/routes/:id/stats` | Yes | `RouteController` | Get source stats (ETS) |
 | `GET` | `/api/routes/:id/destination-stats` | Yes | `RouteController` | Get sink stats |
+| `GET` | `/api/routes/:id/preview` | Yes | `RouteController` | Live JPEG thumbnail |
 | `GET/POST/PUT/DELETE` | `/api/routes/:id/destinations/...` | Yes | `DestinationController` | Destination CRUD |
 | `GET` | `/api/backup/export` | Yes | `BackupController` | Export Khepri data |
-| `POST` | `/api/restore` | Yes | `BackupController` | Restore Khepri data |
+| `GET` | `/api/backup/create-download-link` | Yes | `BackupController` | Create routes download link |
+| `GET` | `/api/backup/create-backup-download-link` | Yes | `BackupController` | Create full binary backup link |
+| `POST` | `/api/backup/import-routes` | Yes | `BackupController` | Import routes from JSON |
+| `POST` | `/api/restore` | Yes | `BackupController` | Restore from full backup |
+| `GET` | `/backup/:session_id/download` | Yes | `BackupController` | Download routes file |
+| `GET` | `/backup/:session_id/download_backup` | Yes | `BackupController` | Download full backup |
 | `GET` | `/api/system/pipelines` | Yes | `SystemController` | List C processes |
+| `GET` | `/api/system/pipelines/detailed` | Yes | `SystemController` | Detailed pipeline info |
 | `POST` | `/api/system/pipelines/:pid/kill` | Yes | `SystemController` | Kill C process |
 | `GET` | `/api/nodes` | Yes | `NodeController` | List cluster nodes |
+| `GET` | `/api/nodes/:id` | Yes | `NodeController` | Node details with system stats |
 | `GET` | `/api/network/interfaces` | Yes | `NetworkController` | List network interfaces |
+| `GET` | `/api/events` | Yes | `EventController` | List events (filter: severity, route_id, type) |
+| `GET` | `/api/events/counts` | Yes | `EventController` | Event counts by severity |
+| `DELETE` | `/api/events` | Yes | `EventController` | Clear all events |
+| `GET` | `/api/license` | Yes | `LicenseController` | Show license status |
+| `POST` | `/api/license/activate` | Yes | `LicenseController` | Activate license key |
+| `DELETE` | `/api/license/deactivate` | Yes | `LicenseController` | Deactivate license |
+| `PUT` | `/api/auth/credentials` | Yes | `AuthController` | Update admin credentials |
+| `GET` | `/*path` | No | `PageController` | Serve SPA (React catch-all) |
 
 
 ---

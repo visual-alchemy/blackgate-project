@@ -22,20 +22,26 @@ Traditional live broadcasting relies on expensive satellite trucks (DSNG) or ded
 
 ## 3. Recent Feature Additions (Latest First)
 
-### UI/UX Quick Wins
-- **Bulk Start/Stop**: Manage multiple routes simultaneously using table checkboxes and a single click.
-- **Route Cloning**: Instantly duplicate complex route configurations including all their multi-destinations.
-- **Filter Persistence**: Search and filter settings (status, schema, text) remember their state across page navigation.
-- **Dual Save Buttons**: "Save and Continue" vs "Save and Exit" when editing routes.
+### SDI Hardware Output (v0.3.0)
+Route SRT streams directly to Blackmagic DeckLink SDI hardware outputs. Codec-agnostic decodebin handles H.264, HEVC, MPEG-2 video at up to 2160p60 4K. Simultaneous SRT passthrough + SDI decode from the same route. Graceful failure — if SDI sink fails, SRT/UDP outputs continue unaffected.
 
-### Seamless Auto-Restart
-Editing a running route's configuration (or its destinations) seamlessly restarts the native pipeline in the background applying the new config without requiring manual stop/start clicks. 
+### RTMP/HLS/HTTP-FLV Ingestion (v0.3.0)
+Accept RTMP push or pull HLS/HTTP-FLV streams via an ffmpeg sidecar that normalizes them to SRT MPEG-TS. Enables cross-protocol routing: RTMP → SRT/UDP/SDI. Auto-reconnect on source disconnect with 10s retry interval.
 
-### Machine Locking & Anti-Tampering (Planned)
-Future license enforcement will integrate dmidecode (UUID, Serial, MAC) to lock licenses to specific baremetal hardware.
+### Watchdog & Auto-Recovery (v0.3.0)
+60-second heartbeat watchdog detects stalled pipelines and auto-restarts them. Combined with auto-reconnect for RTMP sources and seamless route restart on config changes.
 
-### Baremetal ISO Installer (Planned)
-Future distribution method packaging Debian Bookworm + Blackgate + Docker into a self-installing ISO using Preseed, allowing customers to install the entire appliance from a USB drive in 5 minutes.
+### Event Log System (v0.3.0)
+In-app event timeline tracking route lifecycle (start, stop, crash, reconnect) and SDI failures. Filterable by severity, route, and event type. Provides operational visibility without external monitoring.
+
+### UI/UX Quick Wins (v0.2.0–v0.3.0)
+- **Bulk Delete**: Select and delete multiple routes at once
+- **Inline Output Popover**: Quick destination overview on routes table
+- **Dual Save Buttons**: "Save and Continue" vs "Save and Exit" when editing routes
+- **Filter Persistence**: Search and filter settings remember their state across page navigation
+
+### Seamless Auto-Restart (v0.2.0)
+Editing a running route's configuration (or its destinations) seamlessly restarts the native pipeline in the background applying the new config without requiring manual stop/start clicks.
 
 ---
 
@@ -74,13 +80,14 @@ Blackgate is engineered for professionals who cannot afford a stream to go offli
 
 | Feature | Specification |
 | :--- | :--- |
-| **Protocol** | SRT (Secure Reliable Transport) |
+| **Protocol** | SRT (Secure Reliable Transport), RTMP, HLS, HTTP-FLV (via ffmpeg sidecar) |
 | **Connection Modes** | Caller, Listener, Rendezvous |
+| **Output** | SRT, UDP, SDI (Blackmagic DeckLink) |
 | **Video Support** | Agnostic (H.264, HEVC, MPEG-2, AV1) |
-| **Audio Support** | Agnostic (AAC, Opus, Uncompressed) |
+| **Audio Support** | Agnostic (AAC, Opus, MP2, Uncompressed) |
 | **Encryption** | Optional AES-128, AES-192, AES-256 |
-| **Architecture** | Elixir (Erlang VM) + React Frontend |
-| **Deployment** | Baremetal / Proxmox / VMware VM Appliance (.iso) |
+| **Architecture** | Elixir (Erlang VM) + React Frontend + C/GStreamer + ffmpeg Sidecar |
+| **Deployment** | Baremetal / Docker / Proxmox / VMware VM Appliance (.iso) |
 
 ---
 

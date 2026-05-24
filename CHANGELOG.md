@@ -9,7 +9,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **SRT StreamID Support** *(testing)*: Optional Stream ID field for SRT Caller sources and destinations, enabling compatibility with services like Vidio that require `streamid` in the SRT URI.
+- **SRT StreamID Support**: Optional Stream ID field for SRT Caller sources and destinations, enabling compatibility with services like Vidio that require `streamid` in the SRT URI. (`391b189`)
+
+---
+
+## [0.3.0] - 2026-05-19
+
+### Added
+- **RTMP/HTTP-FLV/HLS Source via ffmpeg Sidecar**: Accept RTMP push or pull HLS/HTTP-FLV streams by spawning an ffmpeg sidecar process that normalizes them to SRT MPEG-TS before entering the GStreamer pipeline. Supports cross-protocol routing: RTMP → SRT/UDP/SDI. (`09bdb8d`)
+- **ffmpeg Sidecar Auto-Reconnect**: Seamless auto-reconnect for RTMP/HLS/HTTP-FLV routes when the source disconnects, with 10s retry interval and 3-minute timeout. (`9592bfe`, `42f0496`)
+- **SDI Output via Blackmagic DeckLink**: Hardware SDI output with codec-agnostic decodebin pipeline. Supports H.264, HEVC, MPEG-2 video at resolutions from 480i SD to 2160p60 4K. Simultaneous SRT passthrough + SDI decode from the same route. (`54d7c9f`, `f4bb7d3`, `bbe6460`)
+- **Watchdog for Stalled Pipelines**: Auto-detect and restart stalled pipelines via a 60-second heartbeat watchdog in RouteHandler. (`2113456`)
+- **Event Log System**: In-memory event timeline (ETS ring buffer, 500 events) tracking route lifecycle (start, stop, crash, reconnect) and SDI failures. New `/api/events` endpoints and Events page in the UI. (`a7aee08`)
+- **Bulk Delete Selected**: "Delete Selected" button on the routes table for bulk route deletion. (`5d4863f`)
+- **Inline Output Popover**: Quick destination editing popover on the routes table showing output destinations at a glance. (`ffa8169`)
+- **Systemd Service**: Auto-start on boot via `blackgate.service` for baremetal production deployments. (`f5b9017`)
+- **Connection Status Badge**: Live green/red/yellow/grey connection indicator per route, including "Reconnecting" state for auto-reconnect scenarios. (`fae8912`)
+- **SDI Port Conflict Prevention**: SDI device dropdown disables ports already in use by other routes and shows which route is using them. (`d4279a2`)
+
+### Changed
+- **Routes table "Last Updated" replaced with "Output" column**: Shows compact destination summary (e.g., `SRT:15000 · SDI 1`). (`6f6b8b6`)
+- **SDI audio sync**: Set `decklinkaudiosink sync=FALSE` with audio health monitor to prevent dropouts. (`c4dfe58`)
+- **SRT loopback latency**: Increased from 125ms to 500ms for ffmpeg sidecar reliability. (`e52b6d4`)
+- **Node IP default**: Changed from `hostname -f` to `127.0.0.1` to avoid FQDN hostname issues. (`f4bb7d3`)
+- **RELEASE_COOKIE**: Fixed cookie so `make stop`/`make status` can connect to running daemon. (`1eba812`)
+
+### Fixed
+- **SDI audio dropout after 30 minutes**: Added `audiorate` element to prevent audio timing drift. (`de4e65d`)
+- **SDI pipeline stability**: Multiple rounds of decode pipeline tuning — removed `identity` from audio path, tested VA-API hardware decode (disabled — Intel HD 630 too weak), reverted to stable software avdec. (`b842b71`, `b60b579`, `32a1803`)
+- **SDI caps mapping**: Explicit width/height/framerate from backend to C pipeline for correct DeckLink mode selection. (`273d0cb`)
+- **DeckLink Quad 2 port mapping**: Corrected physical port layout (SDI 1-4 = even, SDI 5-8 = odd device numbers). (`88becf3`, `89f23ea`)
+- **ffmpeg sidecar pipeline**: Added `-mpegts_copyts 1 -pcr_period 40` to prevent timestamp issues. (`dd7f100`)
+- **Docker release build**: Added `--overwrite` for `mix release` to fix ERTS file error. (`273d0cb`)
 
 ---
 

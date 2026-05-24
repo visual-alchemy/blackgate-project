@@ -110,11 +110,10 @@
 - [ ] Enable third-party integrations
 
 ### 16. RTMP Protocol Support (In Progress 🔨)
-- [x] Add MediaMTX as RTMP ingest server (docker-compose, auth webhook)
-- [x] RTMP source: accept push with user-defined stream key per route
-- [x] RTMP destinations: `RTMP_PUSH` (push to YouTube/Twitch/custom RTMP)
-- [x] HLS relay destination: auto-generate public HLS via MediaMTX (`:8888`)
-- [x] Cross-protocol routing: SRT/UDP → RTMP, RTMP → SRT/UDP (GStreamer passthrough remux)
+- [x] RTMP/HTTP-FLV/HLS source via ffmpeg sidecar (normalizes to SRT MPEG-TS loopback)
+- [x] Auto-reconnect for ffmpeg sidecar on source disconnect (10s retry, 3min timeout)
+- [x] Cross-protocol routing: RTMP/HLS/FLV → SRT/UDP/SDI
+- [x] `-mpegts_copyts 1 -pcr_period 40` for clean timestamp handling
 - [ ] HLS preview player in dashboard for RTMP source routes (hls.js)
 - [ ] Stream key regeneration UI
 - [ ] RTMP source health monitoring (MediaMTX API integration)
