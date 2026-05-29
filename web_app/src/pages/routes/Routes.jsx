@@ -1,11 +1,119 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal, Input, Select, Badge } from 'antd';
+import { Table, Card, Button, Tag, Space, Typography, message, Modal, Input, Select, Badge, Tooltip } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
+import { useRouteStats } from '../../hooks/useRouteStats';
 import OutputPopover from './OutputPopover';
 
 const { Title } = Typography;
+
+const RouteNameCell = ({ record }) => {
+  const isRunning = record.status === 'started';
+  const { stats, health } = useRouteStats(record.id, isRunning);
+
+  // Determine dot state: stopped, healthy, warning, critical
+  let dotStatus = 'default'; // stopped
+  let statusText = 'Stopped';
+  let tooltipTitle = 'Route is stopped';
+
+  if (record.status === 'reconnecting') {
+    dotStatus = 'warning';
+    statusText = 'Reconnecting';
+    tooltipTitle = 'Reconnecting...';
+  } else if (isRunning) {
+    if (health === 'critical') {
+      dotStatus = 'error';
+      statusText = 'Critical';
+    } else if (health === 'warning') {
+      dotStatus = 'warning';
+      statusText = 'Warning';
+    } else if (health === 'healthy') {
+      dotStatus = 'success';
+      statusText = 'Healthy';
+    } else if (record.connected) {
+      dotStatus = 'success';
+      statusText = 'Connected';
+    } else {
+      dotStatus = 'error';
+      statusText = 'Waiting';
+    }
+
+    // Build rich tooltip content
+    const bitrate = stats ? (stats['receive-rate-mbps'] || stats['send-rate-mbps'] || 0).toFixed(2) : '0.00';
+    const rtt = stats ? (stats['rtt-ms'] || 0).toFixed(0) : '—';
+    const loss = stats ? (stats['packets-received-lost'] || stats['packets-sent-lost'] || 0) : '0';
+
+    tooltipTitle = (
+      <div style={{ padding: '4px' }}>
+        <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+          Status: <span style={{ color: dotStatus === 'success' ? '#52c41a' : dotStatus === 'warning' ? '#faad14' : '#ff4d4f' }}>{statusText}</span>
+        </div>
+        {stats ? (
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.85)' }}>
+            <div>Bitrate: {bitrate} Mbps</div>
+            <div>RTT: {rtt} ms</div>
+            <div>Packet Loss: {loss}</div>
+          </div>
+        ) : (
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)' }}>
+            Waiting for stats...
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const dotColorMap = {
+    default: '#8c8c8c',
+    success: '#52c41a',
+    warning: '#faad14',
+    error: '#ff4d4f',
+  };
+
+  const color = dotColorMap[dotStatus];
+  const isPulsing = isRunning && dotStatus !== 'success';
+
+  return (
+    <Space size={8}>
+      <style>{`
+        @keyframes pulse-warning {
+          0% { box-shadow: 0 0 0 0 rgba(250, 173, 20, 0.7); }
+          70% { box-shadow: 0 0 0 6px rgba(250, 173, 20, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(250, 173, 20, 0); }
+        }
+        @keyframes pulse-error {
+          0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.7); }
+          70% { box-shadow: 0 0 0 6px rgba(255, 77, 79, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
+        }
+        .health-dot-indicator.pulsing.warning {
+          animation: pulse-warning 1.8s infinite;
+        }
+        .health-dot-indicator.pulsing.error {
+          animation: pulse-error 1.5s infinite;
+        }
+      `}</style>
+      <Tooltip title={tooltipTitle} placement="topLeft" color="#1f1f1f">
+        <span
+          className={`health-dot-indicator ${dotStatus} ${isPulsing ? 'pulsing' : ''}`}
+          style={{
+            display: 'inline-block',
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            backgroundColor: color,
+            boxShadow: dotStatus === 'success' ? `0 0 6px ${color}55` : 'none',
+            verticalAlign: 'middle',
+          }}
+        />
+      </Tooltip>
+      <a href={`#/routes/${record.id}`} style={{ fontWeight: 500 }}>
+        {record.name}
+      </a>
+    </Space>
+  );
+};
 
 const Routes = () => {
   const [routes, setRoutes] = useState([]);
@@ -222,15 +330,7 @@ const Routes = () => {
       dataIndex: 'name',
       key: 'name',
       sorter: (a, b) => (a.name || '').localeCompare(b.name || ''),
-      render: (text, record) => {
-        return (
-          <Space>
-            <a href={`#/routes/${record.id}`}>
-              {text}
-            </a>
-          </Space>
-        )
-      },
+      render: (_, record) => <RouteNameCell record={record} />,
     },
     {
       title: 'Enabled',
@@ -241,12 +341,6 @@ const Routes = () => {
           {schema ? 'yes' : 'no'}
         </Tag>
       ),
-    },
-    {
-      title: 'Process',
-      dataIndex: 'status',
-      key: 'status',
-      sorter: (a, b) => (a.status || '').localeCompare(b.status || ''),
     },
     {
       title: 'Authentication',
@@ -294,24 +388,6 @@ const Routes = () => {
       render: (_, record) => (
         <OutputPopover route={record} allRoutes={routes} onUpdate={() => fetchRoutes(true)} />
       )
-    },
-    {
-      title: 'Connection',
-      key: 'connection',
-      align: 'center',
-      render: (_, record) => {
-        if (record.status === 'reconnecting') {
-           return <Badge status="warning" text="Reconnecting" />;
-        }
-        if (record.status !== 'started') {
-           return <Badge status="default" text="Off" />;
-        }
-        return record.connected ? (
-           <Badge status="success" text="Connected" />
-        ) : (
-           <Badge status="error" text="Waiting" />
-        );
-      }
     },
     {
       title: 'Actions',

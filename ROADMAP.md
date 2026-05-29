@@ -41,7 +41,7 @@
 - [x] Add health status badge to dashboard preview cards (HealthBadge component)
 - [x] Show health alert banner on the dashboard for warning/critical routes
 - [x] Auto-detect disconnected callers (no signal = disconnected state)
-- [ ] Optional: health dot indicator in routes table
+- [x] Optional: health dot indicator in routes table
 
 ### 7. ~~WebSocket Live Stats~~ ✅
 - [x] Replace polling-based stats with Phoenix Channels (Phoenix.PubSub + UserSocket + StatsChannel)

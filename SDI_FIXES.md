@@ -116,6 +116,12 @@ The DeckLink Quad 2 has 4 sub-devices, each with input + output. Not all device 
 
 **Result:** Disabled. Intel HD 630 on test hardware was too weak for real-time 1080p decode. Software avdec (libav) provides stable performance at ~70% CPU for 720p. VA-API may work with newer Intel Arc or NVIDIA NVDEC hardware.
 
+### 10. SDI Audio silent warning not triggering at startup
+
+**Symptom:** If a route starts up with video but has no audio buffers from the beginning, the warning event is never triggered.
+
+**Fix:** Initialize `sdi_audio_last_buffer_time[device_number]` with the current monotonic time when installing the audio sink probe, rather than leaving it at `0`. This allows the health monitor thread to detect silence after 10 seconds of startup even if no audio buffers were ever received.
+
 ---
 
 ## Supported Video Modes

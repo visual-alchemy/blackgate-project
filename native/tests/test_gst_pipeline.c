@@ -22,7 +22,7 @@ static void test_create_pipeline(void **state)
     cJSON *json = cJSON_Parse(json_str);
     assert_non_null(json);
 
-    GstElement *pipeline = create_pipeline(json);
+    GstElement *pipeline = create_pipeline(json, "test_route_id");
     assert_non_null(pipeline);
 
     cleanup_pipeline(pipeline);
