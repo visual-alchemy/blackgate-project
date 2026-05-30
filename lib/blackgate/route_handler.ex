@@ -575,9 +575,26 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp find_available_port do
-    # Simple approach: pick a random port in the range and hope it's free
-    # For production, could check with :gen_tcp.listen/2
+    # Try up to 50 random ports in the range and verify if they can be bound on localhost
+    find_available_port(50)
+  end
+
+  defp find_available_port(0) do
+    # Fallback to a random choice if all attempts failed
     Enum.random(@internal_port_range)
+  end
+
+  defp find_available_port(attempts) do
+    port = Enum.random(@internal_port_range)
+
+    case :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]) do
+      {:ok, socket} ->
+        :ok = :gen_tcp.close(socket)
+        port
+
+      {:error, _reason} ->
+        find_available_port(attempts - 1)
+    end
   end
 
   # ===========================================================================
