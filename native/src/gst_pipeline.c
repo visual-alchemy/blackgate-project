@@ -30,6 +30,8 @@ static volatile gint64 sdi_audio_last_buffer_time[8] = {0};
 static volatile gint64 sdi_audio_buffer_count[8] = {0};
 static volatile gboolean sdi_audio_silence_reported[8] = {FALSE};
 
+static GstElement *sdi_vrate_elements[8] = {NULL};
+
 static GstPadProbeReturn sdi_audio_health_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
     (void)pad;
@@ -337,6 +339,24 @@ static void *print_stats(void *src)
                                     video_info.interlaced ? "interleaved" : "progressive");
         }
         pthread_mutex_unlock(&video_info.mutex);
+
+        // Query and append SDI videorate statistics (Option 2)
+        cJSON *sdi_array = cJSON_CreateArray();
+        for (int i = 0; i < 8; i++) {
+            GstElement *vrate = sdi_vrate_elements[i];
+            if (vrate) {
+                guint64 dropped = 0;
+                guint64 duplicated = 0;
+                g_object_get(vrate, "drop", &dropped, "duplicate", &duplicated, NULL);
+
+                cJSON *sdi_item = cJSON_CreateObject();
+                cJSON_AddNumberToObject(sdi_item, "device_number", i);
+                cJSON_AddNumberToObject(sdi_item, "dropped_frames", (double)dropped);
+                cJSON_AddNumberToObject(sdi_item, "duplicated_frames", (double)duplicated);
+                cJSON_AddItemToArray(sdi_array, sdi_item);
+            }
+        }
+        cJSON_AddItemToObject(root, "sdi_video_stats", sdi_array);
 
         char *json_str = cJSON_PrintUnformatted(root);
         if (json_str) {
@@ -1461,6 +1481,10 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // Configure videorate: skip corrupted frames until first keyframe
         g_object_set(vrate, "skip-to-first", TRUE, NULL);
 
+        if (device_number >= 0 && device_number < 8) {
+            sdi_vrate_elements[device_number] = vrate;
+        }
+
         // --- Add all elements to pipeline ---
         gst_bin_add_many(GST_BIN(pipeline),
                          queue, tsdemux,
@@ -1574,6 +1598,7 @@ void cleanup_pipeline(GstElement *pipeline)
         sdi_audio_last_buffer_time[i] = 0;
         sdi_audio_buffer_count[i] = 0;
         sdi_audio_silence_reported[i] = FALSE;
+        sdi_vrate_elements[i] = NULL;
     }
 
     // Set pipeline to NULL first — this flushes appsink, unblocking try_pull_sample

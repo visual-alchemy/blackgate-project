@@ -21,6 +21,15 @@ const RouteNameCell = ({ record }) => {
     dotStatus = 'warning';
     statusText = 'Reconnecting';
     tooltipTitle = 'Reconnecting...';
+  } else if (record.status === 'error') {
+    dotStatus = 'error';
+    statusText = 'Hardware Error';
+    tooltipTitle = (
+      <div style={{ padding: '4px' }}>
+        <div style={{ fontWeight: 600, color: '#ff4d4f', marginBottom: '4px' }}>Hardware / Driver Error</div>
+        <div>{record.error_message || 'DeckLink driver unresponsive or PCIe card missing.'}</div>
+      </div>
+    );
   } else if (isRunning) {
     if (health === 'critical') {
       dotStatus = 'error';

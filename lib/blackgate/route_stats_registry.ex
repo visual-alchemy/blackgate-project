@@ -25,6 +25,55 @@ defmodule Blackgate.RouteStatsRegistry do
   """
   def put_stats(route_id, stats) when is_binary(route_id) and is_map(stats) do
     updated_at = System.system_time(:millisecond)
+
+    stats =
+      case :ets.lookup(@table_name, route_id) do
+        [{^route_id, prev_stats, prev_updated_at}] ->
+          prev_sdi_stats = prev_stats["sdi_video_stats"] || []
+          curr_sdi_stats = stats["sdi_video_stats"] || []
+
+          updated_sdi_stats =
+            Enum.map(curr_sdi_stats, fn curr_item ->
+              dev = curr_item["device_number"]
+              prev_item = Enum.find(prev_sdi_stats, &(&1["device_number"] == dev))
+
+              if prev_item && prev_updated_at < updated_at do
+                delta_drops = max(0, curr_item["dropped_frames"] - prev_item["dropped_frames"])
+                delta_dups = max(0, curr_item["duplicated_frames"] - prev_item["duplicated_frames"])
+                delta_time_sec = (updated_at - prev_updated_at) / 1000.0
+
+                {drops_per_sec, dups_per_sec} =
+                  if delta_time_sec > 0.1 do
+                    {delta_drops / delta_time_sec, delta_dups / delta_time_sec}
+                  else
+                    {0.0, 0.0}
+                  end
+
+                curr_item
+                |> Map.put("drops_per_sec", Float.round(drops_per_sec, 2))
+                |> Map.put("duplicates_per_sec", Float.round(dups_per_sec, 2))
+              else
+                curr_item
+                |> Map.put("drops_per_sec", 0.0)
+                |> Map.put("duplicates_per_sec", 0.0)
+              end
+            end)
+
+          Map.put(stats, "sdi_video_stats", updated_sdi_stats)
+
+        _ ->
+          curr_sdi_stats = stats["sdi_video_stats"] || []
+
+          updated_sdi_stats =
+            Enum.map(curr_sdi_stats, fn curr_item ->
+              curr_item
+              |> Map.put("drops_per_sec", 0.0)
+              |> Map.put("duplicates_per_sec", 0.0)
+            end)
+
+          Map.put(stats, "sdi_video_stats", updated_sdi_stats)
+      end
+
     :ets.insert(@table_name, {route_id, stats, updated_at})
     health = Blackgate.RouteHealth.evaluate(stats)
     Phoenix.PubSub.broadcast(

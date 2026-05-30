@@ -40,9 +40,14 @@ defmodule Blackgate.RouteHealth do
       loss = packet_loss_pct(stats, caller)
       rtt = stats["rtt-ms"] || caller["rtt-ms"] || 0.0
 
+      sdi_video_stats = stats["sdi_video_stats"] || []
+      high_drops? = Enum.any?(sdi_video_stats, fn item ->
+        (item["drops_per_sec"] || 0.0) >= 2.0
+      end)
+
       cond do
         loss >= @loss_critical or rtt >= @rtt_critical -> "critical"
-        loss >= @loss_warning or rtt >= @rtt_warning   -> "warning"
+        loss >= @loss_warning or rtt >= @rtt_warning or high_drops? -> "warning"
         true                                           -> "healthy"
       end
     end

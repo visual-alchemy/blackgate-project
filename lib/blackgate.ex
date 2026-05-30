@@ -52,4 +52,11 @@ defmodule Blackgate do
       {:ok, route}
     end
   end
+
+  @spec set_route_error(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
+  def set_route_error(id, error_message) do
+    with {:ok, route} <- Db.update_route(id, %{"error_message" => error_message}) do
+      {:ok, route}
+    end
+  end
 end

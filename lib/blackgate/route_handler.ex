@@ -37,7 +37,8 @@ defmodule Blackgate.RouteHandler do
       reconnect_count: 0,
       last_bytes_received: 0,
       last_bytes_changed_at: nil,
-      started_at: nil
+      started_at: nil,
+      consecutive_startup_crashes: 0
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -54,24 +55,40 @@ defmodule Blackgate.RouteHandler do
     case send_initial_command(port, route_for_pipeline) do
       :ok ->
         Blackgate.set_route_status(data.id, "started")
+        Blackgate.set_route_error(data.id, nil)
         Blackgate.EventLog.log(:info, "route_started", "Route started", %{
           route_id: data.id,
           route_name: data.route["name"]
         })
         now = System.monotonic_time(:millisecond)
         {:next_state, :started,
-         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now},
+         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now, consecutive_startup_crashes: 0},
          {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
         # Kill ffmpeg if it was started
         if ffmpeg_port, do: close_port(ffmpeg_port)
-        Blackgate.EventLog.log(:critical, "route_start_failed", "Route failed to start: #{inspect(reason)}", %{
-          route_id: data.id,
-          route_name: data.route["name"]
-        })
-        {:stop, reason, data}
+        
+        consecutive = data.consecutive_startup_crashes + 1
+        
+        if consecutive >= 3 do
+          error_msg = diagnose_hardware_issue()
+          Logger.error("RouteHandler: Circuit breaker triggered after 3 consecutive start failures: #{error_msg}")
+          Blackgate.set_route_status(data.id, "error")
+          Blackgate.set_route_error(data.id, error_msg)
+          Blackgate.EventLog.log(:critical, "route_hardware_error", "Route startup failed repeatedly: #{error_msg}", %{
+            route_id: data.id,
+            route_name: data.route["name"]
+          })
+          {:stop, :normal, %{data | consecutive_startup_crashes: consecutive}}
+        else
+          Blackgate.EventLog.log(:critical, "route_start_failed", "Route failed to start: #{inspect(reason)}", %{
+            route_id: data.id,
+            route_name: data.route["name"]
+          })
+          {:stop, reason, %{data | consecutive_startup_crashes: consecutive}}
+        end
     end
   end
 
@@ -159,7 +176,27 @@ defmodule Blackgate.RouteHandler do
       port == data.port ->
         # GStreamer pipeline exited
         Logger.warning("RouteHandler: Pipeline exited with status #{status}, entering reconnect mode")
-        enter_reconnecting(data)
+        
+        # Calculate uptime to check if this is a startup crash
+        uptime = System.monotonic_time(:millisecond) - data.started_at
+        consecutive = if uptime < 15_000, do: data.consecutive_startup_crashes + 1, else: 0
+        
+        if consecutive >= 3 do
+          error_msg = diagnose_hardware_issue()
+          Logger.error("RouteHandler: Circuit breaker triggered after 3 consecutive startup crashes: #{error_msg}")
+          Blackgate.set_route_status(data.id, "error")
+          Blackgate.set_route_error(data.id, error_msg)
+          Blackgate.EventLog.log(:critical, "route_hardware_error", "Route crashed repeatedly on startup: #{error_msg}", %{
+            route_id: data.id,
+            route_name: get_in(data, [:route, "name"]) || data.id
+          })
+          
+          # Kill ffmpeg too if running
+          if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+          {:stop, :normal, %{data | port: nil, ffmpeg_port: nil, consecutive_startup_crashes: consecutive}}
+        else
+          enter_reconnecting(%{data | consecutive_startup_crashes: consecutive})
+        end
 
       port == data.ffmpeg_port ->
         # ffmpeg sidecar exited — pipeline will likely follow
@@ -201,6 +238,7 @@ defmodule Blackgate.RouteHandler do
           :ok ->
             Logger.info("RouteHandler: Reconnect successful on attempt ##{count}")
             Blackgate.set_route_status(data.id, "started")
+            Blackgate.set_route_error(data.id, nil)
             Blackgate.EventLog.log(:info, "route_reconnected",
               "Route reconnected after #{count} attempts", %{
                 route_id: data.id,
@@ -209,20 +247,50 @@ defmodule Blackgate.RouteHandler do
             now = System.monotonic_time(:millisecond)
             {:next_state, :started,
              %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0,
-               started_at: now, last_bytes_changed_at: now, last_bytes_received: 0},
+               started_at: now, last_bytes_changed_at: now, last_bytes_received: 0, consecutive_startup_crashes: 0},
              {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
             if ffmpeg_port, do: close_port(ffmpeg_port)
             close_port(port)
-            {:keep_state, %{data | reconnect_count: count},
-             {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+            
+            consecutive = data.consecutive_startup_crashes + 1
+            
+            if consecutive >= 3 do
+              error_msg = diagnose_hardware_issue()
+              Logger.error("RouteHandler: Circuit breaker triggered during reconnect after 3 consecutive failures: #{error_msg}")
+              Blackgate.set_route_status(data.id, "error")
+              Blackgate.set_route_error(data.id, error_msg)
+              Blackgate.EventLog.log(:critical, "route_hardware_error", "Route startup failed repeatedly: #{error_msg}", %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              })
+              {:stop, :normal, %{data | consecutive_startup_crashes: consecutive}}
+            else
+              {:keep_state, %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
+               {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+            end
         end
       rescue
         e ->
           Logger.error("RouteHandler: Reconnect attempt ##{count} failed: #{inspect(e)}")
-          {:keep_state, %{data | reconnect_count: count},
-           {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+          
+          consecutive = data.consecutive_startup_crashes + 1
+          
+          if consecutive >= 3 do
+            error_msg = diagnose_hardware_issue()
+            Logger.error("RouteHandler: Circuit breaker triggered during reconnect rescue after 3 consecutive failures: #{error_msg}")
+            Blackgate.set_route_status(data.id, "error")
+            Blackgate.set_route_error(data.id, error_msg)
+            Blackgate.EventLog.log(:critical, "route_hardware_error", "Route startup failed repeatedly: #{error_msg}", %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            })
+            {:stop, :normal, %{data | consecutive_startup_crashes: consecutive}}
+          else
+            {:keep_state, %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
+             {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+          end
       end
     end
   end
@@ -667,5 +735,39 @@ defmodule Blackgate.RouteHandler do
       ]
     }
     |> Jason.encode!()
+  end
+
+  defp diagnose_hardware_issue do
+    # 1. Check if GStreamer plugin is installed
+    gst_status = 
+      case System.cmd("gst-inspect-1.0", ["decklinkvideosink"], stderr_to_stdout: true) do
+        {_, 0} -> :ok
+        _ -> :error
+      end
+    
+    # 2. Check if DesktopVideoHelper is running
+    helper_status = 
+      case System.cmd("pgrep", ["-f", "DesktopVideoHelper"]) do
+        {_, 0} -> :ok
+        _ -> :error
+      end
+    
+    # 3. Check if physical hardware node exists
+    dev_status = 
+      case System.cmd("sh", ["-c", "ls /dev/blackmagic/io*"], stderr_to_stdout: true) do
+        {_, 0} -> :ok
+        _ -> :error
+      end
+
+    cond do
+      gst_status != :ok ->
+        "GStreamer DeckLink plugin not available. Please install the gstreamer1.0-plugins-bad package."
+      helper_status != :ok ->
+        "Blackmagic DesktopVideoHelper service is not running. Start it with '/usr/lib/blackmagic/DesktopVideo/DesktopVideoHelper -n' or via systemctl."
+      dev_status != :ok ->
+        "No Blackmagic DeckLink hardware detected (missing /dev/blackmagic/io*). Check PCIe card installation."
+      true ->
+        "SDI Pipeline failed to initialize. The DeckLink device may be occupied by another application or in an invalid video mode."
+    end
   end
 end

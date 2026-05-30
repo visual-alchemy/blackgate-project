@@ -12,7 +12,8 @@ import {
   Descriptions,
   Collapse,
   message,
-  Input
+  Input,
+  Alert
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -422,6 +423,16 @@ const RouteItem = () => {
     >
       {contextHolder}
       {modalContextHolder}
+
+      {routeData && routeData.status && routeData.status.toLowerCase() === 'error' && (
+        <Alert
+          message="Hardware / Driver Error"
+          description={routeData.error_message || "The DeckLink hardware or kernel driver has stopped responding. Please verify PCIe installation and ensure DesktopVideoHelper is running."}
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {/* Route Info Card */}
       <Card style={{ marginBottom: 24 }}>
