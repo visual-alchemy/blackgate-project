@@ -1426,12 +1426,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // --- Configure DeckLink sinks ---
         g_object_set(videosink, "device-number", device_number, NULL);
         gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
-        // DeckLink sync=false for both video and audio
-        // The DeckLink output clock drifts from the pipeline clock over time,
-        // causing audio buffers to be dropped as "too late" when sync=true.
-        // Evidence: decklinkaudiosink debug shows 7+ second clock divergence.
+        // DeckLink video runs with sync=FALSE (pacing is handled by the identity element).
+        // DeckLink audio runs with sync=TRUE. This allows GStreamer's master clock-slaving
+        // mechanism to pace and resample audio buffers properly, preventing stuttering and underruns.
         g_object_set(videosink, "sync", FALSE, NULL);
-        g_object_set(audiosink, "device-number", device_number, "sync", FALSE, NULL);
+        g_object_set(audiosink, "device-number", device_number, "sync", TRUE, NULL);
 
         // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
