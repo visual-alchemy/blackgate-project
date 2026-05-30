@@ -233,98 +233,100 @@ static void *print_stats(void *src)
         GstStructure *stats = NULL;
         g_object_get(source, "stats", &stats, NULL);
 
-        if (!stats) {
-            g_print("Failed to retrieve SRT stats\n");
-            continue;
-        }
-
         cJSON *root = cJSON_CreateObject();
 
-        guint64 bytes_total = 0;
-        gst_structure_get_uint64(stats, "bytes-received-total", &bytes_total);
-        cJSON_AddNumberToObject(root, "total-bytes-received", (double)bytes_total);
+        if (stats) {
+            guint64 bytes_total = 0;
+            gst_structure_get_uint64(stats, "bytes-received-total", &bytes_total);
+            cJSON_AddNumberToObject(root, "total-bytes-received", (double)bytes_total);
 
-        // Extract top-level stats (available in caller mode and as aggregate in listener mode)
-        gint64 packets_received = 0, packets_lost = 0, packets_dropped = 0;
-        gint64 packets_retransmitted = 0, bytes_received = 0;
-        gdouble rtt_ms = 0.0, receive_rate_mbps = 0.0, bandwidth_mbps = 0.0;
-        gint negotiated_latency_ms = 0;
+            // Extract top-level stats (available in caller mode and as aggregate in listener mode)
+            gint64 packets_received = 0, packets_lost = 0, packets_dropped = 0;
+            gint64 packets_retransmitted = 0, bytes_received = 0;
+            gdouble rtt_ms = 0.0, receive_rate_mbps = 0.0, bandwidth_mbps = 0.0;
+            gint negotiated_latency_ms = 0;
 
-        gst_structure_get_int64(stats, "packets-received", &packets_received);
-        gst_structure_get_int64(stats, "packets-received-lost", &packets_lost);
-        gst_structure_get_int64(stats, "packets-received-dropped", &packets_dropped);
-        gst_structure_get_int64(stats, "packets-received-retransmitted", &packets_retransmitted);
-        gst_structure_get_int64(stats, "bytes-received", &bytes_received);
-        gst_structure_get_double(stats, "rtt-ms", &rtt_ms);
-        gst_structure_get_double(stats, "receive-rate-mbps", &receive_rate_mbps);
-        gst_structure_get_double(stats, "bandwidth-mbps", &bandwidth_mbps);
-        gst_structure_get_int(stats, "negotiated-latency-ms", &negotiated_latency_ms);
+            gst_structure_get_int64(stats, "packets-received", &packets_received);
+            gst_structure_get_int64(stats, "packets-received-lost", &packets_lost);
+            gst_structure_get_int64(stats, "packets-received-dropped", &packets_dropped);
+            gst_structure_get_int64(stats, "packets-received-retransmitted", &packets_retransmitted);
+            gst_structure_get_int64(stats, "bytes-received", &bytes_received);
+            gst_structure_get_double(stats, "rtt-ms", &rtt_ms);
+            gst_structure_get_double(stats, "receive-rate-mbps", &receive_rate_mbps);
+            gst_structure_get_double(stats, "bandwidth-mbps", &bandwidth_mbps);
+            gst_structure_get_int(stats, "negotiated-latency-ms", &negotiated_latency_ms);
 
-        // Add top-level stats to JSON
-        cJSON_AddNumberToObject(root, "packets-received", (double)packets_received);
-        cJSON_AddNumberToObject(root, "packets-received-lost", (double)packets_lost);
-        cJSON_AddNumberToObject(root, "packets-received-dropped", (double)packets_dropped);
-        cJSON_AddNumberToObject(root, "packets-received-retransmitted", (double)packets_retransmitted);
-        cJSON_AddNumberToObject(root, "bytes-received", (double)bytes_received);
-        cJSON_AddNumberToObject(root, "rtt-ms", rtt_ms);
-        cJSON_AddNumberToObject(root, "receive-rate-mbps", receive_rate_mbps);
-        cJSON_AddNumberToObject(root, "bandwidth-mbps", bandwidth_mbps);
-        cJSON_AddNumberToObject(root, "negotiated-latency-ms", negotiated_latency_ms);
+            // Add top-level stats to JSON
+            cJSON_AddNumberToObject(root, "packets-received", (double)packets_received);
+            cJSON_AddNumberToObject(root, "packets-received-lost", (double)packets_lost);
+            cJSON_AddNumberToObject(root, "packets-received-dropped", (double)packets_dropped);
+            cJSON_AddNumberToObject(root, "packets-received-retransmitted", (double)packets_retransmitted);
+            cJSON_AddNumberToObject(root, "bytes-received", (double)bytes_received);
+            cJSON_AddNumberToObject(root, "rtt-ms", rtt_ms);
+            cJSON_AddNumberToObject(root, "receive-rate-mbps", receive_rate_mbps);
+            cJSON_AddNumberToObject(root, "bandwidth-mbps", bandwidth_mbps);
+            cJSON_AddNumberToObject(root, "negotiated-latency-ms", negotiated_latency_ms);
 
-        const GValue *callers_val = gst_structure_get_value(stats, "callers");
-        if (!callers_val) {
-            cJSON_AddNumberToObject(root, "connected-callers", 0);
-            cJSON_AddArrayToObject(root, "callers");
-        } else if (G_VALUE_HOLDS(callers_val, G_TYPE_VALUE_ARRAY)) {
-            GValueArray *callers_array = g_value_get_boxed(callers_val);
-            gint num_callers = callers_array ? callers_array->n_values : 0;
+            const GValue *callers_val = gst_structure_get_value(stats, "callers");
+            if (!callers_val) {
+                cJSON_AddNumberToObject(root, "connected-callers", 0);
+                cJSON_AddArrayToObject(root, "callers");
+            } else if (G_VALUE_HOLDS(callers_val, G_TYPE_VALUE_ARRAY)) {
+                GValueArray *callers_array = g_value_get_boxed(callers_val);
+                gint num_callers = callers_array ? callers_array->n_values : 0;
 
-            cJSON_AddNumberToObject(root, "connected-callers", num_callers);
-            cJSON *callers = cJSON_AddArrayToObject(root, "callers");
+                cJSON_AddNumberToObject(root, "connected-callers", num_callers);
+                cJSON *callers = cJSON_AddArrayToObject(root, "callers");
 
-            for (gint i = 0; i < num_callers; i++) {
-                GValue *caller_val = &callers_array->values[i];
-                if (!G_VALUE_HOLDS(caller_val, GST_TYPE_STRUCTURE)) {
-                    continue;
-                }
+                for (gint i = 0; i < num_callers; i++) {
+                    GValue *caller_val = &callers_array->values[i];
+                    if (!G_VALUE_HOLDS(caller_val, GST_TYPE_STRUCTURE)) {
+                        continue;
+                    }
 
-                const GstStructure *caller_stats = g_value_get_boxed(caller_val);
-                if (!caller_stats) {
-                    continue;
-                }
+                    const GstStructure *caller_stats = g_value_get_boxed(caller_val);
+                    if (!caller_stats) {
+                        continue;
+                    }
 
-                cJSON *caller = cJSON_CreateObject();
+                    cJSON *caller = cJSON_CreateObject();
 
-                gint n_fields = gst_structure_n_fields(caller_stats);
-                for (gint j = 0; j < n_fields; j++) {
-                    const gchar *field_name = gst_structure_nth_field_name(caller_stats, j);
-                    const GValue *value = gst_structure_get_value(caller_stats, field_name);
+                    gint n_fields = gst_structure_n_fields(caller_stats);
+                    for (gint j = 0; j < n_fields; j++) {
+                        const gchar *field_name = gst_structure_nth_field_name(caller_stats, j);
+                        const GValue *value = gst_structure_get_value(caller_stats, field_name);
 
-                    if (G_VALUE_HOLDS(value, G_TYPE_INT64)) {
-                        cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_int64(value));
-                    } else if (G_VALUE_HOLDS(value, G_TYPE_INT)) {
-                        cJSON_AddNumberToObject(caller, field_name, g_value_get_int(value));
-                    } else if (G_VALUE_HOLDS(value, G_TYPE_UINT64)) {
-                        cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_uint64(value));
-                    } else if (G_VALUE_HOLDS(value, G_TYPE_DOUBLE)) {
-                        cJSON_AddNumberToObject(caller, field_name, g_value_get_double(value));
-                    } else if (G_VALUE_HOLDS(value, G_TYPE_OBJECT) && g_strcmp0(field_name, "caller-address") == 0) {
-                        GObject *addr_obj = g_value_get_object(value);
-                        if (G_IS_INET_SOCKET_ADDRESS(addr_obj)) {
-                            GInetSocketAddress *addr = G_INET_SOCKET_ADDRESS(addr_obj);
-                            GInetAddress *inet_addr = g_inet_socket_address_get_address(addr);
-                            guint16 port = g_inet_socket_address_get_port(addr);
-                            gchar *ip = g_inet_address_to_string(inet_addr);
-                            gchar *addr_str = g_strdup_printf("%s:%d", ip, port);
-                            cJSON_AddStringToObject(caller, field_name, addr_str);
-                            g_free(ip);
-                            g_free(addr_str);
+                        if (G_VALUE_HOLDS(value, G_TYPE_INT64)) {
+                            cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_int64(value));
+                        } else if (G_VALUE_HOLDS(value, G_TYPE_INT)) {
+                            cJSON_AddNumberToObject(caller, field_name, g_value_get_int(value));
+                        } else if (G_VALUE_HOLDS(value, G_TYPE_UINT64)) {
+                            cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_uint64(value));
+                        } else if (G_VALUE_HOLDS(value, G_TYPE_DOUBLE)) {
+                            cJSON_AddNumberToObject(caller, field_name, g_value_get_double(value));
+                        } else if (G_VALUE_HOLDS(value, G_TYPE_OBJECT) && g_strcmp0(field_name, "caller-address") == 0) {
+                            GObject *addr_obj = g_value_get_object(value);
+                            if (G_IS_INET_SOCKET_ADDRESS(addr_obj)) {
+                                GInetSocketAddress *addr = G_INET_SOCKET_ADDRESS(addr_obj);
+                                GInetAddress *inet_addr = g_inet_socket_address_get_address(addr);
+                                guint16 port = g_inet_socket_address_get_port(addr);
+                                gchar *ip = g_inet_address_to_string(inet_addr);
+                                gchar *addr_str = g_strdup_printf("%s:%d", ip, port);
+                                cJSON_AddStringToObject(caller, field_name, addr_str);
+                                g_free(ip);
+                                g_free(addr_str);
+                            }
                         }
                     }
-                }
 
-                cJSON_AddItemToArray(callers, caller);
+                    cJSON_AddItemToArray(callers, caller);
+                }
             }
+        } else {
+            // Provide default source stats fields when SRT stats are unavailable
+            cJSON_AddNumberToObject(root, "total-bytes-received", 0);
+            cJSON_AddNumberToObject(root, "connected-callers", 0);
+            cJSON_AddArrayToObject(root, "callers");
         }
 
         // Add video metadata from MPEG-TS parsing (if available)
@@ -366,7 +368,9 @@ static void *print_stats(void *src)
         }
 
         cJSON_Delete(root);
-        gst_structure_free(stats);
+        if (stats) {
+            gst_structure_free(stats);
+        }
 
         // Also collect and send sink stats
         collect_sink_stats();
