@@ -69,8 +69,8 @@ make start
 ## ⚠️ Critical Architectural Constraints
 
 1.  **SDI Hardware Synchronization (DeckLink Quad 2):**
-    - The uncompressed DeckLink sinks (`decklinkvideosink` and `decklinkaudiosink`) run with **`sync=FALSE`** because the hardware clock drifts from the GStreamer pipeline clock, dropping audio packets.
-    - Video timing is maintained using an **`identity`** element with **`sync=TRUE`** placed right before the video output.
+    - The uncompressed video sink (`decklinkvideosink`) runs with **`sync=FALSE`**, with its timing paced by an upstream **`identity`** element set to **`sync=TRUE`** placed right before the video output.
+    - The audio sink (`decklinkaudiosink`) runs with **`sync=TRUE`** to allow GStreamer's master clock-slaving mechanism to coordinate sample delivery, preventing audio drift, buffer underruns, and stuttering.
 2.  **FFmpeg Loopback Sidecar:**
     - GStreamer FLV demuxing and live RTMP inputs deadlock or drift.
     - Routes using `RTMP`, `HTTP`, or `HLS` sources launch a background `ffmpeg` port on loopback port range `39000..39999` to remux and push stream as MPEG-TS over SRT (`mode=listener`). The native pipeline then calls it as an `SRT` source.

@@ -29,7 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - **Routes table "Last Updated" replaced with "Output" column**: Shows compact destination summary (e.g., `SRT:15000 · SDI 1`). (`6f6b8b6`)
-- **SDI audio sync**: Set `decklinkaudiosink sync=FALSE` with audio health monitor to prevent dropouts. (`c4dfe58`)
+- **SDI audio sync**: Configured `decklinkaudiosink sync=TRUE` to enable GStreamer's master-clock slaving and prevent stuttering/buffer underruns, while keeping `decklinkvideosink sync=FALSE` with upstream video paced by `identity sync=TRUE`.
 - **SRT loopback latency**: Increased from 125ms to 500ms for ffmpeg sidecar reliability. (`e52b6d4`)
 - **Node IP default**: Changed from `hostname -f` to `127.0.0.1` to avoid FQDN hostname issues. (`f4bb7d3`)
 - **RELEASE_COOKIE**: Fixed cookie so `make stop`/`make status` can connect to running daemon. (`1eba812`)

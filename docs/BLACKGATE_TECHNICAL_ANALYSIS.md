@@ -303,7 +303,7 @@ srtsrc → tee ─┬─→ queue2 → srtsink/udpsink (passthrough, no decode)
 
 **Key design decisions:**
 - **`decodebin`** for codec-agnostic decode — handles H.264, HEVC, MPEG-2 video; AAC, MP2, Opus audio
-- **`sync=FALSE`** on DeckLink sinks — hardware manages its own timing clock
+- **`sync=FALSE` on video sink / `sync=TRUE` on audio sink** — video is paced upstream, while audio relies on GStreamer clock-slaving to prevent stuttering
 - **Graceful failure**: If SDI sink fails, SRT/UDP outputs continue unaffected
 - **SDI port conflict prevention**: UI dropdown disables ports already in use, shows which route uses them
 
@@ -787,15 +787,15 @@ ffmpeg -hide_banner -loglevel warning \
 
 ```
 srtsrc(caller) → tee → queue(5s, non-leaky) → tsdemux → decodebin → queue(5s, non-leaky)
-  → videoconvert → videorate(skip-to-first=true) → videoscale → caps(UYVY) → decklinkvideosink(sync=true)
-  → audioconvert → audioresample → decklinkaudiosink(sync=true)
+  → videoconvert → videorate(skip-to-first=true) → videoscale → caps(UYVY) → identity(sync=true) → decklinkvideosink(sync=false)
+  → audioconvert → audioresample → audiorate → decklinkaudiosink(sync=true)
 ```
 
 Critical settings that make it work:
-- **`sync=true`** on DeckLink sinks: hardware clock paces output
+- **`sync=false` on video / `sync=true` on audio**: Video timing is paced by an upstream `identity sync=true` element to prevent state change failures, while `decklinkaudiosink` relies on GStreamer's master-clock slaving to align samples dynamically and prevent stuttering.
 - **`skip-to-first=true`** on videorate: prevents initial frame burst from overwhelming DeckLink
 - **Non-leaky 5-second queues**: absorbs timing variations without dropping frames
-- **No `identity sync=true`**: not needed when DeckLink sync=true handles timing
+- **`audiorate`**: prevents sample rate drift in the audio path
 
 ### 6.6 Lifecycle Management
 

@@ -20,7 +20,7 @@ Key design decisions:
 - **`decodebin`** for codec-agnostic decode — handles H.264, HEVC, MPEG-2, AAC, MP2, Opus automatically
 - **`videorate`** for framerate conversion (e.g., 50fps input → 25fps output mode)
 - **`videoscale`** for resolution conversion (e.g., 720p input → 1080p output mode)
-- **`sync=FALSE`** on DeckLink sinks — hardware manages its own timing
+- **Video `sync=FALSE` / Audio `sync=TRUE`** on DeckLink sinks — audio utilizes GStreamer clock-slaving, while video pacing is handled by an upstream `identity sync=true` element
 - SRT passthrough output runs simultaneously without interference
 
 ---
@@ -68,11 +68,11 @@ The DeckLink Quad 2 has 4 sub-devices, each with input + output. Not all device 
 
 **Fix:** Send mode as string (`"1080p25"`) + explicit width/height/framerate from Elixir backend. Use `gst_util_set_object_arg()` for string-to-enum conversion.
 
-### 3. Hardware state change failure — sync=TRUE (`8171849`)
+### 3. Hardware state change failure — sync=TRUE (`8171849`, Updated May 2026)
 
-**Symptom:** Pipeline can't reach PLAYING state. DeckLink elements stuck in NULL.
+**Symptom:** Pipeline can't reach PLAYING state. DeckLink elements stuck in NULL when both sinks are set to `sync=TRUE`.
 
-**Fix:** Set `sync=FALSE` on both `decklinkvideosink` and `decklinkaudiosink`. Hardware sinks manage their own clock.
+**Fix:** Set `sync=FALSE` on `decklinkvideosink` with video timing paced by an upstream `identity sync=TRUE` block. The `decklinkaudiosink` is set to `sync=TRUE` to avoid clock drift and audio stuttering.
 
 ### 4. Codec-specific pipeline — only H.264/AAC worked (`54d7c9f`)
 
@@ -98,17 +98,17 @@ The DeckLink Quad 2 has 4 sub-devices, each with input + output. Not all device 
 
 **Fix:** Default `NODE_IP` to `127.0.0.1` instead of `hostname -f` in `rel/env.sh.eex`.
 
-### 8. Audio dropout after ~30 minutes (`de4e65d`, `c012fcd`, `edf8075`)
+### 8. Audio dropout and stuttering (`de4e65d`, `c012fcd`, `edf8075`, Updated May 2026)
 
-**Symptom:** SDI audio would drop out after approximately 30 minutes of continuous playback.
+**Symptom:** SDI audio would stutter or drop out over time.
 
-**Root cause:** Audio timing drift between GStreamer pipeline and DeckLink hardware clock. `identity sync=true` on audio path caused the drift.
+**Root cause:** Audio timing drift between the GStreamer system clock and the DeckLink hardware playback clock. Without synchronization, the uncompensated drift caused buffer underruns in the hardware sink.
 
-**Fix:** Multiple rounds of tuning:
-- Removed `identity` from audio path entirely (was a dead-end)
-- Set `decklinkaudiosink sync=FALSE` — let hardware manage its own timing
-- Added `audiorate` element to prevent sample rate drift
-- Added audio health monitor to detect silent audio outputs
+**Fix:** 
+- Removed `identity` from the audio path.
+- Configured `decklinkaudiosink` with `"sync", TRUE` to enable GStreamer's master-clock slaving, dynamically aligning audio playout and avoiding sample underrun.
+- Added `audiorate` element to prevent sample rate drift.
+- Added audio health monitor to detect silent audio outputs.
 
 ### 9. VA-API Hardware Decode Attempts (`32a1803`, `25e7f22`)
 
