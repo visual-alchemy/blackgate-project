@@ -152,14 +152,6 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  defp get_total_bytes_received(route_id) do
-    case Blackgate.RouteStatsRegistry.get_stats(route_id) do
-      %{stats: stats} when is_map(stats) ->
-        Map.get(stats, "total-bytes-received", 0)
-      _ -> 0
-    end
-  end
-
   # Pipeline process exited — enter reconnecting state
   def handle_event(:info, {port, {:exit_status, status}}, :started, data)
       when is_port(port) do
@@ -181,17 +173,6 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  defp enter_reconnecting(data) do
-    Blackgate.set_route_status(data.id, "reconnecting")
-    Blackgate.EventLog.log(:warning, "route_reconnecting", "Source disconnected, attempting reconnect...", %{
-      route_id: data.id,
-      route_name: get_in(data, [:route, "name"]) || data.id
-    })
-
-    {:next_state, :reconnecting,
-     %{data | port: nil, ffmpeg_port: nil, reconnect_started_at: System.monotonic_time(:millisecond), reconnect_count: 0},
-     {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
-  end
 
   # Reconnect timer fired — attempt to restart the pipeline
   def handle_event({:timeout, :reconnect}, :retry, :reconnecting, data) do
@@ -258,6 +239,26 @@ defmodule Blackgate.RouteHandler do
     )
 
     :keep_state_and_data
+  end
+
+  defp get_total_bytes_received(route_id) do
+    case Blackgate.RouteStatsRegistry.get_stats(route_id) do
+      %{stats: stats} when is_map(stats) ->
+        Map.get(stats, "total-bytes-received", 0)
+      _ -> 0
+    end
+  end
+
+  defp enter_reconnecting(data) do
+    Blackgate.set_route_status(data.id, "reconnecting")
+    Blackgate.EventLog.log(:warning, "route_reconnecting", "Source disconnected, attempting reconnect...", %{
+      route_id: data.id,
+      route_name: get_in(data, [:route, "name"]) || data.id
+    })
+
+    {:next_state, :reconnecting,
+     %{data | port: nil, ffmpeg_port: nil, reconnect_started_at: System.monotonic_time(:millisecond), reconnect_count: 0},
+     {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
   end
 
   @impl true
@@ -483,6 +484,8 @@ defmodule Blackgate.RouteHandler do
     {:ok, props}
   end
 
+  def sink_from_record(_), do: {:error, :invalid_destination}
+
   # UI video_mode value -> {GStreamer mode string, width, height, framerate}
   # GStreamer mode strings (enum nicks) work regardless of plugin version.
   defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
@@ -500,8 +503,6 @@ defmodule Blackgate.RouteHandler do
   defp sdi_video_mode_to_gst(24), do: {"2160p50", 3840, 2160, "50/1"}
   defp sdi_video_mode_to_gst(25), do: {"2160p60", 3840, 2160, "60/1"}
   defp sdi_video_mode_to_gst(_), do: {"1080p25", 1920, 1080, "25/1"}
-
-  def sink_from_record(_), do: {:error, :invalid_destination}
 
   # ===========================================================================
   # FFmpeg Sidecar for RTMP/HTTP/HLS Sources
