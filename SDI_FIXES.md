@@ -171,10 +171,34 @@ ps aux | grep blackgate_pipeline
 
 ---
 
+## Future Architecture: True SDI Auto-Detect
+
+Currently, the pipeline forces a strict output mode selected by the user (e.g., `1080i50`). To implement true auto-detection (matching the SDI output to the incoming source's native resolution/framerate), the following architectural changes are required:
+
+### 1. Dynamic Caps Extraction
+- **Pad-Added Probes:** Attach a blocking pad probe on the `decodebin` source pad or immediately after the `tsdemux`.
+- **Metadata Interception:** When the first frame arrives, the probe extracts the stream's `GstCaps` (specifically `width`, `height`, `framerate`, and `interlace-mode`).
+
+### 2. Mode Mapping Logic
+- Build a C lookup table to map standard incoming caps to DeckLink modes.
+  - Example: `1920x1080, 25/1 fps, interlaced` ➡️ `"1080i50"`
+  - Example: `1280x720, 60/1 fps, progressive` ➡️ `"720p60"`
+
+### 3. State Management & Dynamic Linking
+- **Blocking Flow:** The probe must block the video flow just before it reaches the `decklinkvideosink`.
+- **Reconfiguration:** While blocked, the `decklinkvideosink` element must be configured with the new `mode` property. This may require transitioning the sink to `READY` state, applying the mode, and transitioning back to `PLAYING`.
+- **Dynamic Linking:** Only after the mode is successfully set is the `vconvert → vrate → vscale → videosink` chain fully linked and the block dropped.
+
+### 4. Fallback Handling
+- If the incoming stream is not a broadcast-standard format (e.g., an 800x600 webcam feed), the auto-detect must safely fallback to a globally defined default mode (e.g., `1080i50`).
+- The pipeline will then re-engage `videoscale` and `videorate` to pad/convert the non-standard signal into the fallback SDI format, preventing crashes.
+
+---
+
 ## Remaining Work
 
 - [ ] **Hardware decode** — NVDEC (`nvh264dec`) for NVIDIA GPUs. VA-API tested but disabled (Intel HD 630 too weak).
-- [ ] **True auto-detect** — Read input resolution/framerate and set DeckLink mode dynamically
+- [ ] **True auto-detect** — Implement the dynamic GStreamer probing and reconfiguration architecture detailed above.
 - [ ] **Docker deployment** — Verify DeckLink works inside container with device passthrough
 - [ ] **Multi-output test** — Run 4+ routes with SDI outputs simultaneously
 - [x] ~~Graceful SDI failure~~ — SDI sink failure no longer kills SRT/UDP outputs (`bbe6460`)
