@@ -193,6 +193,11 @@ Currently, the pipeline forces a strict output mode selected by the user (e.g., 
 - If the incoming stream is not a broadcast-standard format (e.g., an 800x600 webcam feed), the auto-detect must safely fallback to a globally defined default mode (e.g., `1080i50`).
 - The pipeline will then re-engage `videoscale` and `videorate` to pad/convert the non-standard signal into the fallback SDI format, preventing crashes.
 
+### 5. Audio Routing Configuration
+- **Stream Selection:** Support multi-track audio sources (e.g., MPEG-TS with multiple PIDs) by allowing users to choose which audio track is routed to the SDI output.
+- **Channel Mapping:** Allow channel manipulation (using `audiomixmatrix` or similar) to map stereo/surround channels to specific SDI audio pairs, useful for broadcast compliance.
+- **UI Integration:** Expose audio routing options in the Elixir/React UI alongside the SDI mode selector.
+
 ---
 
 ## Remaining Work
