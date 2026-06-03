@@ -1371,11 +1371,14 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
     if (strcmp(sink_type->valuestring, "sdisink") == 0) {
         cJSON *device_number_json = cJSON_GetObjectItem(sink_config, "device-number");
         cJSON *video_mode_json    = cJSON_GetObjectItem(sink_config, "video-mode");
+        cJSON *interlaced_json   = cJSON_GetObjectItem(sink_config, "interlaced");
 
         int device_number = (device_number_json && cJSON_IsNumber(device_number_json))
                             ? device_number_json->valueint : 0;
         const char *video_mode_str = (video_mode_json && cJSON_IsString(video_mode_json))
                                      ? video_mode_json->valuestring : "1080p25";
+        gboolean interlaced = (interlaced_json && cJSON_IsBool(interlaced_json))
+                              ? interlaced_json->valueint : FALSE;
 
         // --- Validate DeckLink device availability before creating pipeline ---
         GstElement *test_sink = gst_element_factory_make("decklinkvideosink", NULL);
@@ -1395,6 +1398,10 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *vconvert    = gst_element_factory_make("videoconvert",      NULL);
         GstElement *vrate       = gst_element_factory_make("videorate",         NULL);
         GstElement *vscale      = gst_element_factory_make("videoscale",        NULL);
+        GstElement *vinterlace  = NULL;
+        if (interlaced) {
+            vinterlace = gst_element_factory_make("interlace", NULL);
+        }
         GstElement *vcaps       = gst_element_factory_make("capsfilter",        NULL);
         GstElement *videosink   = gst_element_factory_make("decklinkvideosink", NULL);
         // Audio chain: decodebin handles any audio codec (AAC, MP2, Opus)
@@ -1407,7 +1414,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 
         if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
             !vscale || !vcaps || !videosink ||
-            !adecodebin || !aqueue || !aconvert || !aresample || !arate || !audiosink) {
+            !adecodebin || !aqueue || !aconvert || !aresample || !arate || !audiosink ||
+            (interlaced && !vinterlace)) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
             if (queue)      gst_object_unref(queue);
             if (tsdemux)    gst_object_unref(tsdemux);
@@ -1416,12 +1424,14 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             if (vconvert)   gst_object_unref(vconvert);
             if (vrate)      gst_object_unref(vrate);
             if (vscale)     gst_object_unref(vscale);
+            if (vinterlace) gst_object_unref(vinterlace);
             if (vcaps)      gst_object_unref(vcaps);
             if (videosink)  gst_object_unref(videosink);
             if (adecodebin) gst_object_unref(adecodebin);
             if (aqueue)     gst_object_unref(aqueue);
             if (aconvert)   gst_object_unref(aconvert);
             if (aresample)  gst_object_unref(aresample);
+            if (arate)      gst_object_unref(arate);
             if (audiosink)  gst_object_unref(audiosink);
             return FALSE;
         }
@@ -1430,14 +1440,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         cJSON *width_json      = cJSON_GetObjectItem(sink_config, "width");
         cJSON *height_json     = cJSON_GetObjectItem(sink_config, "height");
         cJSON *framerate_json  = cJSON_GetObjectItem(sink_config, "framerate");
-        cJSON *interlaced_json = cJSON_GetObjectItem(sink_config, "interlaced");
 
         int width  = (width_json     && cJSON_IsNumber(width_json))     ? width_json->valueint     : 1920;
         int height = (height_json    && cJSON_IsNumber(height_json))    ? height_json->valueint    : 1080;
         const char *framerate = (framerate_json && cJSON_IsString(framerate_json))
                                 ? framerate_json->valuestring : "25/1";
-        gboolean interlaced = (interlaced_json && cJSON_IsBool(interlaced_json))
-                              ? interlaced_json->valueint : FALSE;
 
         char caps_str[256];
         if (interlaced) {
@@ -1468,6 +1475,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
         g_object_set(vid_identity, "sync", TRUE, NULL);
+
+        if (interlaced && vinterlace) {
+            gst_util_set_object_arg(G_OBJECT(vinterlace), "field-pattern", "2:2");
+            g_object_set(vinterlace, "top-field-first", TRUE, NULL);
+        }
 
         // --- Configure input queue (match proven gst-launch: 5s buffer) ---
         g_object_set(queue,
@@ -1504,10 +1516,19 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                          vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
                          adecodebin, aqueue, aconvert, aresample, arate, audiosink,
                          NULL);
+        if (interlaced) {
+            gst_bin_add(GST_BIN(pipeline), vinterlace);
+        }
 
         // --- Link static chains downstream of decodebin ---
-        // Video: vqueue → videoconvert → videorate → videoscale → capsfilter → identity(sync) → decklinkvideosink
-        if (!gst_element_link_many(vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL)) {
+        // Video: vqueue → videoconvert → videorate → videoscale → (vinterlace) → capsfilter → identity(sync) → decklinkvideosink
+        gboolean video_link_ok;
+        if (interlaced) {
+            video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vinterlace, vcaps, vid_identity, videosink, NULL);
+        } else {
+            video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL);
+        }
+        if (!video_link_ok) {
             g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
             return FALSE;
         }
