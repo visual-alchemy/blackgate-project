@@ -1430,16 +1430,25 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         cJSON *width_json      = cJSON_GetObjectItem(sink_config, "width");
         cJSON *height_json     = cJSON_GetObjectItem(sink_config, "height");
         cJSON *framerate_json  = cJSON_GetObjectItem(sink_config, "framerate");
+        cJSON *interlaced_json = cJSON_GetObjectItem(sink_config, "interlaced");
 
         int width  = (width_json     && cJSON_IsNumber(width_json))     ? width_json->valueint     : 1920;
         int height = (height_json    && cJSON_IsNumber(height_json))    ? height_json->valueint    : 1080;
         const char *framerate = (framerate_json && cJSON_IsString(framerate_json))
                                 ? framerate_json->valuestring : "25/1";
+        gboolean interlaced = (interlaced_json && cJSON_IsBool(interlaced_json))
+                              ? interlaced_json->valueint : FALSE;
 
         char caps_str[256];
-        snprintf(caps_str, sizeof(caps_str),
-                 "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
-                 width, height, framerate);
+        if (interlaced) {
+            snprintf(caps_str, sizeof(caps_str),
+                     "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s, interlace-mode=interleaved",
+                     width, height, framerate);
+        } else {
+            snprintf(caps_str, sizeof(caps_str),
+                     "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
+                     width, height, framerate);
+        }
 
         g_print("SDI sink %d: mode=%s -> caps: %s\n", sink_index, video_mode_str, caps_str);
 

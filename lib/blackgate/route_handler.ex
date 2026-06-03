@@ -540,13 +540,17 @@ defmodule Blackgate.RouteHandler do
     video_mode = Map.get(opts, "video_mode", 0)
     {mode_str, width, height, framerate} = sdi_video_mode_to_gst(video_mode)
 
+    # Detect if the mode is interlaced (PAL/NTSC SD modes or strings containing 'i')
+    interlaced = String.contains?(mode_str, "i") or mode_str in ["pal", "ntsc"]
+
     props = %{
       "type" => "sdisink",
       "device-number" => Map.get(opts, "device_number", 0),
       "video-mode" => mode_str,
       "width" => width,
       "height" => height,
-      "framerate" => framerate
+      "framerate" => framerate,
+      "interlaced" => interlaced
     }
 
     {:ok, props}
