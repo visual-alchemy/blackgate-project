@@ -1410,11 +1410,12 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *aconvert    = gst_element_factory_make("audioconvert",      NULL);
         GstElement *aresample   = gst_element_factory_make("audioresample",     NULL);
         GstElement *arate       = gst_element_factory_make("audiorate",         NULL);
+        GstElement *acaps       = gst_element_factory_make("capsfilter",        NULL);
         GstElement *audiosink   = gst_element_factory_make("decklinkaudiosink", NULL);
 
         if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
             !vscale || !vcaps || !videosink ||
-            !adecodebin || !aqueue || !aconvert || !aresample || !arate || !audiosink ||
+            !adecodebin || !aqueue || !aconvert || !aresample || !arate || !acaps || !audiosink ||
             (interlaced && !vinterlace)) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
             if (queue)      gst_object_unref(queue);
@@ -1432,6 +1433,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             if (aconvert)   gst_object_unref(aconvert);
             if (aresample)  gst_object_unref(aresample);
             if (arate)      gst_object_unref(arate);
+            if (acaps)      gst_object_unref(acaps);
             if (audiosink)  gst_object_unref(audiosink);
             return FALSE;
         }
@@ -1481,6 +1483,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             g_object_set(vinterlace, "top-field-first", TRUE, NULL);
         }
 
+        // Configure audio caps filter: S16LE, 48kHz, stereo interleaved (standard SDI output requirement)
+        GstCaps *audio_caps = gst_caps_from_string("audio/x-raw, format=S16LE, rate=48000, channels=2, layout=interleaved");
+        g_object_set(acaps, "caps", audio_caps, NULL);
+        gst_caps_unref(audio_caps);
+
         // --- Configure input queue (match proven gst-launch: 5s buffer) ---
         g_object_set(queue,
                      "use-buffering",    FALSE,
@@ -1514,7 +1521,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         gst_bin_add_many(GST_BIN(pipeline),
                          queue, tsdemux,
                          vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
-                         adecodebin, aqueue, aconvert, aresample, arate, audiosink,
+                         adecodebin, aqueue, aconvert, aresample, arate, acaps, audiosink,
                          NULL);
         if (interlaced) {
             gst_bin_add(GST_BIN(pipeline), vinterlace);
@@ -1532,8 +1539,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
             return FALSE;
         }
-        // Audio: aqueue → audioconvert → audioresample → audiorate → decklinkaudiosink
-        if (!gst_element_link_many(aqueue, aconvert, aresample, arate, audiosink, NULL)) {
+        // Audio: aqueue → audioconvert → audioresample → audiorate → capsfilter → decklinkaudiosink
+        if (!gst_element_link_many(aqueue, aconvert, aresample, arate, acaps, audiosink, NULL)) {
             g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
             return FALSE;
         }
