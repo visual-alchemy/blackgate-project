@@ -540,8 +540,15 @@ defmodule Blackgate.RouteHandler do
     video_mode = Map.get(opts, "video_mode", 0)
     {mode_str, width, height, framerate} = sdi_video_mode_to_gst(video_mode)
 
-    # Detect if the mode is interlaced (PAL/NTSC SD modes or strings containing 'i')
-    interlaced = String.contains?(mode_str, "i") or mode_str in ["pal", "ntsc"]
+    # In auto-detect mode, interlaced is always false — the C pipeline determines
+    # interlacing dynamically from the decoded video caps.
+    # In manual mode, detect from the mode string as before.
+    interlaced =
+      if mode_str == "auto" do
+        false
+      else
+        String.contains?(mode_str, "i") or mode_str in ["pal", "ntsc"]
+      end
 
     props = %{
       "type" => "sdisink",
@@ -560,6 +567,9 @@ defmodule Blackgate.RouteHandler do
 
   # UI video_mode value -> {GStreamer mode string, width, height, framerate}
   # GStreamer mode strings (enum nicks) work regardless of plugin version.
+  # video_mode=0 is "auto" — the C pipeline will detect the source and pick the mode.
+  # The width/height/framerate here serve as fallback values if auto-detect can't match.
+  defp sdi_video_mode_to_gst(0), do: {"auto", 1920, 1080, "25/1"}
   defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
   defp sdi_video_mode_to_gst(11), do: {"1080p30", 1920, 1080, "30/1"}
   defp sdi_video_mode_to_gst(12), do: {"1080p50", 1920, 1080, "50/1"}

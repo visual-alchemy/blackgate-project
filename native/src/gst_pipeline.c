@@ -32,6 +32,84 @@ static volatile gboolean sdi_audio_silence_reported[8] = {FALSE};
 
 static GstElement *sdi_vrate_elements[8] = {NULL};
 
+// SDI Auto-Detect: detected mode string per device (populated by auto-detect callback)
+static const char *sdi_detected_mode[8] = {NULL};
+
+// =============================================================================
+// DeckLink Mode Lookup Table
+// Maps detected {width, height, fps_num, fps_den, interlaced} → DeckLink mode
+// =============================================================================
+typedef struct {
+    int width;
+    int height;
+    int fps_num;
+    int fps_den;
+    gboolean interlaced;
+    const char *mode_str;            // GStreamer enum nick for decklinkvideosink mode
+    const char *caps_interlace_mode; // "interleaved" for interlaced modes, NULL for progressive
+} DeckLinkModeEntry;
+
+static const DeckLinkModeEntry decklink_mode_table[] = {
+    // HD Progressive
+    {1920, 1080, 24, 1, FALSE, "1080p24", NULL},
+    {1920, 1080, 25, 1, FALSE, "1080p25", NULL},
+    {1920, 1080, 30, 1, FALSE, "1080p30", NULL},
+    {1920, 1080, 50, 1, FALSE, "1080p50", NULL},
+    {1920, 1080, 60, 1, FALSE, "1080p60", NULL},
+    // HD Interlaced
+    {1920, 1080, 25, 1, TRUE,  "1080i50", "interleaved"},
+    {1920, 1080, 30, 1, TRUE,  "1080i60", "interleaved"},
+    // 720p Progressive
+    {1280,  720, 50, 1, FALSE, "720p50",  NULL},
+    {1280,  720, 60, 1, FALSE, "720p60",  NULL},
+    // SD Interlaced
+    { 720,  576, 25, 1, TRUE,  "pal",     "interleaved"},
+    { 720,  480, 30, 1, TRUE,  "ntsc",    "interleaved"},
+    // 4K UHD Progressive
+    {3840, 2160, 25, 1, FALSE, "2160p25", NULL},
+    {3840, 2160, 30, 1, FALSE, "2160p30", NULL},
+    {3840, 2160, 50, 1, FALSE, "2160p50", NULL},
+    {3840, 2160, 60, 1, FALSE, "2160p60", NULL},
+    // Sentinel (end of table)
+    {0, 0, 0, 0, FALSE, NULL, NULL},
+};
+
+// Lookup a DeckLink mode entry matching the given video properties.
+// Returns a pointer to the matching entry, or NULL if no match found.
+static const DeckLinkModeEntry *lookup_decklink_mode(int width, int height,
+                                                      int fps_num, int fps_den,
+                                                      gboolean interlaced)
+{
+    for (int i = 0; decklink_mode_table[i].mode_str != NULL; i++) {
+        const DeckLinkModeEntry *e = &decklink_mode_table[i];
+        if (e->width == width && e->height == height &&
+            e->fps_num == fps_num && e->fps_den == fps_den &&
+            e->interlaced == interlaced) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+// Context struct for SDI auto-detect deferred video chain linking.
+// Passed as user_data to the decodebin pad-added callback when video_mode is "auto".
+typedef struct {
+    GstElement *pipeline;
+    GstElement *vqueue;
+    GstElement *vconvert;
+    GstElement *vrate;
+    GstElement *vscale;
+    GstElement *vcaps;
+    GstElement *vid_identity;
+    GstElement *videosink;
+    int device_number;
+    // Fallback values (used when auto-detect can't match a broadcast standard)
+    char fallback_mode[32];
+    int fallback_width;
+    int fallback_height;
+    char fallback_framerate[16];
+} SdiAutoDetectCtx;
+
 static GstPadProbeReturn sdi_audio_health_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
     (void)pad;
@@ -119,6 +197,226 @@ static void on_sdi_decodebin_video_pad_added(GstElement *decodebin, GstPad *pad,
         }
     }
     if (sink_pad) gst_object_unref(sink_pad);
+}
+
+// =============================================================================
+// SDI Auto-Detect: decodebin video pad-added callback
+// Called when decodebin exposes a decoded raw video pad in AUTO mode.
+// Extracts the video caps, looks up the matching DeckLink mode, configures
+// the decklinkvideosink and capsfilter, optionally adds the interlace element,
+// links the full video chain, then links decodebin → vqueue to start flow.
+// =============================================================================
+static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, GstPad *pad, gpointer user_data)
+{
+    (void)decodebin;
+    SdiAutoDetectCtx *ctx = (SdiAutoDetectCtx *)user_data;
+
+    // --- Step 1: Only handle raw video pads ---
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) caps = gst_pad_query_caps(pad, NULL);
+    if (!caps) return;
+
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+    const gchar *name = gst_structure_get_name(s);
+
+    if (!g_str_has_prefix(name, "video/x-raw")) {
+        gst_caps_unref(caps);
+        return;
+    }
+
+    // --- Step 2: Extract video properties from decoded caps ---
+    gint width = 0, height = 0;
+    gint fps_num = 0, fps_den = 1;
+    gboolean interlaced = FALSE;
+
+    gst_structure_get_int(s, "width", &width);
+    gst_structure_get_int(s, "height", &height);
+    gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
+
+    const gchar *interlace_mode_str = gst_structure_get_string(s, "interlace-mode");
+    if (interlace_mode_str && g_strcmp0(interlace_mode_str, "interleaved") == 0) {
+        interlaced = TRUE;
+    }
+
+    gst_caps_unref(caps);
+
+    g_print("SDI AUTO-DETECT: decoded video caps → %dx%d @ %d/%d fps, %s\n",
+            width, height, fps_num, fps_den,
+            interlaced ? "interlaced" : "progressive");
+
+    // Normalize framerate: fps_den should be 1 for standard broadcast rates
+    // Handle cases like 30000/1001 → treat as 30/1 for mode lookup
+    int lookup_fps_num = fps_num;
+    int lookup_fps_den = fps_den;
+    if (fps_den == 1001 && (fps_num == 24000 || fps_num == 30000 || fps_num == 60000)) {
+        // NTSC fractional rates: 24000/1001≈23.976, 30000/1001≈29.97, 60000/1001≈59.94
+        lookup_fps_num = fps_num / 1000;
+        lookup_fps_den = 1;
+        g_print("SDI AUTO-DETECT: normalized NTSC fractional rate %d/%d → %d/%d\n",
+                fps_num, fps_den, lookup_fps_num, lookup_fps_den);
+    } else if (fps_den == 1001 && fps_num == 50000) {
+        lookup_fps_num = 50;
+        lookup_fps_den = 1;
+    } else if (fps_den != 1 && fps_den != 0) {
+        // For other non-standard denominators, round to nearest integer fps
+        lookup_fps_num = (fps_num + fps_den / 2) / fps_den;
+        lookup_fps_den = 1;
+        g_print("SDI AUTO-DETECT: rounded non-standard rate %d/%d → %d/%d\n",
+                fps_num, fps_den, lookup_fps_num, lookup_fps_den);
+    }
+
+    // --- Step 3: Lookup DeckLink mode ---
+    const DeckLinkModeEntry *entry = lookup_decklink_mode(width, height,
+                                                          lookup_fps_num, lookup_fps_den,
+                                                          interlaced);
+
+    const char *mode_str;
+    int out_width, out_height;
+    const char *out_framerate;
+    gboolean need_interlace_element = FALSE;
+    const char *out_interlace_mode = NULL;
+
+    if (entry) {
+        // Matched a broadcast standard — use it directly
+        mode_str = entry->mode_str;
+        out_width = entry->width;
+        out_height = entry->height;
+        out_interlace_mode = entry->caps_interlace_mode;
+        need_interlace_element = (entry->caps_interlace_mode != NULL);
+
+        // Build framerate string from the table entry
+        char fr_buf[16];
+        snprintf(fr_buf, sizeof(fr_buf), "%d/%d", entry->fps_num, entry->fps_den);
+        out_framerate = g_strdup(fr_buf);
+
+        g_print("SDI AUTO-DETECT: MATCHED → mode=%s (interlace=%s)\n",
+                mode_str, need_interlace_element ? "yes" : "no");
+    } else {
+        // No match — fall back to user-configured defaults
+        mode_str = ctx->fallback_mode;
+        out_width = ctx->fallback_width;
+        out_height = ctx->fallback_height;
+        out_framerate = ctx->fallback_framerate;
+
+        // Check if the fallback mode is interlaced
+        if (strstr(mode_str, "i") != NULL ||
+            strcmp(mode_str, "pal") == 0 ||
+            strcmp(mode_str, "ntsc") == 0) {
+            need_interlace_element = TRUE;
+            out_interlace_mode = "interleaved";
+        }
+
+        g_printerr("SDI AUTO-DETECT: NO MATCH for %dx%d@%d/%d %s — fallback to %s\n",
+                   width, height, lookup_fps_num, lookup_fps_den,
+                   interlaced ? "interlaced" : "progressive",
+                   mode_str);
+    }
+
+    // Store detected mode for stats reporting
+    if (ctx->device_number >= 0 && ctx->device_number < 8) {
+        sdi_detected_mode[ctx->device_number] = mode_str;
+    }
+
+    // --- Step 4: Configure decklinkvideosink mode ---
+    gst_util_set_object_arg(G_OBJECT(ctx->videosink), "mode", mode_str);
+    g_print("SDI AUTO-DETECT: set decklinkvideosink mode=%s\n", mode_str);
+
+    // --- Step 5: Build and set capsfilter caps ---
+    char caps_str[256];
+    if (out_interlace_mode) {
+        snprintf(caps_str, sizeof(caps_str),
+                 "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s, interlace-mode=%s",
+                 out_width, out_height, out_framerate, out_interlace_mode);
+    } else {
+        snprintf(caps_str, sizeof(caps_str),
+                 "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
+                 out_width, out_height, out_framerate);
+    }
+
+    g_print("SDI AUTO-DETECT: capsfilter → %s\n", caps_str);
+    GstCaps *out_caps = gst_caps_from_string(caps_str);
+    g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+    gst_caps_unref(out_caps);
+
+    // --- Step 6: Optionally create and add interlace element ---
+    GstElement *vinterlace = NULL;
+    if (need_interlace_element) {
+        vinterlace = gst_element_factory_make("interlace", NULL);
+        if (vinterlace) {
+            gst_util_set_object_arg(G_OBJECT(vinterlace), "field-pattern", "2:2");
+            g_object_set(vinterlace, "top-field-first", TRUE, NULL);
+            gst_bin_add(GST_BIN(ctx->pipeline), vinterlace);
+            g_print("SDI AUTO-DETECT: added interlace element (field-pattern=2:2, tff=TRUE)\n");
+        } else {
+            g_printerr("SDI AUTO-DETECT: WARNING — failed to create interlace element, proceeding without\n");
+            need_interlace_element = FALSE;
+        }
+    }
+
+    // --- Step 7: Link the full video chain ---
+    gboolean video_link_ok;
+    if (need_interlace_element && vinterlace) {
+        video_link_ok = gst_element_link_many(
+            ctx->vqueue, ctx->vconvert, ctx->vrate, ctx->vscale,
+            vinterlace, ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
+    } else {
+        video_link_ok = gst_element_link_many(
+            ctx->vqueue, ctx->vconvert, ctx->vrate, ctx->vscale,
+            ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
+    }
+
+    if (!video_link_ok) {
+        g_printerr("SDI AUTO-DETECT: FAILED to link video output chain for mode=%s\n", mode_str);
+        // Try falling back without interlace element
+        if (need_interlace_element && vinterlace) {
+            g_printerr("SDI AUTO-DETECT: retrying without interlace element...\n");
+            gst_element_set_state(vinterlace, GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(ctx->pipeline), vinterlace);
+
+            // Rebuild caps without interlace-mode
+            snprintf(caps_str, sizeof(caps_str),
+                     "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
+                     out_width, out_height, out_framerate);
+            out_caps = gst_caps_from_string(caps_str);
+            g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+            gst_caps_unref(out_caps);
+
+            video_link_ok = gst_element_link_many(
+                ctx->vqueue, ctx->vconvert, ctx->vrate, ctx->vscale,
+                ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
+
+            if (!video_link_ok) {
+                g_printerr("SDI AUTO-DETECT: FATAL — video chain link failed even without interlace\n");
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+
+    g_print("SDI AUTO-DETECT: video chain linked successfully\n");
+
+    // --- Step 8: Sync new elements to pipeline state (PLAYING) ---
+    if (vinterlace) {
+        gst_element_sync_state_with_parent(vinterlace);
+    }
+
+    // --- Step 9: Link decodebin pad → vqueue to start video flow ---
+    GstPad *sink_pad = gst_element_get_static_pad(ctx->vqueue, "sink");
+    if (sink_pad && !gst_pad_is_linked(sink_pad)) {
+        GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+        if (ret == GST_PAD_LINK_OK) {
+            g_print("SDI AUTO-DETECT: decodebin video → vqueue linked, flow started\n");
+        } else {
+            g_printerr("SDI AUTO-DETECT: decodebin video → vqueue link FAILED: %d\n", ret);
+        }
+    }
+    if (sink_pad) gst_object_unref(sink_pad);
+
+    // Free the entry's framerate string if we allocated it (only when matched)
+    if (entry) {
+        g_free((gchar *)out_framerate);
+    }
 }
 
 // Called when audio decodebin exposes a decoded raw audio pad
@@ -355,6 +653,10 @@ static void *print_stats(void *src)
                 cJSON_AddNumberToObject(sdi_item, "device_number", i);
                 cJSON_AddNumberToObject(sdi_item, "dropped_frames", (double)dropped);
                 cJSON_AddNumberToObject(sdi_item, "duplicated_frames", (double)duplicated);
+                // Include auto-detected mode if available (set by auto-detect callback)
+                if (sdi_detected_mode[i] != NULL) {
+                    cJSON_AddStringToObject(sdi_item, "detected_mode", sdi_detected_mode[i]);
+                }
                 cJSON_AddItemToArray(sdi_array, sdi_item);
             }
         }
@@ -1389,6 +1691,9 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         g_object_set(test_sink, "device-number", device_number, NULL);
         gst_object_unref(test_sink);
 
+        // --- Determine if auto-detect mode ---
+        gboolean is_auto_detect = (strcmp(video_mode_str, "auto") == 0);
+
         // --- Create elements ---
         GstElement *queue       = gst_element_factory_make("queue2",            NULL);
         GstElement *tsdemux     = gst_element_factory_make("tsdemux",           NULL);
@@ -1398,8 +1703,10 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *vconvert    = gst_element_factory_make("videoconvert",      NULL);
         GstElement *vrate       = gst_element_factory_make("videorate",         NULL);
         GstElement *vscale      = gst_element_factory_make("videoscale",        NULL);
+        // In auto-detect mode, vinterlace is created dynamically by the callback.
+        // In manual mode, create it statically if the mode is interlaced.
         GstElement *vinterlace  = NULL;
-        if (interlaced) {
+        if (!is_auto_detect && interlaced) {
             vinterlace = gst_element_factory_make("interlace", NULL);
         }
         GstElement *vcaps       = gst_element_factory_make("capsfilter",        NULL);
@@ -1416,7 +1723,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
             !vscale || !vcaps || !videosink ||
             !adecodebin || !aqueue || !aconvert || !aresample || !arate || !acaps || !audiosink ||
-            (interlaced && !vinterlace)) {
+            (!is_auto_detect && interlaced && !vinterlace)) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
             if (queue)      gst_object_unref(queue);
             if (tsdemux)    gst_object_unref(tsdemux);
@@ -1438,7 +1745,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             return FALSE;
         }
 
-        // --- Configure caps for DeckLink ---
+        // --- Read fallback width/height/framerate from JSON (used for both manual and auto fallback) ---
         cJSON *width_json      = cJSON_GetObjectItem(sink_config, "width");
         cJSON *height_json     = cJSON_GetObjectItem(sink_config, "height");
         cJSON *framerate_json  = cJSON_GetObjectItem(sink_config, "framerate");
@@ -1448,26 +1755,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         const char *framerate = (framerate_json && cJSON_IsString(framerate_json))
                                 ? framerate_json->valuestring : "25/1";
 
-        char caps_str[256];
-        if (interlaced) {
-            snprintf(caps_str, sizeof(caps_str),
-                     "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s, interlace-mode=interleaved",
-                     width, height, framerate);
-        } else {
-            snprintf(caps_str, sizeof(caps_str),
-                     "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
-                     width, height, framerate);
-        }
-
-        g_print("SDI sink %d: mode=%s -> caps: %s\n", sink_index, video_mode_str, caps_str);
-
-        GstCaps *caps = gst_caps_from_string(caps_str);
-        g_object_set(vcaps, "caps", caps, NULL);
-        gst_caps_unref(caps);
-
-        // --- Configure DeckLink sinks ---
+        // --- Configure DeckLink sinks (common to both auto and manual) ---
         g_object_set(videosink, "device-number", device_number, NULL);
-        gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
         // DeckLink video runs with sync=FALSE (pacing is handled by the identity element).
         // DeckLink audio runs with sync=TRUE. This allows GStreamer's master clock-slaving
         // mechanism to pace and resample audio buffers properly, preventing stuttering and underruns.
@@ -1477,11 +1766,6 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
         g_object_set(vid_identity, "sync", TRUE, NULL);
-
-        if (interlaced && vinterlace) {
-            gst_util_set_object_arg(G_OBJECT(vinterlace), "field-pattern", "2:2");
-            g_object_set(vinterlace, "top-field-first", TRUE, NULL);
-        }
 
         // Configure audio caps filter: S16LE, 48kHz, stereo interleaved (standard SDI output requirement)
         GstCaps *audio_caps = gst_caps_from_string("audio/x-raw, format=S16LE, rate=48000, channels=2, layout=interleaved");
@@ -1517,71 +1801,191 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             sdi_vrate_elements[device_number] = vrate;
         }
 
-        // --- Add all elements to pipeline ---
-        gst_bin_add_many(GST_BIN(pipeline),
-                         queue, tsdemux,
-                         vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
-                         adecodebin, aqueue, aconvert, aresample, arate, acaps, audiosink,
-                         NULL);
-        if (interlaced) {
-            gst_bin_add(GST_BIN(pipeline), vinterlace);
-        }
+        if (is_auto_detect) {
+            // =================================================================
+            // AUTO-DETECT PATH
+            // Video chain is NOT linked now. The auto-detect callback will:
+            //   1. Extract decoded video caps from decodebin
+            //   2. Lookup matching DeckLink mode
+            //   3. Configure decklinkvideosink mode + capsfilter
+            //   4. Optionally create and add interlace element
+            //   5. Link the full video chain
+            //   6. Link decodebin → vqueue to start flow
+            // =================================================================
 
-        // --- Link static chains downstream of decodebin ---
-        // Video: vqueue → videoconvert → videorate → videoscale → (vinterlace) → capsfilter → identity(sync) → decklinkvideosink
-        gboolean video_link_ok;
-        if (interlaced) {
-            video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vinterlace, vcaps, vid_identity, videosink, NULL);
+            g_print("SDI sink %d: AUTO-DETECT mode — video chain deferred until first frame\n", sink_index);
+
+            // In auto mode, set decklinkvideosink to a safe initial mode
+            // (it will be reconfigured by the callback before any data arrives)
+            gst_util_set_object_arg(G_OBJECT(videosink), "mode", "1080p25");
+
+            // Add elements to pipeline (video chain elements are added but NOT linked)
+            gst_bin_add_many(GST_BIN(pipeline),
+                             queue, tsdemux,
+                             vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
+                             adecodebin, aqueue, aconvert, aresample, arate, acaps, audiosink,
+                             NULL);
+
+            // Audio chain is linked statically (audio caps are always forced)
+            if (!gst_element_link_many(aqueue, aconvert, aresample, arate, acaps, audiosink, NULL)) {
+                g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
+                return FALSE;
+            }
+
+            // Link tee → queue → tsdemux (static)
+            if (!gst_element_link_many(tee, queue, tsdemux, NULL)) {
+                g_printerr("SDI sink %d: Failed to link tee → queue → tsdemux\n", sink_index);
+                return FALSE;
+            }
+
+            // Dynamic pad linking for tsdemux → decodebin
+            TsdemuxPadData *ts_pad_data = g_new0(TsdemuxPadData, 1);
+            ts_pad_data->vdecodebin = vdecodebin;
+            ts_pad_data->adecodebin = adecodebin;
+
+            g_signal_connect_data(
+                tsdemux, "pad-added",
+                G_CALLBACK(on_sdi_tsdemux_pad_added),
+                ts_pad_data, (GClosureNotify)g_free, (GConnectFlags)0
+            );
+
+            // Allocate auto-detect context with all elements the callback needs
+            SdiAutoDetectCtx *auto_ctx = g_new0(SdiAutoDetectCtx, 1);
+            auto_ctx->pipeline     = pipeline;
+            auto_ctx->vqueue       = vqueue;
+            auto_ctx->vconvert     = vconvert;
+            auto_ctx->vrate        = vrate;
+            auto_ctx->vscale       = vscale;
+            auto_ctx->vcaps        = vcaps;
+            auto_ctx->vid_identity = vid_identity;
+            auto_ctx->videosink    = videosink;
+            auto_ctx->device_number = device_number;
+            // Store fallback values (used if auto-detect can't match a broadcast standard)
+            snprintf(auto_ctx->fallback_mode, sizeof(auto_ctx->fallback_mode), "1080p25");
+            auto_ctx->fallback_width  = width;
+            auto_ctx->fallback_height = height;
+            snprintf(auto_ctx->fallback_framerate, sizeof(auto_ctx->fallback_framerate), "%s", framerate);
+
+            // Connect auto-detect callback for video (deferred linking)
+            g_signal_connect_data(
+                vdecodebin, "pad-added",
+                G_CALLBACK(on_sdi_decodebin_video_pad_added_autodetect),
+                auto_ctx, (GClosureNotify)g_free, (GConnectFlags)0
+            );
+            // Audio decodebin uses the standard callback (no auto-detect needed for audio)
+            g_signal_connect(adecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_audio_pad_added), aqueue);
+
+            // Audio health monitor
+            GstPad *audio_sink_pad = gst_element_get_static_pad(audiosink, "sink");
+            if (audio_sink_pad) {
+                gst_pad_add_probe(audio_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                  sdi_audio_health_probe, GINT_TO_POINTER(device_number), NULL);
+                gst_object_unref(audio_sink_pad);
+                sdi_audio_last_buffer_time[device_number] = g_get_monotonic_time();
+                g_print("SDI sink %d: Audio health monitor installed\n", sink_index);
+            }
+
+            g_print("SDI sink %d: pipeline created (AUTO-DETECT) → DeckLink device %d\n",
+                    sink_index, device_number);
+            return TRUE;
+
         } else {
-            video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL);
+            // =================================================================
+            // MANUAL MODE PATH (existing behavior, unchanged)
+            // Video chain is configured and linked statically at pipeline creation.
+            // =================================================================
+
+            // Configure video caps for DeckLink
+            char caps_str[256];
+            if (interlaced) {
+                snprintf(caps_str, sizeof(caps_str),
+                         "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s, interlace-mode=interleaved",
+                         width, height, framerate);
+            } else {
+                snprintf(caps_str, sizeof(caps_str),
+                         "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
+                         width, height, framerate);
+            }
+
+            g_print("SDI sink %d: mode=%s -> caps: %s\n", sink_index, video_mode_str, caps_str);
+
+            GstCaps *caps = gst_caps_from_string(caps_str);
+            g_object_set(vcaps, "caps", caps, NULL);
+            gst_caps_unref(caps);
+
+            // Set DeckLink mode
+            gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
+
+            if (interlaced && vinterlace) {
+                gst_util_set_object_arg(G_OBJECT(vinterlace), "field-pattern", "2:2");
+                g_object_set(vinterlace, "top-field-first", TRUE, NULL);
+            }
+
+            // --- Add all elements to pipeline ---
+            gst_bin_add_many(GST_BIN(pipeline),
+                             queue, tsdemux,
+                             vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
+                             adecodebin, aqueue, aconvert, aresample, arate, acaps, audiosink,
+                             NULL);
+            if (interlaced) {
+                gst_bin_add(GST_BIN(pipeline), vinterlace);
+            }
+
+            // --- Link static chains downstream of decodebin ---
+            // Video: vqueue → videoconvert → videorate → videoscale → (vinterlace) → capsfilter → identity(sync) → decklinkvideosink
+            gboolean video_link_ok;
+            if (interlaced) {
+                video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vinterlace, vcaps, vid_identity, videosink, NULL);
+            } else {
+                video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL);
+            }
+            if (!video_link_ok) {
+                g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
+                return FALSE;
+            }
+            // Audio: aqueue → audioconvert → audioresample → audiorate → capsfilter → decklinkaudiosink
+            if (!gst_element_link_many(aqueue, aconvert, aresample, arate, acaps, audiosink, NULL)) {
+                g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
+                return FALSE;
+            }
+
+            // --- Link tee → queue → tsdemux (static) ---
+            if (!gst_element_link_many(tee, queue, tsdemux, NULL)) {
+                g_printerr("SDI sink %d: Failed to link tee → queue → tsdemux\n", sink_index);
+                return FALSE;
+            }
+
+            // --- Dynamic pad linking for tsdemux → decodebin ---
+            TsdemuxPadData *ts_pad_data = g_new0(TsdemuxPadData, 1);
+            ts_pad_data->vdecodebin = vdecodebin;
+            ts_pad_data->adecodebin = adecodebin;
+
+            g_signal_connect_data(
+                tsdemux, "pad-added",
+                G_CALLBACK(on_sdi_tsdemux_pad_added),
+                ts_pad_data, (GClosureNotify)g_free, (GConnectFlags)0
+            );
+
+            // --- Dynamic pad linking for decodebin → output queues ---
+            g_signal_connect(vdecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_video_pad_added), vqueue);
+            g_signal_connect(adecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_audio_pad_added), aqueue);
+
+            // --- Audio health monitor: probe on audiosink to detect when audio stops ---
+            GstPad *audio_sink_pad = gst_element_get_static_pad(audiosink, "sink");
+            if (audio_sink_pad) {
+                gst_pad_add_probe(audio_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                  sdi_audio_health_probe, GINT_TO_POINTER(device_number), NULL);
+                gst_object_unref(audio_sink_pad);
+                sdi_audio_last_buffer_time[device_number] = g_get_monotonic_time();
+                g_print("SDI sink %d: Audio health monitor installed\n", sink_index);
+            }
+
+            g_print("SDI sink %d: pipeline created (decodebin) → DeckLink device %d (mode %s)\n",
+                    sink_index, device_number, video_mode_str);
+            return TRUE;
         }
-        if (!video_link_ok) {
-            g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
-            return FALSE;
-        }
-        // Audio: aqueue → audioconvert → audioresample → audiorate → capsfilter → decklinkaudiosink
-        if (!gst_element_link_many(aqueue, aconvert, aresample, arate, acaps, audiosink, NULL)) {
-            g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
-            return FALSE;
-        }
-
-        // --- Link tee → queue → tsdemux (static) ---
-        if (!gst_element_link_many(tee, queue, tsdemux, NULL)) {
-            g_printerr("SDI sink %d: Failed to link tee → queue → tsdemux\n", sink_index);
-            return FALSE;
-        }
-
-        // --- Dynamic pad linking for tsdemux → decodebin ---
-        // tsdemux exposes video/audio pads at runtime, link them to the appropriate decodebin
-        TsdemuxPadData *ts_pad_data = g_new0(TsdemuxPadData, 1);
-        ts_pad_data->vdecodebin = vdecodebin;
-        ts_pad_data->adecodebin = adecodebin;
-
-        g_signal_connect_data(
-            tsdemux, "pad-added",
-            G_CALLBACK(on_sdi_tsdemux_pad_added),
-            ts_pad_data, (GClosureNotify)g_free, (GConnectFlags)0
-        );
-
-        // --- Dynamic pad linking for decodebin → output queues ---
-        // decodebin exposes decoded raw pads, link them to the output queues
-        g_signal_connect(vdecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_video_pad_added), vqueue);
-        g_signal_connect(adecodebin, "pad-added", G_CALLBACK(on_sdi_decodebin_audio_pad_added), aqueue);
-
-        // --- Audio health monitor: probe on audiosink to detect when audio stops ---
-        GstPad *audio_sink_pad = gst_element_get_static_pad(audiosink, "sink");
-        if (audio_sink_pad) {
-            gst_pad_add_probe(audio_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
-                              sdi_audio_health_probe, GINT_TO_POINTER(device_number), NULL);
-            gst_object_unref(audio_sink_pad);
-            sdi_audio_last_buffer_time[device_number] = g_get_monotonic_time();
-            g_print("SDI sink %d: Audio health monitor installed\n", sink_index);
-        }
-
-        g_print("SDI sink %d: pipeline created (decodebin) → DeckLink device %d (mode %s)\n",
-                sink_index, device_number, video_mode_str);
-        return TRUE;
     }
+
 
     // =========================================================================
     // Standard passthrough sinks (SRT, UDP)
