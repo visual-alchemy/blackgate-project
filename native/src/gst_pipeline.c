@@ -30,6 +30,10 @@ static volatile gint64 sdi_audio_last_buffer_time[8] = {0};
 static volatile gint64 sdi_audio_buffer_count[8] = {0};
 static volatile gboolean sdi_audio_silence_reported[8] = {FALSE};
 
+// SDI Video Health Monitor — tracks last video frame time and count per device
+static volatile gint64 sdi_video_last_buffer_time[8] = {0};
+static volatile gint64 sdi_video_buffer_count[8] = {0};
+
 static GstElement *sdi_vrate_elements[8] = {NULL};
 
 // SDI Auto-Detect: detected mode string per device (populated by auto-detect callback)
@@ -126,6 +130,20 @@ static GstPadProbeReturn sdi_audio_health_probe(GstPad *pad, GstPadProbeInfo *in
         sdi_audio_silence_reported[device_number] = FALSE;
         g_print("SDI_AUDIO_RECOVERED: device=%d audio_buffers_flowing_again\n", device_number);
     }
+
+    return GST_PAD_PROBE_OK;
+}
+
+static GstPadProbeReturn sdi_video_health_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    (void)info;
+    int device_number = GPOINTER_TO_INT(user_data);
+    if (device_number < 0 || device_number > 7) return GST_PAD_PROBE_OK;
+
+    gint64 now = g_get_monotonic_time(); // microseconds
+    sdi_video_last_buffer_time[device_number] = now;
+    sdi_video_buffer_count[device_number]++;
 
     return GST_PAD_PROBE_OK;
 }
@@ -653,6 +671,8 @@ static void *print_stats(void *src)
                 cJSON_AddNumberToObject(sdi_item, "device_number", i);
                 cJSON_AddNumberToObject(sdi_item, "dropped_frames", (double)dropped);
                 cJSON_AddNumberToObject(sdi_item, "duplicated_frames", (double)duplicated);
+                cJSON_AddNumberToObject(sdi_item, "video_frames", (double)sdi_video_buffer_count[i]);
+                cJSON_AddNumberToObject(sdi_item, "audio_buffers", (double)sdi_audio_buffer_count[i]);
                 // Include auto-detected mode if available (set by auto-detect callback)
                 if (sdi_detected_mode[i] != NULL) {
                     cJSON_AddStringToObject(sdi_item, "detected_mode", sdi_detected_mode[i]);
@@ -1885,6 +1905,16 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                 g_print("SDI sink %d: Audio health monitor installed\n", sink_index);
             }
 
+            // Video health monitor
+            GstPad *video_sink_pad = gst_element_get_static_pad(videosink, "sink");
+            if (video_sink_pad) {
+                gst_pad_add_probe(video_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                  sdi_video_health_probe, GINT_TO_POINTER(device_number), NULL);
+                gst_object_unref(video_sink_pad);
+                sdi_video_last_buffer_time[device_number] = g_get_monotonic_time();
+                g_print("SDI sink %d: Video health monitor installed\n", sink_index);
+            }
+
             g_print("SDI sink %d: pipeline created (AUTO-DETECT) → DeckLink device %d\n",
                     sink_index, device_number);
             return TRUE;
@@ -1980,6 +2010,16 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                 g_print("SDI sink %d: Audio health monitor installed\n", sink_index);
             }
 
+            // --- Video health monitor: probe on videosink ---
+            GstPad *video_sink_pad = gst_element_get_static_pad(videosink, "sink");
+            if (video_sink_pad) {
+                gst_pad_add_probe(video_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                  sdi_video_health_probe, GINT_TO_POINTER(device_number), NULL);
+                gst_object_unref(video_sink_pad);
+                sdi_video_last_buffer_time[device_number] = g_get_monotonic_time();
+                g_print("SDI sink %d: Video health monitor installed\n", sink_index);
+            }
+
             g_print("SDI sink %d: pipeline created (decodebin) → DeckLink device %d (mode %s)\n",
                     sink_index, device_number, video_mode_str);
             return TRUE;
@@ -2043,6 +2083,8 @@ void cleanup_pipeline(GstElement *pipeline)
         sdi_audio_last_buffer_time[i] = 0;
         sdi_audio_buffer_count[i] = 0;
         sdi_audio_silence_reported[i] = FALSE;
+        sdi_video_last_buffer_time[i] = 0;
+        sdi_video_buffer_count[i] = 0;
         sdi_vrate_elements[i] = NULL;
     }
 

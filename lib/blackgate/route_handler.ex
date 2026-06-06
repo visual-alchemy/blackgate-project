@@ -37,6 +37,8 @@ defmodule Blackgate.RouteHandler do
       reconnect_count: 0,
       last_bytes_received: 0,
       last_bytes_changed_at: nil,
+      last_sdi_frames: %{},
+      last_sdi_frames_changed_at: nil,
       started_at: nil,
       consecutive_startup_crashes: 0
     }
@@ -62,7 +64,7 @@ defmodule Blackgate.RouteHandler do
         })
         now = System.monotonic_time(:millisecond)
         {:next_state, :started,
-         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now, consecutive_startup_crashes: 0},
+         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now, last_sdi_frames_changed_at: now, last_sdi_frames: %{}, consecutive_startup_crashes: 0},
          {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
@@ -138,33 +140,99 @@ defmodule Blackgate.RouteHandler do
       # Get current bytes from stats registry
       current_bytes = get_total_bytes_received(data.id)
 
-      if current_bytes > data.last_bytes_received do
-        # Data is flowing — update and schedule next check
-        {:keep_state, %{data | last_bytes_received: current_bytes, last_bytes_changed_at: now},
-         {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
-      else
-        # No new data — check how long it's been stalled
-        stall_duration = now - data.last_bytes_changed_at
+      # Determine if the route has an active SDI destination
+      has_sdi_destination? =
+        case data.route["destinations"] do
+          destinations when is_list(destinations) ->
+            Enum.any?(destinations, &(&1["schema"] == "SDI"))
+          _ ->
+            false
+        end
 
-        if stall_duration >= @watchdog_stall_threshold_ms do
-          # Stalled too long — trigger reconnect
-          Logger.warning("RouteHandler: Watchdog detected stall (#{div(stall_duration, 1000)}s no data), restarting route")
+      # Query latest SDI video stats
+      stats =
+        case Blackgate.RouteStatsRegistry.get_stats(data.id) do
+          %{stats: stats} when is_map(stats) -> stats
+          _ -> nil
+        end
+
+      sdi_frames_map =
+        if stats && is_list(stats["sdi_video_stats"]) do
+          Enum.reduce(stats["sdi_video_stats"], %{}, fn sdi_item, acc ->
+            dev = sdi_item["device_number"]
+            frames = sdi_item["video_frames"] || 0
+            if is_integer(dev) do
+              Map.put(acc, dev, frames)
+            else
+              acc
+            end
+          end)
+        else
+          %{}
+        end
+
+      # 1. Evaluate Network Bytes
+      {last_bytes_received, last_bytes_changed_at} =
+        if current_bytes > data.last_bytes_received do
+          {current_bytes, now}
+        else
+          {data.last_bytes_received, data.last_bytes_changed_at}
+        end
+
+      # 2. Evaluate Playout Frames (only if SDI destination is present)
+      playout_stalled? =
+        if has_sdi_destination? do
+          if map_size(sdi_frames_map) > 0 do
+            # Stalled if any configured device's frame count has not advanced
+            Enum.any?(sdi_frames_map, fn {dev, current_val} ->
+              last_val = Map.get(data.last_sdi_frames, dev, 0)
+              current_val <= last_val
+            end)
+          else
+            # SDI destination exists but no frames/stats received yet from C pipeline
+            true
+          end
+        else
+          false
+        end
+
+      {last_sdi_frames, last_sdi_frames_changed_at} =
+        if playout_stalled? do
+          {data.last_sdi_frames, data.last_sdi_frames_changed_at}
+        else
+          {sdi_frames_map, now}
+        end
+
+      net_stall_duration = now - last_bytes_changed_at
+      sdi_stall_duration = now - last_sdi_frames_changed_at
+
+      cond do
+        net_stall_duration >= @watchdog_stall_threshold_ms ->
+          Logger.warning("RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route")
           Blackgate.EventLog.log(:warning, "watchdog_restart",
-            "No data for #{div(stall_duration, 1000)}s, restarting route", %{
+            "No data for #{div(net_stall_duration, 1000)}s, restarting route", %{
               route_id: data.id,
               route_name: get_in(data, [:route, "name"]) || data.id
             })
+          trigger_restart(data)
 
-          # Kill current pipeline and ffmpeg
-          if data.port && is_port(data.port), do: close_port(data.port)
-          if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+        sdi_stall_duration >= @watchdog_stall_threshold_ms ->
+          Logger.warning("RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route")
+          Blackgate.EventLog.log(:warning, "watchdog_restart",
+            "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route", %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            })
+          trigger_restart(data)
 
-          # Enter reconnecting state
-          enter_reconnecting(%{data | port: nil, ffmpeg_port: nil})
-        else
-          # Still within threshold — keep waiting
-          {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
-        end
+        true ->
+          updated_data = %{data |
+            last_bytes_received: last_bytes_received,
+            last_bytes_changed_at: last_bytes_changed_at,
+            last_sdi_frames: last_sdi_frames,
+            last_sdi_frames_changed_at: last_sdi_frames_changed_at
+          }
+          {:keep_state, updated_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
       end
     end
   end
@@ -247,7 +315,7 @@ defmodule Blackgate.RouteHandler do
             now = System.monotonic_time(:millisecond)
             {:next_state, :started,
              %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0,
-               started_at: now, last_bytes_changed_at: now, last_bytes_received: 0, consecutive_startup_crashes: 0},
+               started_at: now, last_bytes_changed_at: now, last_sdi_frames_changed_at: now, last_sdi_frames: %{}, last_bytes_received: 0, consecutive_startup_crashes: 0},
              {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
@@ -315,6 +383,12 @@ defmodule Blackgate.RouteHandler do
         Map.get(stats, "total-bytes-received", 0)
       _ -> 0
     end
+  end
+
+  defp trigger_restart(data) do
+    if data.port && is_port(data.port), do: close_port(data.port)
+    if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+    enter_reconnecting(%{data | port: nil, ffmpeg_port: nil})
   end
 
   defp enter_reconnecting(data) do
