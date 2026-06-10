@@ -10,11 +10,15 @@ defmodule Blackgate.Metrics do
   def event(k, v, tags \\ %{}, ts \\ System.system_time()) do
     # Logger.debug("Event: #{k} #{inspect(v)}")
 
-    Connection.write(%{
-      measurement: "blackgate_routes_stats",
-      fields: %{k => v},
-      tags: tags,
-      timestamp: ts
-    })
+    if Application.get_env(:blackgate, :export_metrics?, false) do
+      Connection.write(%{
+        measurement: "blackgate_routes_stats",
+        fields: %{k => v},
+        tags: tags,
+        timestamp: ts
+      })
+    else
+      :ok
+    end
   end
 end

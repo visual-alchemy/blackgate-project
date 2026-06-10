@@ -78,6 +78,17 @@ make start
     - The license checker heartbeats to vercel every 6 hours. If the validation times out or fails due to network issues, the license cache **remains valid** to prevent production outages.
 4.  **Database Storage:**
     - Khepri is the production state database. Do **not** try to run Ecto migrations or use SQLite3 in production.
+5. **SDI Audio Must Be 8 Channels (`gst_pipeline.c`):**
+    - All SDI playout destinations (`sdisink`) **must output 8 embedded audio channels**, regardless of the source channel count. Downstream broadcast switchers (e.g. DeckLink Quad 2 inputs) expect a full 8-channel SDI audio frame; delivering fewer channels causes the switcher to output silence even though GStreamer reports healthy audio buffer flow.
+    - The `add_sink_to_pipeline` function inserts an `audiomixmatrix` element in `manual` mode before the `decklinkaudiosink`. It programmatically builds and sets a GValue matrix mapping the 2 input channels to all 8 output channels (duplicating/mirroring the stereo pairs). The `capsfilter` (`acaps`) is set to `channels=8`. **Do not revert this to 2 channels.**
+    - `audiomixmatrix` matrix property **must not** be set via `gst_util_set_object_arg` with a literal `<<...>>` string on GStreamer 1.24 — it causes a SIGSEGV. Use the GValue array API (`GValue` initialized with `GST_TYPE_ARRAY` and nested GValue arrays) to set the `matrix` property programmatically.
+6.  **SDI Audio Desync Auto-Recovery (`route_handler.ex`):**
+    - RTMP/HTTP/HLS sources go through an `ffmpeg` sidecar, which can cause brief audio gaps. When this happens the DeckLink SDI audio embedder loses hardware sync and stays silent even after GStreamer recovers — the only fix is a pipeline restart.
+    - `RouteHandler` automatically restarts the pipeline when `SDI_AUDIO_SILENT` is detected from C pipeline stdout, subject to three guards:
+      1. **Schema guard:** `schema == "SRT"` routes are **never** auto-restarted (SRT is self-healing and has never exhibited this issue).
+      2. **Source-silence guard:** if `total_buffers < 5000`, the source has no audio — restart would loop indefinitely, so it is skipped.
+      3. **Cooldown guard:** after an auto-restart, a 5-minute cooldown prevents a restart loop if audio remains intermittent.
+    - The `data` struct in `RouteHandler` carries `sdi_audio_last_restart_at` (monotonic timestamp). This field is reset to `nil` on every successful start/reconnect so that user-triggered restarts clear the cooldown.
 
 ---
 

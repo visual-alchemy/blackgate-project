@@ -1590,10 +1590,29 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
 
     set_element_properties(source, source_obj, source_type->valuestring, "type");
 
-    // Use do-timestamp=FALSE for pure MPEG-TS passthrough
-    // Regenerating timestamps corrupts PES packet structure causing artifacts
-    g_object_set(source, "do-timestamp", FALSE, NULL);
-    g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
+    // If SDI destination is present, enable do-timestamp=TRUE to align timestamps
+    // with local clock and avoid "too late" drops in decklinkaudiosink.
+    // Otherwise, keep do-timestamp=FALSE for pure MPEG-TS passthrough to avoid
+    // corrupting PES packet structures.
+    gboolean has_sdi_sink = FALSE;
+    if (cJSON_IsArray(sinks_array)) {
+        cJSON *sink_item;
+        cJSON_ArrayForEach(sink_item, sinks_array) {
+            cJSON *sink_type = cJSON_GetObjectItem(sink_item, "type");
+            if (sink_type && cJSON_IsString(sink_type) && strcmp(sink_type->valuestring, "sdisink") == 0) {
+                has_sdi_sink = TRUE;
+                break;
+            }
+        }
+    }
+
+    if (has_sdi_sink) {
+        g_object_set(source, "do-timestamp", TRUE, NULL);
+        g_print("Set do-timestamp=TRUE for source element (SDI playout detected)\n");
+    } else {
+        g_object_set(source, "do-timestamp", FALSE, NULL);
+        g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
+    }
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
         // Signal for logging incoming connections
@@ -1735,6 +1754,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *adecodebin  = gst_element_factory_make("decodebin",         NULL);
         GstElement *aqueue      = gst_element_factory_make("queue",             NULL);
         GstElement *aconvert    = gst_element_factory_make("audioconvert",      NULL);
+        GstElement *amix        = gst_element_factory_make("audiomixmatrix",    NULL);
         GstElement *aresample   = gst_element_factory_make("audioresample",     NULL);
         GstElement *arate       = gst_element_factory_make("audiorate",         NULL);
         GstElement *acaps       = gst_element_factory_make("capsfilter",        NULL);
@@ -1742,7 +1762,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 
         if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
             !vscale || !vcaps || !videosink ||
-            !adecodebin || !aqueue || !aconvert || !aresample || !arate || !acaps || !audiosink ||
+            !adecodebin || !aqueue || !aconvert || !amix || !aresample || !arate || !acaps || !audiosink ||
             (!is_auto_detect && interlaced && !vinterlace)) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
             if (queue)      gst_object_unref(queue);
@@ -1758,6 +1778,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             if (adecodebin) gst_object_unref(adecodebin);
             if (aqueue)     gst_object_unref(aqueue);
             if (aconvert)   gst_object_unref(aconvert);
+            if (amix)       gst_object_unref(amix);
             if (aresample)  gst_object_unref(aresample);
             if (arate)      gst_object_unref(arate);
             if (acaps)      gst_object_unref(acaps);
@@ -1781,14 +1802,41 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         // DeckLink audio runs with sync=TRUE. This allows GStreamer's master clock-slaving
         // mechanism to pace and resample audio buffers properly, preventing stuttering and underruns.
         g_object_set(videosink, "sync", FALSE, NULL);
-        g_object_set(audiosink, "device-number", device_number, "sync", TRUE, NULL);
+        g_object_set(audiosink, "device-number", device_number, "sync", TRUE, "max-lateness", (gint64)200000000, NULL);
 
         // Create identity element for video frame pacing via system clock
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
         g_object_set(vid_identity, "sync", TRUE, NULL);
 
-        // Configure audio caps filter: S16LE, 48kHz, stereo interleaved (standard SDI output requirement)
-        GstCaps *audio_caps = gst_caps_from_string("audio/x-raw, format=S16LE, rate=48000, channels=2, layout=interleaved");
+        // Configure audiomixmatrix: upmix stereo to 8ch for SDI broadcast compatibility.
+        // We configure it to manual mode and set a transformation matrix that duplicates
+        // the stereo input (ch1/2) to all 4 stereo pairs (ch3/4, ch5/6, ch7/8).
+        // This ensures that downstream switchers receive audio regardless of which pair they monitor.
+        g_object_set(amix, "in-channels", 2, "out-channels", 8, "channel-mask", (guint64)0xc3f, NULL);
+        gst_util_set_object_arg(G_OBJECT(amix), "mode", "manual");
+
+        GValue matrix = G_VALUE_INIT;
+        g_value_init(&matrix, GST_TYPE_ARRAY);
+        for (int i = 0; i < 8; i++) {
+            GValue row = G_VALUE_INIT;
+            g_value_init(&row, GST_TYPE_ARRAY);
+            for (int j = 0; j < 2; j++) {
+                GValue val = G_VALUE_INIT;
+                g_value_init(&val, G_TYPE_DOUBLE);
+                // Odd rows map to In 1 (j=0), even rows map to In 2 (j=1)
+                double coef = (i % 2 == j) ? 1.0 : 0.0;
+                g_value_set_double(&val, coef);
+                gst_value_array_append_value(&row, &val);
+                g_value_unset(&val);
+            }
+            gst_value_array_append_value(&matrix, &row);
+            g_value_unset(&row);
+        }
+        g_object_set_property(G_OBJECT(amix), "matrix", &matrix);
+        g_value_unset(&matrix);
+
+        // Configure audio caps filter: S16LE, 48kHz, 8 channels interleaved (standard SDI output requirement)
+        GstCaps *audio_caps = gst_caps_from_string("audio/x-raw, format=S16LE, rate=48000, channels=8, channel-mask=(bitmask)0x0000000000000c3f, layout=interleaved");
         g_object_set(acaps, "caps", audio_caps, NULL);
         gst_caps_unref(audio_caps);
 
@@ -1843,11 +1891,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             gst_bin_add_many(GST_BIN(pipeline),
                              queue, tsdemux,
                              vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
-                             adecodebin, aqueue, aconvert, aresample, arate, acaps, audiosink,
+                             adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
                              NULL);
 
             // Audio chain is linked statically (audio caps are always forced)
-            if (!gst_element_link_many(aqueue, aconvert, aresample, arate, acaps, audiosink, NULL)) {
+            if (!gst_element_link_many(aqueue, aconvert, amix, aresample, arate, acaps, audiosink, NULL)) {
                 g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
                 return FALSE;
             }
@@ -1955,7 +2003,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             gst_bin_add_many(GST_BIN(pipeline),
                              queue, tsdemux,
                              vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
-                             adecodebin, aqueue, aconvert, aresample, arate, acaps, audiosink,
+                             adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
                              NULL);
             if (interlaced) {
                 gst_bin_add(GST_BIN(pipeline), vinterlace);
@@ -1973,8 +2021,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                 g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
                 return FALSE;
             }
-            // Audio: aqueue → audioconvert → audioresample → audiorate → capsfilter → decklinkaudiosink
-            if (!gst_element_link_many(aqueue, aconvert, aresample, arate, acaps, audiosink, NULL)) {
+            // Audio: aqueue → audioconvert → audiomixmatrix → audioresample → audiorate → capsfilter → decklinkaudiosink
+            if (!gst_element_link_many(aqueue, aconvert, amix, aresample, arate, acaps, audiosink, NULL)) {
                 g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
                 return FALSE;
             }

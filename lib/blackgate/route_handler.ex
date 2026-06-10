@@ -18,6 +18,14 @@ defmodule Blackgate.RouteHandler do
   @watchdog_stall_threshold_ms 60_000 # Restart if no data for 60 seconds
   @watchdog_grace_period_ms 30_000    # Don't check for first 30 seconds after start
 
+  # SDI audio desync auto-recovery (RTMP/HTTP/HLS only)
+  # Minimum total audio buffers before we treat a silence event as a hardware desync.
+  # If total_buffers < this, the source itself likely has no audio — do not restart.
+  @sdi_audio_min_buffers_before_restart 5_000
+  # After an auto-restart for audio desync, wait this long before restarting again.
+  # Prevents an infinite loop if the source permanently loses audio.
+  @sdi_audio_restart_cooldown_ms 300_000  # 5 minutes
+
   @impl true
   def callback_mode, do: [:handle_event_function]
 
@@ -40,7 +48,10 @@ defmodule Blackgate.RouteHandler do
       last_sdi_frames: %{},
       last_sdi_frames_changed_at: nil,
       started_at: nil,
-      consecutive_startup_crashes: 0
+      consecutive_startup_crashes: 0,
+      # Tracks last time we auto-restarted due to SDI audio desync.
+      # Used to enforce a cooldown and prevent restart loops.
+      sdi_audio_last_restart_at: nil
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -64,7 +75,9 @@ defmodule Blackgate.RouteHandler do
         })
         now = System.monotonic_time(:millisecond)
         {:next_state, :started,
-         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now, last_sdi_frames_changed_at: now, last_sdi_frames: %{}, consecutive_startup_crashes: 0},
+         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now,
+                  last_sdi_frames_changed_at: now, last_sdi_frames: %{}, consecutive_startup_crashes: 0,
+                  sdi_audio_last_restart_at: nil},
          {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
@@ -94,39 +107,52 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  def handle_event(:info, {_port, {:data, info}}, _state, data) do
-    String.split(info, "\n")
-    |> Enum.each(fn line ->
-      Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
+  def handle_event(:info, {_port, {:data, info}}, state, data) do
+    # Process each line from the C pipeline stdout and check for actionable events.
+    # Returns updated data if SDI audio desync recovery fires, otherwise keeps state.
+    new_data =
+      String.split(info, "\n")
+      |> Enum.reduce(data, fn line, acc ->
+        Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
 
-      # Detect SDI graceful failure from C pipeline output
-      if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
-        Blackgate.EventLog.log(:warning, "sdi_failed", String.trim(line), %{
-          route_id: data.id,
-          route_name: get_in(data, [:route, "name"]) || data.id
-        })
-      end
+        # Detect SDI graceful failure from C pipeline output
+        if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
+          Blackgate.EventLog.log(:warning, "sdi_failed", String.trim(line), %{
+            route_id: acc.id,
+            route_name: get_in(acc, [:route, "name"]) || acc.id
+          })
+        end
 
-      # Detect SDI audio silence
-      if String.contains?(line, "SDI_AUDIO_SILENT:") do
-        Blackgate.EventLog.log(:warning, "sdi_audio_silent",
-          "SDI audio stopped: #{String.trim(line)}", %{
-          route_id: data.id,
-          route_name: get_in(data, [:route, "name"]) || data.id
-        })
-      end
+        # Detect SDI audio silence — log always, then check if we should auto-restart
+        acc =
+          if String.contains?(line, "SDI_AUDIO_SILENT:") do
+            Blackgate.EventLog.log(:warning, "sdi_audio_silent",
+              "SDI audio stopped: #{String.trim(line)}", %{
+              route_id: acc.id,
+              route_name: get_in(acc, [:route, "name"]) || acc.id
+            })
+            maybe_restart_for_audio_desync(line, state, acc)
+          else
+            acc
+          end
 
-      # Detect SDI audio recovery
-      if String.contains?(line, "SDI_AUDIO_RECOVERED:") do
-        Blackgate.EventLog.log(:info, "sdi_audio_recovered",
-          "SDI audio recovered: #{String.trim(line)}", %{
-          route_id: data.id,
-          route_name: get_in(data, [:route, "name"]) || data.id
-        })
-      end
-    end)
+        # Detect SDI audio recovery
+        if String.contains?(line, "SDI_AUDIO_RECOVERED:") do
+          Blackgate.EventLog.log(:info, "sdi_audio_recovered",
+            "SDI audio recovered: #{String.trim(line)}", %{
+            route_id: acc.id,
+            route_name: get_in(acc, [:route, "name"]) || acc.id
+          })
+        end
 
-    :keep_state_and_data
+        acc
+      end)
+
+    if new_data == data do
+      :keep_state_and_data
+    else
+      {:keep_state, new_data}
+    end
   end
 
   # Watchdog: check if data is still flowing
@@ -315,7 +341,9 @@ defmodule Blackgate.RouteHandler do
             now = System.monotonic_time(:millisecond)
             {:next_state, :started,
              %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0,
-               started_at: now, last_bytes_changed_at: now, last_sdi_frames_changed_at: now, last_sdi_frames: %{}, last_bytes_received: 0, consecutive_startup_crashes: 0},
+               started_at: now, last_bytes_changed_at: now, last_sdi_frames_changed_at: now,
+               last_sdi_frames: %{}, last_bytes_received: 0, consecutive_startup_crashes: 0,
+               sdi_audio_last_restart_at: nil},
              {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
@@ -368,6 +396,19 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # SDI audio desync auto-recovery: fired by maybe_restart_for_audio_desync/3 via send(self(), ...)
+  # Using send+handle_event keeps the gen_statem state transition clean and separate from
+  # the data-update return path in the pipeline stdout handler.
+  def handle_event(:info, :sdi_audio_desync_restart, :started, data) do
+    Logger.warning("RouteHandler: Executing SDI audio desync restart for route #{data.id}")
+    trigger_restart(data)
+  end
+
+  # Already reconnecting or stopped — ignore the deferred restart message
+  def handle_event(:info, :sdi_audio_desync_restart, _state, _data) do
+    :keep_state_and_data
+  end
+
   def handle_event(type, content, state, data) do
     Logger.error(
       "RouteHandler: Undefined msg: #{inspect([{"type", type}, {"content", content}, {"state", state}, {"data", data}],
@@ -389,6 +430,86 @@ defmodule Blackgate.RouteHandler do
     if data.port && is_port(data.port), do: close_port(data.port)
     if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
     enter_reconnecting(%{data | port: nil, ffmpeg_port: nil})
+  end
+
+  # Decides whether to auto-restart the pipeline after an SDI_AUDIO_SILENT event.
+  #
+  # Rules (in order):
+  #   1. SRT sources → skip (SRT is self-healing, this has never happened on SRT)
+  #   2. total_buffers < threshold → source has no audio, not a hardware desync → skip
+  #   3. Within cooldown window → log critical, skip to avoid restart loop
+  #   4. All clear → trigger restart, record timestamp
+  #
+  # Returns updated `data` map (with sdi_audio_last_restart_at set) if a restart was
+  # triggered, or the original `data` unchanged if not.
+  defp maybe_restart_for_audio_desync(line, state, data) do
+    source_schema = get_in(data, [:route, "schema"]) || ""
+
+    cond do
+      # Rule 1: SRT sources are rock solid — never auto-restart for them
+      source_schema == "SRT" ->
+        Logger.info("RouteHandler: SDI_AUDIO_SILENT on SRT source, skipping auto-restart")
+        data
+
+      # Rule 2: Parse total_buffers — if tiny, the source itself has no audio
+      true ->
+        total_buffers =
+          case Regex.run(~r/total_buffers=(\d+)/, line) do
+            [_, n] -> String.to_integer(n)
+            _ -> 0
+          end
+
+        cond do
+          total_buffers < @sdi_audio_min_buffers_before_restart ->
+            Logger.info("RouteHandler: SDI_AUDIO_SILENT with total_buffers=#{total_buffers} " <>
+              "(< #{@sdi_audio_min_buffers_before_restart}), source likely has no audio — skipping restart")
+            Blackgate.EventLog.log(:warning, "sdi_audio_source_silent",
+              "SDI audio silence detected but source appears to have no audio (total_buffers=#{total_buffers})", %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            })
+            data
+
+          # Rule 3: Within cooldown window after a previous auto-restart
+          data.sdi_audio_last_restart_at != nil and
+          System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at < @sdi_audio_restart_cooldown_ms ->
+            remaining_s = div(
+              @sdi_audio_restart_cooldown_ms - (System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at),
+              1000
+            )
+            Logger.warning("RouteHandler: SDI_AUDIO_SILENT within cooldown window (#{remaining_s}s remaining), " <>
+              "skipping auto-restart — manual check may be required")
+            Blackgate.EventLog.log(:critical, "sdi_audio_desync_repeated",
+              "SDI audio desynced again within cooldown window (#{remaining_s}s remaining). " <>
+              "Source audio may be intermittent — manual check required.", %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            })
+            data
+
+          # Rule 4: Genuine hardware embedder desync — restart the pipeline
+          state == :started ->
+            Logger.warning("RouteHandler: SDI_AUDIO_SILENT on #{source_schema} source with " <>
+              "total_buffers=#{total_buffers} — triggering auto-restart for hardware desync recovery")
+            Blackgate.EventLog.log(:warning, "sdi_audio_desync_restart",
+              "SDI audio embedder desynced (total_buffers=#{total_buffers}), auto-restarting pipeline", %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            })
+            # Record timestamp BEFORE trigger_restart (which is a gen_statem state transition)
+            # We embed it in data so the reconnect path carries it forward.
+            # trigger_restart will call enter_reconnecting which transitions state.
+            # We return the updated data but the state transition is done as a side-effect here.
+            # Since gen_statem only acts on return values from handle_event, we use
+            # Process.send_after to schedule a restart command to self.
+            send(self(), :sdi_audio_desync_restart)
+            %{data | sdi_audio_last_restart_at: System.monotonic_time(:millisecond)}
+
+          true ->
+            # Not in :started state (already reconnecting etc.) — skip
+            data
+        end
+    end
   end
 
   defp enter_reconnecting(data) do
@@ -743,13 +864,14 @@ defmodule Blackgate.RouteHandler do
   defp find_available_port(attempts) do
     port = Enum.random(@internal_port_range)
 
-    case :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]) do
-      {:ok, socket} ->
-        :ok = :gen_tcp.close(socket)
-        port
-
-      {:error, _reason} ->
-        find_available_port(attempts - 1)
+    # Check both TCP and UDP since the loopback sidecar binds on UDP for SRT
+    with {:ok, tcp_socket} <- :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]),
+         :ok <- :gen_tcp.close(tcp_socket),
+         {:ok, udp_socket} <- :gen_udp.open(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]),
+         :ok <- :gen_udp.close(udp_socket) do
+      port
+    else
+      _ -> find_available_port(attempts - 1)
     end
   end
 
