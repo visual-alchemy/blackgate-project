@@ -4,6 +4,50 @@ Welcome, AI Agent! This file provides the context, setup steps, architectural co
 
 ---
 
+## 🔌 RTK — Automatic Command Output Compression
+
+All shell commands executed via `run_shell_command` or `bash -c` **MUST be prefixed with `rtk`**. This compresses verbose command output (60-90% token savings) before it reaches your context window.
+
+```bash
+# Correct:
+rtk git diff
+rtk mix test
+rtk ls -la
+
+# Wrong (wastes tokens):
+git diff
+mix test
+ls -la
+```
+
+**Meta commands** (use `rtk` directly, no wrapping needed):
+- `rtk gain` — show token savings
+- `rtk discover` — find missed optimization opportunities
+- `rtk proxy <cmd>` — run a command without filtering (debugging only)
+
+**Never** double-wrap: `rtk rtk git status` is wrong. Just `rtk git status`.
+
+See `@RTK.md` for the full command reference.
+
+---
+
+## 🪨 Caveman Mode — Always On
+
+**All responses MUST be in caveman style (full intensity).** Active every reply. No revert unless user says "stop caveman" or "normal mode."
+
+Rules:
+- Drop articles (a/an/the), filler words (just/really/basically/surely), pleasantries (sure/certainly/happy to)
+- Fragments OK. Short synonyms. Technical terms exact.
+- Pattern: `[thing] [action] [reason]. [next step].`
+- Code blocks unchanged. Errors quoted exact.
+
+Drop caveman only for: security warnings, destructive action confirmations, or when compression creates ambiguity. Resume after.
+
+Never: "Sure! I'd be happy to..." / "Let me take a look..."
+Yes: "Bug in auth. Token check use `<` not `<=`. Fix:"
+
+---
+
 ## 🛠️ Technology Stack & Environment
 
 - **Backend:** Elixir 1.18.x / Erlang OTP 27 (configured in `.tool-versions`)
