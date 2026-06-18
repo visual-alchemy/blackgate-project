@@ -93,6 +93,60 @@ defmodule Blackgate.RouteHandlerTest do
     assert source["keep-listening"] == true
   end
 
+  test "source_from_record with valid SRT schema and advanced options" do
+    record = %{
+      "schema" => "SRT",
+      "schema_options" => %{
+        "localaddress" => "127.0.0.1",
+        "localport" => 4201,
+        "mode" => "listener",
+        "latency" => 200,
+        "auto-reconnect" => true,
+        "keep-listening" => true,
+        "rcvbuf" => 50000000,
+        "lossmaxttl" => 10,
+        "oheadbw" => 50
+      }
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    assert source["type"] == "srtsrc"
+    assert source["uri"] =~ "srt://127.0.0.1:4201"
+    assert source["uri"] =~ "mode=listener"
+    assert source["latency"] == 200
+    assert source["auto-reconnect"] == true
+    assert source["keep-listening"] == true
+    assert source["rcvbuf"] == 50000000
+    assert source["lossmaxttl"] == 10
+    assert source["oheadbw"] == 50
+  end
+
+  test "sink_from_record with valid SRT schema and advanced options" do
+    record = %{
+      "schema" => "SRT",
+      "schema_options" => %{
+        "localaddress" => "127.0.0.1",
+        "localport" => 4202,
+        "mode" => "caller",
+        "latency" => 250,
+        "sndbuf" => 12000000,
+        "rcvbuf" => 8000000,
+        "oheadbw" => 30,
+        "maxbw" => 50000000
+      }
+    }
+
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+    assert sink["type"] == "srtsink"
+    assert sink["uri"] =~ "srt://127.0.0.1:4202"
+    assert sink["uri"] =~ "mode=caller"
+    assert sink["latency"] == 250
+    assert sink["sndbuf"] == 12000000
+    assert sink["rcvbuf"] == 8000000
+    assert sink["oheadbw"] == 30
+    assert sink["maxbw"] == 50000000
+  end
+
   test "source_from_record with SRT schema and passphrase" do
     record = %{
       "schema" => "SRT",

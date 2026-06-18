@@ -376,6 +376,22 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         </Form.Item>
 
                                                         <Form.Item
+                                                            label="Receive Buffer (rcvbuf)"
+                                                            name={['schema_options', 'rcvbuf']}
+                                                            tooltip="Size of the receive buffer in bytes"
+                                                            extra="Larger buffer helps with high bitrate streams and network jitter. Default: ~8MB (calculated by SRT)"
+                                                        >
+                                                            <InputNumber
+                                                                style={{ width: '200px' }}
+                                                                min={0}
+                                                                step={1000000}
+                                                                placeholder="e.g., 50000000 (50MB)"
+                                                                formatter={(value) => value ? `${value} bytes` : ''}
+                                                                parser={(value) => value.replace(' bytes', '')}
+                                                            />
+                                                        </Form.Item>
+
+                                                        <Form.Item
                                                             label="Overhead Bandwidth % (oheadbw)"
                                                             name={['schema_options', 'oheadbw']}
                                                             tooltip="Extra bandwidth for retransmissions"

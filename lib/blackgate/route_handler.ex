@@ -715,7 +715,7 @@ defmodule Blackgate.RouteHandler do
         "streamid"
       ])
       |> Enum.filter(fn {key, _} ->
-        key in ["latency"]
+        key in ["latency", "sndbuf", "rcvbuf", "oheadbw", "maxbw"]
       end)
       |> Enum.into(%{})
 
@@ -896,7 +896,7 @@ defmodule Blackgate.RouteHandler do
         "poll-timeout"
       ])
       |> Enum.filter(fn {key, _} ->
-        key in ["latency", "auto-reconnect", "keep-listening"]
+        key in ["latency", "auto-reconnect", "keep-listening", "rcvbuf", "lossmaxttl", "oheadbw"]
       end)
       |> Enum.into(%{})
 
