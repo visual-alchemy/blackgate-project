@@ -331,6 +331,14 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                           </Form.Item>
 
                           <Form.Item
+                            label="Stream ID"
+                            name={['schema_options', 'streamid']}
+                            extra="Optional SRT Stream ID. Required by some services (e.g., Vidio/SRS) for stream identification."
+                          >
+                            <Input placeholder="e.g., #!::r=srt/1022501010AE4005" />
+                          </Form.Item>
+
+                          <Form.Item
                             label="Auto Reconnect"
                             name={['schema_options', 'auto-reconnect']}
                             valuePropName="checked"

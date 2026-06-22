@@ -369,8 +369,14 @@ const Routes = () => {
       key: 'input',
       render: (text, record) => {
         switch (record.schema) {
-          case 'SRT':
-            return (`${record.schema}:${record?.schema_options?.mode || 'N/A'}:${record?.schema_options?.localport || 'N/A'}`);
+          case 'SRT': {
+            const mode = record?.schema_options?.mode || 'N/A';
+            const port = record?.schema_options?.localport || 'N/A';
+            const streamid = record?.schema_options?.streamid;
+            return streamid 
+              ? `${record.schema}:${mode}:${port} (${streamid})`
+              : `${record.schema}:${mode}:${port}`;
+          }
           case 'UDP':
             return (`${record.schema}:${record?.schema_options?.address || 'N/A'}:${record?.schema_options?.port || 'N/A'}`);
           case 'RTMP':
