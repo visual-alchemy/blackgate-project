@@ -8,8 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [1.0.0] - 2026-07-07
+
+### Added
+- First stable release.
+- All 0.4.0 features (SRT StreamID, 8-channel audio upmix, silence auto-recovery) verified and marked stable.
+
+
+## [0.4.0] - 2026-06-14
+
 ### Added
 - **SRT StreamID Support**: Optional Stream ID field for SRT Caller sources and destinations, enabling compatibility with services like Vidio that require `streamid` in the SRT URI. (`391b189`)
+- **SDI Audio Silence Auto-Recovery**: `RouteHandler` monitors stdout from the C pipeline for `SDI_AUDIO_SILENT` events and automatically restarts the pipeline to recover from DeckLink hardware audio desync. Three guards prevent restart loops: schema guard (SRT routes never restarted — self-healing), source-silence guard (skip if `total_buffers < 5000`, meaning source has no audio), and a 5-minute cooldown after each auto-restart. (`3f5d244`)
+- **SDI 8-Channel Audio Upmix**: All SDI playout destinations now output 8 embedded audio channels regardless of source channel count. Uses `audiomixmatrix` in manual mode with a GValue matrix API (not `gst_util_set_object_arg` — causes SIGSEGV on GStreamer 1.24) to mirror stereo input to all 8 SDI channels. Downstream broadcast switchers (DeckLink Quad 2) require a full 8-channel audio frame to pass audio. (`4702799`)
+- **Loopback Port Availability Check**: Before spawning an ffmpeg sidecar on a loopback port (range `39000–39999`), `RouteHandler` now verifies the port is free to prevent silent port conflicts between concurrent RTMP routes. (`4702799`)
+- **Metrics Connection Spam Silenced**: Reduced log noise from periodic VictoriaMetrics connection errors when the metrics backend is unavailable. (`4702799`)
+- **AGENTS.md — RTK + Caveman Mode Instructions**: Added `RTK` command prefix requirement (60–90% token savings on shell output) and caveman response style rules for AI agent sessions. (`326b397`)
+
+### Fixed
+- **GMainLoop Pointer Scope Bug**: Fixed SIGSEGV/freeze in `gst_pipeline.c` where the `GMainLoop *` was allocated on the stack of a short-lived function scope, causing the pipeline bus thread to dereference a dangling pointer after the outer function returned. Moved to heap allocation (`g_main_loop_new`) with matching `g_main_loop_unref` in the cleanup path. (`e149490` — local only, not yet pushed)
+- **StatsChannel `push/3` in `join/3` Crash**: Phoenix 1.7+ forbids calling `push/3` directly inside `join/3` — doing so raises a `RuntimeError` that crashes the WebSocket transport, killing all preview and stats channels simultaneously. Fixed by deferring the initial stats push via `send(self(), :after_join)` and handling it in `handle_info/2`. (manual patch on remote — not yet committed to git)
+
+### Changed
+- **SDI Audio Sink Sync Policy**: `decklinkaudiosink` set to `sync=TRUE` to enable GStreamer master clock slaving and prevent audio drift/stuttering. `decklinkvideosink` remains `sync=FALSE`, with video timing paced by an upstream `identity sync=TRUE`. (`4702799`)
 
 ---
 
