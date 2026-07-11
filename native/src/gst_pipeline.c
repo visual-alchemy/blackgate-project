@@ -1406,6 +1406,35 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
 
     GstStructure *str = gst_caps_get_structure(caps, 0);
     const gchar *name = gst_structure_get_name(str);
+
+    if (g_str_has_prefix(name, "video/")) {
+        gint width = 0, height = 0;
+        gint fps_num = 0, fps_den = 1;
+        gst_structure_get_int(str, "width", &width);
+        gst_structure_get_int(str, "height", &height);
+        gst_structure_get_fraction(str, "framerate", &fps_num, &fps_den);
+
+        const gchar *interlace_mode_str = gst_structure_get_string(str, "interlace-mode");
+        gboolean interlaced = FALSE;
+        if (interlace_mode_str && g_strcmp0(interlace_mode_str, "interleaved") == 0) {
+            interlaced = TRUE;
+        }
+
+        pthread_mutex_lock(&video_info.mutex);
+        if (width > 0 && height > 0) {
+            video_info.width = width;
+            video_info.height = height;
+        }
+        if (fps_num > 0 && fps_den > 0) {
+            video_info.fps_num = fps_num;
+            video_info.fps_den = fps_den;
+            video_info.fps_inferred = FALSE; // We have decoded/negotiated caps!
+        }
+        video_info.interlaced = interlaced;
+        video_info.info_valid = TRUE;
+        pthread_mutex_unlock(&video_info.mutex);
+    }
+
     gst_caps_unref(caps);
 
     if (!g_str_has_prefix(name, "video/")) return; // Skip audio pads
@@ -1419,7 +1448,7 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
             g_printerr("Thumbnail: Failed to link video pad: %d\n", ret);
         }
     }
-    gst_object_unref(sink_pad);
+    if (sink_pad) gst_object_unref(sink_pad);
 }
 
 static void *thumbnail_worker(void *arg)
