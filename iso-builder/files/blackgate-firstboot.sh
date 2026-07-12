@@ -26,6 +26,14 @@ chown -R blackgate:blackgate /opt/blackgate
 mkdir -p /var/lib/blackgate/khepri
 chown -R blackgate:blackgate /var/lib/blackgate
 
+# ─── Configure kernel socket buffers for high-bitrate SRT ───────────────
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Configuring sysctl socket buffers..."
+cat <<EOF > /etc/sysctl.d/90-blackgate.conf
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+EOF
+sysctl --system
+
 # ─── Enable and start Blackgate service ────────────────────────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Blackgate service..."
 systemctl daemon-reload
