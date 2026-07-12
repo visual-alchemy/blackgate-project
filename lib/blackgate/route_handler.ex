@@ -113,7 +113,7 @@ defmodule Blackgate.RouteHandler do
     new_data =
       String.split(info, "\n")
       |> Enum.reduce(data, fn line, acc ->
-        Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
+        Logger.warning("RouteHandler: pipeline: #{line}")
 
         # Detect SDI graceful failure from C pipeline output
         if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
