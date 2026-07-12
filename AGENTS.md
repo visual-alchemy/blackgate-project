@@ -96,6 +96,14 @@ Runs the compiled release daemon:
 make start
 ```
 
+
+## 🛑 Remote Gateway Operation Constraint
+
+- **ReadOnly Diagnostics:** Diagnose only on the remote gateway machine.
+- **No Remote Code Edits:** Never modify the codebase or run build/restart commands on the remote machine.
+- **Mac Code Edits Only:** Apply all necessary code modifications only on the local machine (the Mac). 
+- **User Pulls Manually:** The user will manually pull, build, and restart the gateway software on the remote device.
+
 ---
 
 ## 🧠 Memory & Context Logs
