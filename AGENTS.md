@@ -106,6 +106,18 @@ make start
 
 ---
 
+## 🛜 OS UDP Socket Buffers (SRT Loss Prevention)
+
+To prevent SRT packet drops at high bitrates (9-50 Mbps), the operating system's maximum UDP receive and send buffer sizes must be configured to at least 16 MB:
+```bash
+# Temporarily set:
+sudo sysctl -w net.core.rmem_max=16777216
+sudo sysctl -w net.core.wmem_max=16777216
+```
+These are pre-configured persistently in the Debian appliance installer (`iso-builder/files/blackgate-firstboot.sh`), but must be manually configured on any new gateway deployments.
+
+---
+
 ## 🧠 Memory & Context Logs
 
 - **Memory Folder:** [docs/memory/](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/docs/memory/)
