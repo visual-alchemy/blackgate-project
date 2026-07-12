@@ -87,6 +87,9 @@ defmodule Blackgate.UnixSockHandler do
     # Process source stats
     if source_json do
       case Jason.decode(source_json) do
+        {:ok, %{"type" => "warning"} = warning} ->
+          RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
+
         {:ok, stats} ->
           RouteStatsRegistry.put_stats(data.route_id, stats)
           try do
@@ -120,7 +123,11 @@ defmodule Blackgate.UnixSockHandler do
     # Store source stats
     if source_json do
       case Jason.decode(source_json) do
-        {:ok, stats} -> RouteStatsRegistry.put_stats(route_id, stats)
+        {:ok, %{"type" => "warning"} = warning} ->
+          RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
+
+        {:ok, stats} ->
+          RouteStatsRegistry.put_stats(route_id, stats)
         _ -> :ok
       end
     end

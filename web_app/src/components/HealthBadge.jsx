@@ -32,6 +32,24 @@ const HEALTH_CONFIG = {
     label: 'No Signal',
     tooltip: 'Route is running but no active stream data is being received.',
   },
+  source_corrupted: {
+    color: 'warning',
+    icon: <WarningOutlined />,
+    label: 'Source Corrupted',
+    tooltip: 'Video decoder is reporting H.264 slice corruption, but loopback packet loss is 0%. Upstream source is likely corrupted.',
+  },
+  blackgate_config_issue: {
+    color: 'error',
+    icon: <CloseCircleOutlined />,
+    label: 'Appliance Issue',
+    tooltip: 'Video decoder is reporting H.264 slice corruption and local loopback packet loss is high. Blackgate configuration (e.g. latency/socket buffer) or CPU scheduling bottleneck detected.',
+  },
+  network_loss_egress: {
+    color: 'warning',
+    icon: <WarningOutlined />,
+    label: 'Egress Loss',
+    tooltip: 'Video stream is healthy inside Blackgate, but output SRT client transmission is experiencing packet loss.',
+  },
 };
 
 /**

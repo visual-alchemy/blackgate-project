@@ -37,6 +37,15 @@ const RouteNameCell = ({ record }) => {
     } else if (health === 'warning') {
       dotStatus = 'warning';
       statusText = 'Warning';
+    } else if (health === 'source_corrupted') {
+      dotStatus = 'warning';
+      statusText = 'Source Corrupt';
+    } else if (health === 'blackgate_config_issue') {
+      dotStatus = 'error';
+      statusText = 'Appliance Issue';
+    } else if (health === 'network_loss_egress') {
+      dotStatus = 'warning';
+      statusText = 'Egress Loss';
     } else if (health === 'healthy') {
       dotStatus = 'success';
       statusText = 'Healthy';

@@ -39,6 +39,9 @@ static GstElement *sdi_vrate_elements[8] = {NULL};
 // SDI Auto-Detect: detected mode string per device (populated by auto-detect callback)
 static const char *sdi_detected_mode[8] = {NULL};
 
+// Global active route ID
+static char global_route_id[128] = {0};
+
 // =============================================================================
 // DeckLink Mode Lookup Table
 // Maps detected {width, height, fps_num, fps_den, interlaced} → DeckLink mode
@@ -821,6 +824,37 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
     GstElement *pipeline = GST_ELEMENT(data);
 
     switch (GST_MESSAGE_TYPE(msg)) {
+        case GST_MESSAGE_WARNING: {
+            GError *err;
+            gchar *debug;
+            gst_message_parse_warning(msg, &err, &debug);
+            g_print("Pipeline Warning from %s: %s\n", GST_OBJECT_NAME(msg->src), err->message);
+
+            // Send warning stats via Unix socket if from decoder/demuxer
+            const gchar *src_name = GST_OBJECT_NAME(msg->src);
+            if (src_name && (g_str_has_prefix(src_name, "avdec") ||
+                             g_str_has_prefix(src_name, "va") ||
+                             g_str_has_prefix(src_name, "decodebin") ||
+                             g_str_has_prefix(src_name, "tsdemux"))) {
+                cJSON *root = cJSON_CreateObject();
+                cJSON_AddStringToObject(root, "type", "warning");
+                cJSON_AddStringToObject(root, "route_id", global_route_id);
+                cJSON_AddStringToObject(root, "element", src_name);
+                cJSON_AddStringToObject(root, "message", err->message);
+
+                char *json_str = cJSON_PrintUnformatted(root);
+                if (json_str) {
+                    send_message_to_unix_socket(json_str);
+                    send_message_to_unix_socket("\n");
+                    free(json_str);
+                }
+                cJSON_Delete(root);
+            }
+
+            g_error_free(err);
+            g_free(debug);
+            break;
+        }
         case GST_MESSAGE_ERROR: {
             GError *err;
             gchar *debug;
@@ -1588,6 +1622,13 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 GstElement *create_pipeline(cJSON *json, const char *route_id)
 {
     GstElement *pipeline, *source, *tee;
+
+    if (route_id) {
+        strncpy(global_route_id, route_id, sizeof(global_route_id) - 1);
+        global_route_id[sizeof(global_route_id) - 1] = '\0';
+    } else {
+        global_route_id[0] = '\0';
+    }
 
     cJSON *source_obj = cJSON_GetObjectItem(json, "source");
     cJSON *sinks_array = cJSON_GetObjectItem(json, "sinks");

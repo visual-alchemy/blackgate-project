@@ -45,10 +45,47 @@ defmodule Blackgate.RouteHealth do
         (item["drops_per_sec"] || 0.0) >= 2.0
       end)
 
+      # Extract pipeline warnings and egress loss
+      warning_count = stats["warning_count"] || 0
+      sink_stats = stats["sink_stats"] || []
+
+      has_egress_loss? = Enum.any?(sink_stats, fn %{stats: s_stats} ->
+        sent = s_stats["packets-sent"] || 0
+        lost = s_stats["packets-sent-lost"] || 0
+
+        callers_list = s_stats["callers"] || []
+        caller_loss? = Enum.any?(callers_list, fn c ->
+          c_sent = c["packets-sent"] || 0
+          c_lost = c["packets-sent-lost"] || 0
+          c_sent + c_lost > 0 and (c_lost / (c_sent + c_lost) * 100.0) >= 2.0
+        end)
+
+        (sent + lost > 0 and (lost / (sent + lost) * 100.0) >= 2.0) or caller_loss?
+      end)
+
       cond do
-        loss >= @loss_critical or rtt >= @rtt_critical -> "critical"
-        loss >= @loss_warning or rtt >= @rtt_warning or high_drops? -> "warning"
-        true                                           -> "healthy"
+        # 1. Pipeline warning present
+        warning_count > 0 ->
+          if loss >= 0.5 do
+            "blackgate_config_issue"
+          else
+            "source_corrupted"
+          end
+
+        # 2. Critical network issues
+        loss >= @loss_critical or rtt >= @rtt_critical ->
+          "critical"
+
+        # 3. Egress packet loss to client players
+        has_egress_loss? ->
+          "network_loss_egress"
+
+        # 4. Warnings / SDI frame drops
+        loss >= @loss_warning or rtt >= @rtt_warning or high_drops? ->
+          "warning"
+
+        true ->
+          "healthy"
       end
     end
   end

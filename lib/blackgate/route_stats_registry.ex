@@ -26,7 +26,7 @@ defmodule Blackgate.RouteStatsRegistry do
   def put_stats(route_id, stats) when is_binary(route_id) and is_map(stats) do
     updated_at = System.system_time(:millisecond)
 
-    stats =
+    {stats, warning_count} =
       case :ets.lookup(@table_name, route_id) do
         [{^route_id, prev_stats, prev_updated_at}] ->
           prev_sdi_stats = prev_stats["sdi_video_stats"] || []
@@ -59,7 +59,18 @@ defmodule Blackgate.RouteStatsRegistry do
               end
             end)
 
-          Map.put(stats, "sdi_video_stats", updated_sdi_stats)
+          warning_count = prev_stats["warning_count"] || 0
+
+          stats =
+            stats
+            |> Map.put("sdi_video_stats", updated_sdi_stats)
+            |> Map.put("warning_count", 0) # Reset to 0 for next window
+            |> Map.put("last_warning_element", prev_stats["last_warning_element"])
+            |> Map.put("last_warning_message", prev_stats["last_warning_message"])
+            |> Map.put("last_warning_time", prev_stats["last_warning_time"])
+            |> Map.put("last_warning_log_time", prev_stats["last_warning_log_time"])
+
+          {stats, warning_count}
 
         _ ->
           curr_sdi_stats = stats["sdi_video_stats"] || []
@@ -71,16 +82,90 @@ defmodule Blackgate.RouteStatsRegistry do
               |> Map.put("duplicates_per_sec", 0.0)
             end)
 
-          Map.put(stats, "sdi_video_stats", updated_sdi_stats)
+          stats =
+            stats
+            |> Map.put("sdi_video_stats", updated_sdi_stats)
+            |> Map.put("warning_count", 0)
+
+          {stats, 0}
       end
 
     :ets.insert(@table_name, {route_id, stats, updated_at})
-    health = Blackgate.RouteHealth.evaluate(stats)
+
+    sink_stats = get_all_sink_stats(route_id)
+    eval_stats =
+      stats
+      |> Map.put("warning_count", warning_count)
+      |> Map.put("sink_stats", sink_stats)
+
+    health = Blackgate.RouteHealth.evaluate(eval_stats)
+
     Phoenix.PubSub.broadcast(
       Blackgate.PubSub,
       "route:stats:#{route_id}",
-      {:stats_update, %{stats: stats, health: health, updated_at: updated_at}}
+      {:stats_update, %{stats: eval_stats, health: health, updated_at: updated_at}}
     )
+    :ok
+  end
+
+  @doc """
+  Store pipeline warning telemetry event.
+  """
+  def put_warning(route_id, element, message) when is_binary(route_id) do
+    now = System.system_time(:millisecond)
+
+    case :ets.lookup(@table_name, route_id) do
+      [{^route_id, stats, updated_at}] ->
+        curr_warnings = stats["warning_count"] || 0
+        last_log_time = stats["last_warning_log_time"] || 0
+
+        # Rate limit logging to EventLog to once per 10 seconds
+        should_log = (now - last_log_time) > 10_000
+
+        if should_log do
+          Blackgate.EventLog.log(
+            :warning,
+            "source_video_corrupted",
+            "Video corruption detected: #{message} (element: #{element})",
+            %{route_id: route_id}
+          )
+        end
+
+        updated_stats =
+          stats
+          |> Map.put("warning_count", curr_warnings + 1)
+          |> Map.put("last_warning_element", element)
+          |> Map.put("last_warning_message", message)
+          |> Map.put("last_warning_time", now)
+          |> Map.put("last_warning_log_time", if(should_log, do: now, else: last_log_time))
+
+        :ets.insert(@table_name, {route_id, updated_stats, updated_at})
+
+        # Broadcast the warning update immediately
+        health = Blackgate.RouteHealth.evaluate(updated_stats)
+        Phoenix.PubSub.broadcast(
+          Blackgate.PubSub,
+          "route:stats:#{route_id}",
+          {:stats_update, %{stats: updated_stats, health: health, updated_at: updated_at}}
+        )
+
+      _ ->
+        stats = %{
+          "warning_count" => 1,
+          "last_warning_element" => element,
+          "last_warning_message" => message,
+          "last_warning_time" => now,
+          "last_warning_log_time" => now
+        }
+        :ets.insert(@table_name, {route_id, stats, now})
+
+        Blackgate.EventLog.log(
+          :warning,
+          "source_video_corrupted",
+          "Video corruption detected: #{message} (element: #{element})",
+          %{route_id: route_id}
+        )
+    end
     :ok
   end
 

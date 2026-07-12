@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Statistic, Row, Col, Table, Typography, Tag, Spin, Empty } from 'antd';
+import { Card, Statistic, Row, Col, Table, Typography, Tag, Spin, Empty, Alert } from 'antd';
 import {
     ArrowUpOutlined,
     ArrowDownOutlined,
@@ -10,6 +10,7 @@ import {
     FieldTimeOutlined
 } from '@ant-design/icons'
 import { useRouteStats } from '../hooks/useRouteStats';
+import HealthBadge from './HealthBadge';
 
 const { Text } = Typography;
 
@@ -75,7 +76,7 @@ const formatScanType = (interlaceMode) => {
 
 const RouteStats = ({ routeId, isRunning }) => {
     // Live stats via WebSocket — no polling needed
-    const { stats } = useRouteStats(routeId, isRunning);
+    const { stats, health } = useRouteStats(routeId, isRunning);
     const [lastUpdated] = useState(null); // kept for layout compat; WS updates are immediate
 
     if (!isRunning) {
@@ -205,10 +206,13 @@ const RouteStats = ({ routeId, isRunning }) => {
     return (
         <Card
             title={
-                <span>
-                    Source Statistics
-                    {!stats && <SyncOutlined spin style={{ marginLeft: 8 }} />}
-                </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>
+                        Source Statistics
+                        {!stats && <SyncOutlined spin style={{ marginLeft: 8 }} />}
+                    </span>
+                    {health && <HealthBadge health={health} />}
+                </div>
             }
             style={{ marginBottom: 24 }}
         >
@@ -216,6 +220,36 @@ const RouteStats = ({ routeId, isRunning }) => {
                 <Empty description="No statistics available. Start streaming to see stats." />
             ) : (
                 <>
+                    {health === 'source_corrupted' && (
+                        <Alert
+                            message="Source Stream Corrupted"
+                            description={`The video decoder is reporting H.264 slice decoding warnings (${stats?.last_warning_message || 'corrupt slices'}). The network loopback has 0% packet loss, indicating the upstream source/camera is sending corrupted video.`}
+                            type="warning"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                        />
+                    )}
+
+                    {health === 'blackgate_config_issue' && (
+                        <Alert
+                            message="Appliance Configuration Issue"
+                            description={`The video decoder is reporting H.264 slice decoding warnings (${stats?.last_warning_message || 'corrupt slices'}) and local loopback packet loss is active (${packetLoss}%). This indicates a Blackgate configuration mismatch (e.g. latency/socket buffer limits) or CPU scheduling bottleneck.`}
+                            type="error"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                        />
+                    )}
+
+                    {health === 'network_loss_egress' && (
+                        <Alert
+                            message="Egress Transmission Packet Loss"
+                            description="The video stream is decoded cleanly inside the gateway, but transmission to the output SRT client/player is experiencing packet loss. Verify client network bandwidth and buffer configurations."
+                            type="warning"
+                            showIcon
+                            style={{ marginBottom: 16 }}
+                        />
+                    )}
+
                     {/* Summary Statistics */}
                     <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                         <Col xs={12} sm={8} md={6} lg={4}>

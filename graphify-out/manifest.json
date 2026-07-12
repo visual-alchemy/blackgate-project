@@ -1,0 +1,1087 @@
+{
+  ".formatter.exs": {
+    "mtime": 1766054939.2994363,
+    "ast_hash": "d54bf1e69e97868bb41f0d5d2ae1b015",
+    "semantic_hash": ""
+  },
+  ".obsidian/app.json": {
+    "mtime": 1781385462.0196338,
+    "ast_hash": "f373ec8aa03898e2bfcbb6ec14d7055c",
+    "semantic_hash": ""
+  },
+  ".obsidian/appearance.json": {
+    "mtime": 1781385462.0480368,
+    "ast_hash": "99914b932bd37a50b983c5e7c90ae93b",
+    "semantic_hash": ""
+  },
+  ".obsidian/core-plugins.json": {
+    "mtime": 1781385461.548212,
+    "ast_hash": "7c877bea49eaeabb100563bd157b9051",
+    "semantic_hash": ""
+  },
+  ".obsidian/graph.json": {
+    "mtime": 1781789775.2928126,
+    "ast_hash": "bde99f6b5304de86690178daa4fb0f37",
+    "semantic_hash": ""
+  },
+  ".obsidian/workspace.json": {
+    "mtime": 1781385462.6183805,
+    "ast_hash": "74c8be4ec752e5131bc692f2aecc7e7e",
+    "semantic_hash": ""
+  },
+  "config/config.exs": {
+    "mtime": 1766054939.0781007,
+    "ast_hash": "d7b3555e7599caf571a3cf351b119030",
+    "semantic_hash": ""
+  },
+  "config/dev.exs": {
+    "mtime": 1766062809.166076,
+    "ast_hash": "fdce52d69a3fad4029b82a453e902ae5",
+    "semantic_hash": ""
+  },
+  "config/prod.exs": {
+    "mtime": 1766054939.0817878,
+    "ast_hash": "537a8ee8244b16a71f3f415f5c844166",
+    "semantic_hash": ""
+  },
+  "config/runtime.exs": {
+    "mtime": 1777530357.1166506,
+    "ast_hash": "2292fcc8127cbe07e44c17b469978795",
+    "semantic_hash": ""
+  },
+  "config/test.exs": {
+    "mtime": 1766054939.0856755,
+    "ast_hash": "31bb9cb1890943ee536a3323bd731f72",
+    "semantic_hash": ""
+  },
+  "iso-builder/build.sh": {
+    "mtime": 1777530357.1237295,
+    "ast_hash": "fcbf32d9c366b932a302fb65e9561ff5",
+    "semantic_hash": ""
+  },
+  "iso-builder/files/99-blackgate-motd.sh": {
+    "mtime": 1777530357.1247334,
+    "ast_hash": "a0087c3ef2073d2423f9c1e86858db3d",
+    "semantic_hash": ""
+  },
+  "iso-builder/files/blackgate-firstboot.sh": {
+    "mtime": 1777530357.1257892,
+    "ast_hash": "b84be040dbf20174c3d50e5a5f6e03e3",
+    "semantic_hash": ""
+  },
+  "lib/blackgate.ex": {
+    "mtime": 1780577748.851124,
+    "ast_hash": "4a22891371728fb97f72ad301e607ddf",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/api.ex": {
+    "mtime": 1766054939.1804943,
+    "ast_hash": "4fa5fb976b442776e6ffe96908b19467",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/api/destination.ex": {
+    "mtime": 1766054939.1771026,
+    "ast_hash": "3abbc6f5f9c53debcf4993eacce87a29",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/api/route.ex": {
+    "mtime": 1766054939.1720934,
+    "ast_hash": "816f1e837def0d27bc732aa088655285",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/application.ex": {
+    "mtime": 1782133460.1004994,
+    "ast_hash": "0f9c3bbfc35035a19fdced65ae2794f8",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/db.ex": {
+    "mtime": 1777442584.756176,
+    "ast_hash": "7dae41af96c17d7bddc45094ab6835b2",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/erl_sys_mon.ex": {
+    "mtime": 1766054939.1557531,
+    "ast_hash": "c00d82e0526cfb2263be1beb78265157",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/event_log.ex": {
+    "mtime": 1778555577.965874,
+    "ast_hash": "ef6b6c2c14c10a127861e9aaa0d4d632",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/helpers.ex": {
+    "mtime": 1766054939.163421,
+    "ast_hash": "3cc234d9bd881c08795e00d349263a4d",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/license.ex": {
+    "mtime": 1780577748.85615,
+    "ast_hash": "717591366b29e0377664312dd8baf844",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/machine_id.ex": {
+    "mtime": 1777530357.1278775,
+    "ast_hash": "6678495448e64c2718dbba567de10b16",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/metrics.ex": {
+    "mtime": 1781058484.4750223,
+    "ast_hash": "d9e77fd1825d49aa6dad59054f6992ca",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/metrics/connection.ex": {
+    "mtime": 1766054939.1320786,
+    "ast_hash": "f118fedac89101d9159f6ef997a8634e",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/monitoring/os_mon.ex": {
+    "mtime": 1766054939.1907463,
+    "ast_hash": "f30b979194a1e764d821cff770785fc9",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/process_monitor.ex": {
+    "mtime": 1778564669.7727354,
+    "ast_hash": "fad109fe238861f0a897bfbcb3514da5",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/release.ex": {
+    "mtime": 1766054939.151521,
+    "ast_hash": "7bbe0a122c2bc90dc706980e08735ba9",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/repo.ex": {
+    "mtime": 1766054939.194302,
+    "ast_hash": "47e09344a9a25da530906faceeebc2ba",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/route_handler.ex": {
+    "mtime": 1782133460.1013489,
+    "ast_hash": "b5e8a1381c9072da74ea496c79facfca",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/route_health.ex": {
+    "mtime": 1780577748.859146,
+    "ast_hash": "8070ae19ee558714a2ab10cc1e6e7d23",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/route_stats_registry.ex": {
+    "mtime": 1780577748.8608418,
+    "ast_hash": "ae49955e2bc4365c7881fcf5e487a798",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/routes_supervisor.ex": {
+    "mtime": 1766054939.139649,
+    "ast_hash": "1a904082b70bace33c6b8f6509dd21ff",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/signal_handler.ex": {
+    "mtime": 1766054939.1836197,
+    "ast_hash": "2deb4cc5d6febdc54a1597394f689425",
+    "semantic_hash": ""
+  },
+  "lib/blackgate/unix_sock_handler.ex": {
+    "mtime": 1777442584.7586157,
+    "ast_hash": "11021add1370c144c01b1719d9a51925",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web.ex": {
+    "mtime": 1766145499.305569,
+    "ast_hash": "45b7a6959420bf02d875a8803a615835",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/channels/stats_channel.ex": {
+    "mtime": 1781384767.5820813,
+    "ast_hash": "e0717a4460ca2f44dcc6e97fe168581b",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/auth_controller.ex": {
+    "mtime": 1777530357.1304252,
+    "ast_hash": "31d9e282e0bff251bc8d2a7b8122fb7e",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/backup_controller.ex": {
+    "mtime": 1766260567.0139263,
+    "ast_hash": "7312b9c7d014002bd57651d3fd20a786",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/changeset_json.ex": {
+    "mtime": 1766054939.2080514,
+    "ast_hash": "ec33c3713ae3f74db28ebc3500a0602f",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/destination_controller.ex": {
+    "mtime": 1777530357.1308136,
+    "ast_hash": "2509189225df216e8d6042aaf4bcd97b",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/destination_json.ex": {
+    "mtime": 1766054939.2485576,
+    "ast_hash": "13baf3273ec8c70d5e672d7b788e41c4",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/error_json.ex": {
+    "mtime": 1766054939.211532,
+    "ast_hash": "7574eba076ffe549b45fe9360d717b87",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/event_controller.ex": {
+    "mtime": 1778555626.5965652,
+    "ast_hash": "f512a3670cda9b4b58f8053e96979043",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/fallback_controller.ex": {
+    "mtime": 1766054939.2280009,
+    "ast_hash": "eb287496e1aea90438e26e572f02c082",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/health_controller.ex": {
+    "mtime": 1766054939.2528372,
+    "ast_hash": "bb4fb4e5856b352e350ea384540a8e1b",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/license_controller.ex": {
+    "mtime": 1777530357.1312537,
+    "ast_hash": "d8db7e8399d02d5e661c660dfd6e15fa",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/network_controller.ex": {
+    "mtime": 1769134244.1092572,
+    "ast_hash": "b9cf01b782b808865cc39f745ad4d03c",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/node_controller.ex": {
+    "mtime": 1766054939.2402596,
+    "ast_hash": "0a7a3ff899a75485a5447a828ac5660b",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/page_controller.ex": {
+    "mtime": 1766054939.255812,
+    "ast_hash": "326cbbd5c7f96c802cc888aad3fd7b59",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/route_controller.ex": {
+    "mtime": 1778672251.9719164,
+    "ast_hash": "9f06aa4de36169b3649c1755ada09827",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/route_json.ex": {
+    "mtime": 1766054939.2343447,
+    "ast_hash": "9b3018cddc5129154c5fff85c2d0a8c8",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/controllers/system_controller.ex": {
+    "mtime": 1766054939.214577,
+    "ast_hash": "6d6a2093207033b79388f48d0124b260",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/endpoint.ex": {
+    "mtime": 1777530357.1322136,
+    "ast_hash": "b34accd26c87fcc185ca166a73cf8e17",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/router.ex": {
+    "mtime": 1778555651.2834358,
+    "ast_hash": "7b8e29c4d4de72961d3c1170599c5070",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/telemetry.ex": {
+    "mtime": 1766054939.1977847,
+    "ast_hash": "4a5c0f0fb3cf7e45e730e55827d31561",
+    "semantic_hash": ""
+  },
+  "lib/blackgate_web/user_socket.ex": {
+    "mtime": 1781384767.5826154,
+    "ast_hash": "e5a0e7e2b3b1ac5cfd75d68511308712",
+    "semantic_hash": ""
+  },
+  "lib/mix/tasks/compile_c_app.ex": {
+    "mtime": 1766054939.1287196,
+    "ast_hash": "166efe7763479ee247af7838a9c7bf88",
+    "semantic_hash": ""
+  },
+  "mix.exs": {
+    "mtime": 1782133460.1027465,
+    "ast_hash": "cc23dfb6c0ea42dbaf48fa0cb123a4da",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI.h": {
+    "mtime": 1778490481.0917106,
+    "ast_hash": "e7c8294649bbc0e1ed890a14ad79ce85",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration.h": {
+    "mtime": 1778490481.0924878,
+    "ast_hash": "4f53201df397079026e5b307ab56875c",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration_v10_11.h": {
+    "mtime": 1778490481.093077,
+    "ast_hash": "57cffb41ff83e7dc95b22a13c6a6adde",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration_v10_2.h": {
+    "mtime": 1778490481.0935633,
+    "ast_hash": "38542db7410cb2b537f6f51086d6624a",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration_v10_4.h": {
+    "mtime": 1778490481.0939677,
+    "ast_hash": "6520f685ba88571458dc6cb89bbad9d1",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration_v10_5.h": {
+    "mtime": 1778490481.094376,
+    "ast_hash": "da2240790919c497d2bb4595f92e4676",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration_v10_9.h": {
+    "mtime": 1778490481.0947669,
+    "ast_hash": "79d7d4025533083ecfb37d42448226eb",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIConfiguration_v15_3_1.h": {
+    "mtime": 1778490481.0954049,
+    "ast_hash": "f516e0b98eafe194cb4610805b768049",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDeckControl.h": {
+    "mtime": 1778490481.0959682,
+    "ast_hash": "40616408e888f2ff4b8812573242d8b9",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDiscovery.h": {
+    "mtime": 1778490481.0963717,
+    "ast_hash": "342cf1542a1ea1212f98544c4d41809b",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDispatch.cpp": {
+    "mtime": 1778490481.0968158,
+    "ast_hash": "b80239a063863316847bd9986b0c24e0",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDispatch_v10_11.cpp": {
+    "mtime": 1778490481.0973313,
+    "ast_hash": "8abbe3c5c21039409a7c2b348f0f96c1",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDispatch_v10_8.cpp": {
+    "mtime": 1778490481.0978684,
+    "ast_hash": "abbc91f14207a1f74194051a163cc69d",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDispatch_v14_2_1.cpp": {
+    "mtime": 1778490481.0984683,
+    "ast_hash": "eaee24a5bd25a6f5bffa7d9c37103338",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDispatch_v15_2.cpp": {
+    "mtime": 1778490481.0988557,
+    "ast_hash": "0c28103b9349648e914fb42f049473b6",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIDispatch_v15_3_1.cpp": {
+    "mtime": 1778490481.0993898,
+    "ast_hash": "5733d5193cc33c905209acc32700e49a",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIGLScreenPreview_v14_2_1.h": {
+    "mtime": 1778490481.0997894,
+    "ast_hash": "1319c056e94f9cd357ed49399531e8cf",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIMemoryAllocator_v14_2_1.h": {
+    "mtime": 1778490481.100191,
+    "ast_hash": "b895f1a13bb1b658774eb32c13719f6a",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIMetalScreenPreview_v14_2_1.h": {
+    "mtime": 1778490481.1005945,
+    "ast_hash": "9f5d8a6cdc9fb40d8a51e261e59bdd7a",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIModes.h": {
+    "mtime": 1778490481.1010406,
+    "ast_hash": "6036897b52599379fc1efe852155e6ab",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIScreenPreviewCallback_v14_2_1.h": {
+    "mtime": 1778490481.1014564,
+    "ast_hash": "ad1644f4b227bedf4f2e67b49575066c",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPITypes.h": {
+    "mtime": 1778490481.1019657,
+    "ast_hash": "e73bef4773110cdf8ba09d6c6b1f3e0c",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVersion.h": {
+    "mtime": 1778490481.1023653,
+    "ast_hash": "47070107b298b9c6a32c7d949b8d1a83",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoConversion_v14_2_1.h": {
+    "mtime": 1778490481.1027412,
+    "ast_hash": "8f056aadfe01b87b87d0832d740bbbf0",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoEncoderInput_v10_11.h": {
+    "mtime": 1778490481.1032107,
+    "ast_hash": "ebfcd36d32a302079c1980e6fd34803b",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoFrame3DExtensions_v14_2_1.h": {
+    "mtime": 1778490481.1036217,
+    "ast_hash": "b2c050e808b9cc5b20f19514c42edfbf",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoFrame_v14_2_1.h": {
+    "mtime": 1778490481.1040328,
+    "ast_hash": "4440e83c79c3b7dd6f22a3ef35337b68",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoInput_v10_11.h": {
+    "mtime": 1778490481.1044059,
+    "ast_hash": "a74e447eea8e36cf14fbe7525b143143",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoInput_v11_4.h": {
+    "mtime": 1778490481.104864,
+    "ast_hash": "83e0a6c923ef0f93ecec107f7a9955d0",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoInput_v11_5_1.h": {
+    "mtime": 1778490481.1052575,
+    "ast_hash": "8b42f427bd8824d3db6b3392777879b6",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoInput_v14_2_1.h": {
+    "mtime": 1778490481.1056373,
+    "ast_hash": "df4df6c3c724b17a55add5dadbd788f8",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoInput_v15_3_1.h": {
+    "mtime": 1778490481.1060233,
+    "ast_hash": "31b0762e803a6c6bc1f7f9ba945efa78",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoOutput_v10_11.h": {
+    "mtime": 1778490481.1064138,
+    "ast_hash": "bddc9ea53f52cd0a68a05a3e01067274",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoOutput_v11_4.h": {
+    "mtime": 1778490481.1068046,
+    "ast_hash": "c4ec2ea5a3691b0be96059cbf9defc77",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoOutput_v14_2_1.h": {
+    "mtime": 1778490481.1074507,
+    "ast_hash": "1b614476e2ef65a831d91b8fff4e943c",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPIVideoOutput_v15_3_1.h": {
+    "mtime": 1778490481.1078477,
+    "ast_hash": "6e82f729f1681b0d33af0eb7e5ce5708",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v10_11.h": {
+    "mtime": 1778490481.1082265,
+    "ast_hash": "e4f318ca7de20eb59c0b92db831e593c",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v10_2.h": {
+    "mtime": 1778490481.108588,
+    "ast_hash": "24ea09e6e0e7ba254fda16d7476c55d5",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v10_4.h": {
+    "mtime": 1778490481.1089816,
+    "ast_hash": "a4cb3a513f29a342e13bab60092a4b58",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v10_5.h": {
+    "mtime": 1778490481.1095123,
+    "ast_hash": "bd509b377f97a72afecb7ef07a897235",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v10_6.h": {
+    "mtime": 1778490481.109873,
+    "ast_hash": "7f73ff92aeab618a5b33a9dcb867ee97",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v10_9.h": {
+    "mtime": 1778490481.110234,
+    "ast_hash": "e4c2ef803dc3132bc385cc6e699395e8",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v11_5.h": {
+    "mtime": 1778490481.1108992,
+    "ast_hash": "63b8014a7802a17552ca2b4547fae9c4",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v11_5_1.h": {
+    "mtime": 1778490481.1113694,
+    "ast_hash": "6007c14905eecbe36601ca82918fe67f",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v14_2_1.h": {
+    "mtime": 1778490481.111826,
+    "ast_hash": "e68d0b606dd9cbae1978ba57b1d724c2",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v15_2.h": {
+    "mtime": 1778490481.112198,
+    "ast_hash": "166776decf7360988cd1d6b9d36564c7",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/DeckLinkAPI_v15_3_1.h": {
+    "mtime": 1778490481.1128297,
+    "ast_hash": "23affc4a75be279b360b558d44eab068",
+    "semantic_hash": ""
+  },
+  "native/decklink-sdk/LinuxCOM.h": {
+    "mtime": 1778490481.113212,
+    "ast_hash": "c8b028a319be67ba58fa987c16607caf",
+    "semantic_hash": ""
+  },
+  "native/include/gst_pipeline.h": {
+    "mtime": 1781384767.583998,
+    "ast_hash": "adb369318f96a84cb18ff987402a46f4",
+    "semantic_hash": ""
+  },
+  "native/include/unix_socket.h": {
+    "mtime": 1767166426.1793077,
+    "ast_hash": "ae8f2c212a29e0e9267dd2818e048d37",
+    "semantic_hash": ""
+  },
+  "native/src/gst_pipeline.c": {
+    "mtime": 1781384767.5845435,
+    "ast_hash": "2eb7ce3d33bfccd180e08b0dbfe3af10",
+    "semantic_hash": ""
+  },
+  "native/src/main.c": {
+    "mtime": 1781384767.5851524,
+    "ast_hash": "45c2fe122970e7ba269c5cbee6f3fb4f",
+    "semantic_hash": ""
+  },
+  "native/src/unix_socket.c": {
+    "mtime": 1767166426.1808896,
+    "ast_hash": "23b1879b27db87600bb8a1c82bf86f9a",
+    "semantic_hash": ""
+  },
+  "native/tests/test_gst_pipeline.c": {
+    "mtime": 1780577748.8647244,
+    "ast_hash": "5c6a076da9ba4dbf685833c219dbfbac",
+    "semantic_hash": ""
+  },
+  "native/tests/test_unix_socket.c": {
+    "mtime": 1780577748.8650813,
+    "ast_hash": "df4e40fe35c8047c9e1f3f40694245cb",
+    "semantic_hash": ""
+  },
+  "priv/repo/migrations/.formatter.exs": {
+    "mtime": 1766054939.0976522,
+    "ast_hash": "aab3a8a44d65bd3a4a667dad021208b8",
+    "semantic_hash": ""
+  },
+  "priv/repo/migrations/20250219145148_create_routes.exs": {
+    "mtime": 1766054939.0946841,
+    "ast_hash": "771b976d3422481e745f0c1d1f9e4b81",
+    "semantic_hash": ""
+  },
+  "priv/repo/migrations/20250220162451_create_destinations.exs": {
+    "mtime": 1766054939.0911417,
+    "ast_hash": "e038c117b3e59f2d66ffbd4e83c90061",
+    "semantic_hash": ""
+  },
+  "priv/repo/seeds.exs": {
+    "mtime": 1766054939.1007667,
+    "ast_hash": "0bd3f69c239f77d0aab6f688489543dc",
+    "semantic_hash": ""
+  },
+  "rel/overlays/bin/migrate": {
+    "mtime": 1766054951.4724822,
+    "ast_hash": "efd298e0b0db68dbad6e75815b63201d",
+    "semantic_hash": ""
+  },
+  "rel/overlays/bin/server": {
+    "mtime": 1766054951.473156,
+    "ast_hash": "5b3584c4ae15af9e30bc45fbe4fede2c",
+    "semantic_hash": ""
+  },
+  "run.sh": {
+    "mtime": 1764865571.6564784,
+    "ast_hash": "cb0486ac216cddc0390932947be41899",
+    "semantic_hash": ""
+  },
+  "test/blackgate/api_test.exs": {
+    "mtime": 1766054939.0370696,
+    "ast_hash": "bcc9d2c3adfa01fdcccc967f4fd0df43",
+    "semantic_hash": ""
+  },
+  "test/blackgate/monitoring_test.exs": {
+    "mtime": 1766054939.0427663,
+    "ast_hash": "72adcc4c00ff548f3a9b6bc5e468a52f",
+    "semantic_hash": ""
+  },
+  "test/blackgate/route_handler_test.exs": {
+    "mtime": 1781790049.1752493,
+    "ast_hash": "ef682eb95235e831e72333d824ccc9ba",
+    "semantic_hash": ""
+  },
+  "test/blackgate/unix_sock_handler_test.exs": {
+    "mtime": 1766054939.030436,
+    "ast_hash": "e6393e1fb7d3791ae9bf0458a5238e98",
+    "semantic_hash": ""
+  },
+  "test/blackgate_web/controllers/destination_controller_test.exs": {
+    "mtime": 1766054939.0591526,
+    "ast_hash": "44818490d3cc375d6c9240b3371028f3",
+    "semantic_hash": ""
+  },
+  "test/blackgate_web/controllers/error_json_test.exs": {
+    "mtime": 1766054939.065511,
+    "ast_hash": "318dbd8d577b3a854913f3fc72797d84",
+    "semantic_hash": ""
+  },
+  "test/blackgate_web/controllers/route_controller_test.exs": {
+    "mtime": 1766054939.0623627,
+    "ast_hash": "0f54e96103a897d92c18f8fbdaa8a6ed",
+    "semantic_hash": ""
+  },
+  "test/support/conn_case.ex": {
+    "mtime": 1766054939.0461867,
+    "ast_hash": "b5da370146f509394ea21a9ae311d6be",
+    "semantic_hash": ""
+  },
+  "test/support/data_case.ex": {
+    "mtime": 1766054939.0527108,
+    "ast_hash": "0ca9b11e10e483b6ea8ab5fa0fb497e6",
+    "semantic_hash": ""
+  },
+  "test/support/fixtures/api_fixtures.ex": {
+    "mtime": 1766054939.0494876,
+    "ast_hash": "6e7a6fb4098e593a9f40195d2fbcefb0",
+    "semantic_hash": ""
+  },
+  "test/test_helper.exs": {
+    "mtime": 1780734207.3504274,
+    "ast_hash": "7566dc08e72e565faebc0970e685df87",
+    "semantic_hash": ""
+  },
+  "web_app/eslint.config.js": {
+    "mtime": 1764865571.658819,
+    "ast_hash": "bfe13b9e25d0af7959d0396aa103d88c",
+    "semantic_hash": ""
+  },
+  "web_app/package.json": {
+    "mtime": 1781379900.5279157,
+    "ast_hash": "ad84a7bfbe0c0cc85f1cc3739703295e",
+    "semantic_hash": ""
+  },
+  "web_app/src/App.jsx": {
+    "mtime": 1764865571.66112,
+    "ast_hash": "2d5665788fcc1edf8537ff5d521f719f",
+    "semantic_hash": ""
+  },
+  "web_app/src/components/DestinationStats.jsx": {
+    "mtime": 1773375324.5670285,
+    "ast_hash": "f0f58d98c10c5c06ef4c04ad217e908f",
+    "semantic_hash": ""
+  },
+  "web_app/src/components/HealthBadge.jsx": {
+    "mtime": 1777530357.1446798,
+    "ast_hash": "14f028c75fa6b3f3e9f0fc9a60676b8d",
+    "semantic_hash": ""
+  },
+  "web_app/src/components/MainLayout.jsx": {
+    "mtime": 1778556026.2098327,
+    "ast_hash": "5647842c5abf65aa4a1fd96ced8b9600",
+    "semantic_hash": ""
+  },
+  "web_app/src/components/RouteStats.jsx": {
+    "mtime": 1780582143.9519303,
+    "ast_hash": "f2e9b5178fa5f9c75a3fef782bc2d655",
+    "semantic_hash": ""
+  },
+  "web_app/src/hooks/useRouteStats.js": {
+    "mtime": 1777530357.1466193,
+    "ast_hash": "52054fa749b25cc112eb9070216d75fe",
+    "semantic_hash": ""
+  },
+  "web_app/src/main.jsx": {
+    "mtime": 1778556007.5072682,
+    "ast_hash": "e4b23c5349b3720e9b41fd086e4f5c11",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/Dashboard.jsx": {
+    "mtime": 1781384767.5857012,
+    "ast_hash": "507a5af33246023c026837bd1d6eb79b",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/License.jsx": {
+    "mtime": 1777530357.1482577,
+    "ast_hash": "9307dcc47d13ef8e8f432d559e74ff86",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/Login.jsx": {
+    "mtime": 1777530357.1486578,
+    "ast_hash": "1e8ef1ea8454b3ef9752b79d7c3ec7f4",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/Settings.jsx": {
+    "mtime": 1777530357.1494124,
+    "ast_hash": "2515fed23d7d09b824b247e62ab6c360",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/events/Events.jsx": {
+    "mtime": 1778555965.8518739,
+    "ast_hash": "e8a1844b595baff3c2571d49e0cfda4f",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/routes/OutputPopover.jsx": {
+    "mtime": 1780578778.0139704,
+    "ast_hash": "f565ee5237de73fb36c6a31082bca13e",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/routes/RouteDestEdit.jsx": {
+    "mtime": 1782133460.1049254,
+    "ast_hash": "4c616058997dca95d22f0f5ea0ef66a0",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/routes/RouteItem.jsx": {
+    "mtime": 1780578789.057242,
+    "ast_hash": "e6b9f72099fcdaad9e10d7fb4f6342d1",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/routes/RouteSourceEdit.jsx": {
+    "mtime": 1782133935.3912015,
+    "ast_hash": "caacc1bbe4b0b4db43c944c5b951ea25",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/routes/Routes.jsx": {
+    "mtime": 1782133945.1358256,
+    "ast_hash": "a42ef9ffa06dc2abfd99f7477a2cc629",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/system/SystemNodes.jsx": {
+    "mtime": 1764865571.6640885,
+    "ast_hash": "849b5753bfb3e8198b351ec29b38d3e8",
+    "semantic_hash": ""
+  },
+  "web_app/src/pages/system/SystemPipelines.jsx": {
+    "mtime": 1778564704.4263275,
+    "ast_hash": "a84e20a985bcad9d706b105e3a7f56a9",
+    "semantic_hash": ""
+  },
+  "web_app/src/utils/api.js": {
+    "mtime": 1778555943.3671122,
+    "ast_hash": "4119e794a41a40987d728b1bfd96f05b",
+    "semantic_hash": ""
+  },
+  "web_app/src/utils/auth.js": {
+    "mtime": 1764865571.664692,
+    "ast_hash": "3428d706326c1ae5abfa2bca4dd6e3f1",
+    "semantic_hash": ""
+  },
+  "web_app/src/utils/constants.js": {
+    "mtime": 1778555906.3306804,
+    "ast_hash": "d7db4687702c5f52399b4857d922991b",
+    "semantic_hash": ""
+  },
+  "web_app/src/utils/socket.js": {
+    "mtime": 1781384767.586203,
+    "ast_hash": "e6e561aafa2c522f1d1e62183f1ae566",
+    "semantic_hash": ""
+  },
+  "web_app/vite.config.js": {
+    "mtime": 1766062811.2367444,
+    "ast_hash": "21e2512196799a2d075d761e179ef777",
+    "semantic_hash": ""
+  },
+  ".agents/rules/graphify.md": {
+    "mtime": 1781355092.112423,
+    "ast_hash": "f1e53ecc9194573d3c28fc116c743a2e",
+    "semantic_hash": ""
+  },
+  ".agents/workflows/graphify.md": {
+    "mtime": 1781355092.1125958,
+    "ast_hash": "0bc020d491fca99550c1ea3de0a5f862",
+    "semantic_hash": ""
+  },
+  ".github/workflows/build-iso.yml": {
+    "mtime": 1777530357.107822,
+    "ast_hash": "254528620a6d4b3820522176f9bbb17a",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1781384767.580788,
+    "ast_hash": "71281e7d2ec73583da56297f849788bf",
+    "semantic_hash": ""
+  },
+  "CHANGELOG.md": {
+    "mtime": 1781789775.2931726,
+    "ast_hash": "eb033a979688675c9133232f08379ec1",
+    "semantic_hash": ""
+  },
+  "PRODUCT_KNOWLEDGE.md": {
+    "mtime": 1780577748.8213851,
+    "ast_hash": "ff50cd0a9bf714abc700216147dc1c16",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1780577748.8229632,
+    "ast_hash": "40f0412e1945603d8abcb71efbef0015",
+    "semantic_hash": ""
+  },
+  "ROADMAP.md": {
+    "mtime": 1780996986.3670635,
+    "ast_hash": "81e9db5933ea9d9a52e83e929425fa74",
+    "semantic_hash": ""
+  },
+  "SDI_FIXES.md": {
+    "mtime": 1780583673.3368866,
+    "ast_hash": "b860992a9e188b8e4da950c635db3494",
+    "semantic_hash": ""
+  },
+  "docker-compose-metrics.yml": {
+    "mtime": 1764865571.6463115,
+    "ast_hash": "23a3f3c845673e2a102a5d5e86fe80eb",
+    "semantic_hash": ""
+  },
+  "docker-compose.yml": {
+    "mtime": 1778548855.8902578,
+    "ast_hash": "51a3490fd9109cb323908b68faa5600d",
+    "semantic_hash": ""
+  },
+  "docs/BLACKGATE_TECHNICAL_ANALYSIS.md": {
+    "mtime": 1780577748.8328652,
+    "ast_hash": "bd21cf2c8e07293f3a55e062cd2bc8d7",
+    "semantic_hash": ""
+  },
+  "docs/TROUBLESHOOTING.md": {
+    "mtime": 1777530357.119293,
+    "ast_hash": "8ea4eb005c18a22b4ab9093317403695",
+    "semantic_hash": ""
+  },
+  "docs/USER_GUIDE.md": {
+    "mtime": 1767817508.5605366,
+    "ast_hash": "04e2b33f413522bcf37dda53814781ef",
+    "semantic_hash": ""
+  },
+  "docs/backup-download.md": {
+    "mtime": 1777530357.119827,
+    "ast_hash": "7986f48bb22f4065ef5e839d8b55cc4c",
+    "semantic_hash": ""
+  },
+  "docs/backup-restore.md": {
+    "mtime": 1777530357.1203945,
+    "ast_hash": "5381222a22ae2a59c47b16ae0adb9aed",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-05-26-session-1.md": {
+    "mtime": 1780577748.8361244,
+    "ast_hash": "4ad7c480fd7f8d5d7c3a2e0f51d80d02",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-05-29-session-1.md": {
+    "mtime": 1780577748.8383844,
+    "ast_hash": "2e3d8eba53b801f9b3edc042ffab9461",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-05-30-session-1.md": {
+    "mtime": 1780577748.840009,
+    "ast_hash": "54181cb0c0b8457cecb1275a89c523e2",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-05-30-session-2.md": {
+    "mtime": 1780577748.8415835,
+    "ast_hash": "fb529ef157c77373045feacc29e5f670",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-05-30-session-3.md": {
+    "mtime": 1780577748.8431737,
+    "ast_hash": "7c4ef772a1dd33c25b98b83c864f841a",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-03-session-1.md": {
+    "mtime": 1780577748.844753,
+    "ast_hash": "27ee9bcc55579956af2e16b9fdc4d6f4",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-04-session-1.md": {
+    "mtime": 1780568720.4819324,
+    "ast_hash": "836d32a42708f40cf277d666ecdc80e9",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-04-session-2.md": {
+    "mtime": 1780584483.600696,
+    "ast_hash": "352ecb0d0176ac897e73cf0e5fc02f2a",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-06-session-1.md": {
+    "mtime": 1780734263.1553702,
+    "ast_hash": "df7994016fd3b3cb926c111e63ad5de0",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-09-session-1.md": {
+    "mtime": 1781020339.1774776,
+    "ast_hash": "4b0a71b162997de30d2c64782fab2fc3",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-10-session-1.md": {
+    "mtime": 1781068430.0410182,
+    "ast_hash": "f283ab02102665dee6fdbb849e49f9b3",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-10-session-4.md": {
+    "mtime": 1781072010.3349898,
+    "ast_hash": "95f96065dac5e690f9ce79a56ba0b8e5",
+    "semantic_hash": ""
+  },
+  "docs/memory/02-DESIGNS/sdi-audio-channel-selection.md": {
+    "mtime": 1781021896.1697257,
+    "ast_hash": "f8fdd96315f5d5f8b48419fcf4d2b2e8",
+    "semantic_hash": ""
+  },
+  "docs/skills/project-memory/SKILL.md": {
+    "mtime": 1780577748.8465426,
+    "ast_hash": "e682784a190e7f1e49526127b84e5f62",
+    "semantic_hash": ""
+  },
+  "grafana/provisioning/datasources/victoriametrics.yml": {
+    "mtime": 1764865571.6473892,
+    "ast_hash": "fc1e55575dd8d1e200ed4d0b3f0f05e3",
+    "semantic_hash": ""
+  },
+  "iso-builder/README.md": {
+    "mtime": 1777530357.1220155,
+    "ast_hash": "ae3c545f0bccd86a6b8a5b3283bbde91",
+    "semantic_hash": ""
+  },
+  "native/README.md": {
+    "mtime": 1777530357.1383357,
+    "ast_hash": "fbdf6f51cd7a6a098c0e2ff2e5cada0a",
+    "semantic_hash": ""
+  },
+  "web_app/README.md": {
+    "mtime": 1777530357.1425505,
+    "ast_hash": "884cff33efae6eca6c78d82839610e86",
+    "semantic_hash": ""
+  },
+  "web_app/index.html": {
+    "mtime": 1766235056.5422335,
+    "ast_hash": "570eb7b817aaaebf84105e0852107805",
+    "semantic_hash": ""
+  },
+  "blackgate-logo.png": {
+    "mtime": 1766239289.391097,
+    "ast_hash": "99ce2aa6dc19b8aeda989c35b6782d96",
+    "semantic_hash": ""
+  },
+  "docs/images/add-route.png": {
+    "mtime": 1767817469.9013317,
+    "ast_hash": "2718236b1f1b7d32e9e04f71aaca5c88",
+    "semantic_hash": ""
+  },
+  "docs/images/dashboard.png": {
+    "mtime": 1767817469.894722,
+    "ast_hash": "74f82291493b192a3f1571747ff26762",
+    "semantic_hash": ""
+  },
+  "docs/images/login.png": {
+    "mtime": 1767817469.891344,
+    "ast_hash": "185c5006c04f5656ee3ce215bc7eb86c",
+    "semantic_hash": ""
+  },
+  "docs/images/route-details.png": {
+    "mtime": 1767817469.904754,
+    "ast_hash": "219a749febeda67a238b4360f754fe08",
+    "semantic_hash": ""
+  },
+  "docs/images/routes.png": {
+    "mtime": 1767817469.898198,
+    "ast_hash": "c8478123e52b4aff5e42a3cb83ea8e37",
+    "semantic_hash": ""
+  },
+  "docs/images/settings-network.png": {
+    "mtime": 1769134244.1089222,
+    "ast_hash": "05d307d937bd337e8af6c0d1c5e1b719",
+    "semantic_hash": ""
+  },
+  "web_app/public/blackgate-logo-white.png": {
+    "mtime": 1766140938.8562763,
+    "ast_hash": "9fd6eaf40783e498076d3b59b726039b",
+    "semantic_hash": ""
+  },
+  "web_app/public/blackgate-logo.png": {
+    "mtime": 1766052673.2436483,
+    "ast_hash": "61865d60d65071058fd2d30f6271e391",
+    "semantic_hash": ""
+  },
+  "web_app/public/favicon.png": {
+    "mtime": 1766234942.125104,
+    "ast_hash": "0efa86a859a5f7db7a681c174ab74e6c",
+    "semantic_hash": ""
+  },
+  "web_app/public/logo.png": {
+    "mtime": 1766039219.870962,
+    "ast_hash": "8a72ce94ffa17770467eabc31e0a0ee2",
+    "semantic_hash": ""
+  },
+  "web_app/public/logo.webp": {
+    "mtime": 1764865571.6602452,
+    "ast_hash": "5789a704d57f32c0b733ef99081c51f5",
+    "semantic_hash": ""
+  },
+  "web_app/public/logo2.webp": {
+    "mtime": 1764865571.660725,
+    "ast_hash": "dcf8f16fb45a431e2c67adc448928c01",
+    "semantic_hash": ""
+  },
+  "web_app/public/vite.svg": {
+    "mtime": 1764865571.6608546,
+    "ast_hash": "8e3a10e157f75ada21ab742c022d5430",
+    "semantic_hash": ""
+  },
+  "web_app/src/assets/react.svg": {
+    "mtime": 1764865571.6613889,
+    "ast_hash": "f0402b67b6ce880f65666bb49e841696",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-14-session-1.md": {
+    "mtime": 1781380225.8037229,
+    "ast_hash": "6f94e4852a80f22dee708b311b924ffb",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-14-session-2.md": {
+    "mtime": 1781381242.8969924,
+    "ast_hash": "09963202c711a1dd692475489bde147c",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-14-session-3.md": {
+    "mtime": 1781383708.6056354,
+    "ast_hash": "dbf289f1d0e2d7a74313caf2156b6e05",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-14-session-4.md": {
+    "mtime": 1781384451.4976718,
+    "ast_hash": "fe4dde3694ae7c23e6201a1026e5232b",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-14-session-5.md": {
+    "mtime": 1781384856.5229897,
+    "ast_hash": "4e76dd3da90ddf06a63fbb34c4f2879a",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-18-session-1.md": {
+    "mtime": 1781781452.8644917,
+    "ast_hash": "2b91654486dd8fbfb285c66d0488c3de",
+    "semantic_hash": ""
+  },
+  "docs/memory/01-LOGS/2026-06-18-session-2.md": {
+    "mtime": 1781790082.7354078,
+    "ast_hash": "c31140fd1868c09a87c654ffd9749573",
+    "semantic_hash": ""
+  }
+}
