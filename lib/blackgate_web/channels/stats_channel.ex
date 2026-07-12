@@ -8,8 +8,13 @@ defmodule BlackgateWeb.StatsChannel do
     # Subscribe to PubSub topic for this route
     Phoenix.PubSub.subscribe(Blackgate.PubSub, "route:stats:#{route_id}")
 
-    # Push the last known stats immediately on join so the client
-    # doesn't have to wait for the next broadcast interval
+    send(self(), :after_join)
+    {:ok, assign(socket, :route_id, route_id)}
+  end
+
+  @impl true
+  def handle_info(:after_join, socket) do
+    route_id = socket.assigns.route_id
     case Blackgate.RouteStatsRegistry.get_stats(route_id) do
       %{stats: stats, updated_at: updated_at} ->
         health = Blackgate.RouteHealth.evaluate(stats)
@@ -18,8 +23,7 @@ defmodule BlackgateWeb.StatsChannel do
       nil ->
         :ok
     end
-
-    {:ok, assign(socket, :route_id, route_id)}
+    {:noreply, socket}
   end
 
   def join(_topic, _params, _socket), do: {:error, %{reason: "unknown topic"}}
