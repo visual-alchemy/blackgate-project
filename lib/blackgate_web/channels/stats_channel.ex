@@ -13,6 +13,9 @@ defmodule BlackgateWeb.StatsChannel do
   end
 
   @impl true
+  def join(_topic, _params, _socket), do: {:error, %{reason: "unknown topic"}}
+
+  @impl true
   def handle_info(:after_join, socket) do
     route_id = socket.assigns.route_id
     case Blackgate.RouteStatsRegistry.get_stats(route_id) do
@@ -26,14 +29,13 @@ defmodule BlackgateWeb.StatsChannel do
     {:noreply, socket}
   end
 
-  def join(_topic, _params, _socket), do: {:error, %{reason: "unknown topic"}}
-
   @impl true
   def handle_info({:stats_update, payload}, socket) do
     push(socket, "stats_update", payload)
     {:noreply, socket}
   end
 
+  @impl true
   def handle_info(msg, socket) do
     Logger.debug("StatsChannel unhandled info: #{inspect(msg)}")
     {:noreply, socket}
