@@ -65,8 +65,8 @@
 - [x] Filter by severity (info/warning/critical), route_id, event type
 - [x] New "Events" page in sidebar with severity badges and auto-refresh
 - [ ] PubSub broadcast for real-time event push to frontend (WebSocket)
-- [ ] Connection lost/established events from stats monitoring
-- [ ] Health threshold events (high packet loss, high RTT)
+- [x] Connection lost/established events from stats monitoring
+- [x] Health threshold events (high packet loss, high RTT, stream corruption)
 
 ### 10. SDI Audio Channel Selection
 - [ ] Allow selecting which audio channels to output on SDI (e.g., Ch 1+2, Ch 3+4, Ch 5+6, or custom pairs)
@@ -109,14 +109,14 @@
 - [ ] Document all endpoints with request/response schemas
 - [ ] Enable third-party integrations
 
-### 16. RTMP Protocol Support (In Progress 🔨)
+### 16. ~~RTMP Protocol Support~~ ✅
 - [x] RTMP/HTTP-FLV/HLS source via ffmpeg sidecar (normalizes to SRT MPEG-TS loopback)
 - [x] Auto-reconnect for ffmpeg sidecar on source disconnect (10s retry, 3min timeout)
 - [x] Cross-protocol routing: RTMP/HLS/FLV → SRT/UDP/SDI
-- [x] `-mpegts_copyts 1 -pcr_period 40` for clean timestamp handling
+- [x] `-mpegts_copyts 0 -pcr_period 40` for clean timestamp regeneration (fixes hardware decoder macroblocks)
 - [ ] HLS preview player in dashboard for RTMP source routes (hls.js)
 - [ ] Stream key regeneration UI
-- [ ] RTMP source health monitoring (MediaMTX API integration)
+- [x] RTMP source health monitoring (GStreamer bus warnings intercept & state metrics)
 
 ### 17. ~~SDI Output via Blackmagic DeckLink~~ ✅
 > **Hardware:** DeckLink Quad 2 (8x SDI output, PCIe) — requires decode step (not passthrough)

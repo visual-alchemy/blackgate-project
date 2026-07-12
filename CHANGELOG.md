@@ -10,6 +10,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.1] - 2026-07-12
+
+### Added
+- **GStreamer C Engine Bus Warnings Intercept**: Added warnings interception in `bus_callback` inside `gst_pipeline.c`. Decoder and demuxer warnings (H.264 slice corruption, parser errors) are now captured, JSON-serialized, and sent via UNIX socket `/tmp/hydra_unix_sock`.
+- **Erlang/Elixir Health Telemetry Pipeline**: Piped GStreamer JSON warnings through `UnixSockHandler`, aggregated count in `RouteStatsRegistry`, and updated `RouteHealth` to evaluate stream state:
+  - `source_corrupted`: Upstream video warnings present, but 0% loopback packet loss.
+  - `blackgate_config_issue`: Warnings present + loopback packet loss (indicating socket buffer overflow or CPU bottleneck).
+  - `network_loss_egress`: Healthy input feed, but packet loss detected on output SRT clients.
+- **Route Health UI Banners**: Added colored dot indicators in routes list, `HealthBadge` in `RouteStats`, and diagnostic `<Alert>` banners explaining exactly what issue is occurring and how to fix it.
+- **Health State Transition Event Log**: Added state transition tracking in `RouteStatsRegistry`. When route health transitions (e.g. from healthy to egress loss), it writes a permanent log entry to `EventLog` database.
+- **tsparse GStreamer Integration**: Added `tsparse` (MPEG transport stream parser) to `add_sink_to_pipeline` in `gst_pipeline.c` before the `srtsink`. Configured `alignment=7` to force MTU-sized (1316 bytes) UDP packet blocks, reducing packet rate overhead by 80%. Configured `set-timestamps=TRUE` to smooth out PCR clock jitter.
+
+### Fixed
+- **Phoenix Channel Join push Crash**: Cleanly resolved Phoenix 1.7 WebSocket join/push crash by deferring initial stats push via `:after_join`.
+- **Non-Monotonic Timestamps / Decoder Sync Failure**: Changed `-mpegts_copyts` from `1` to `0` in FFmpeg sidecar command inside `route_handler.ex`. This forces FFmpeg's `mpegts` muxer to ignore broken/duplicate timestamps from the RTMP source and regenerate a clean, monotonic DTS/PTS timeline, preventing green macroblocking on hardware decoders (MediaKind RX1).
+- **GStreamer SRT Outbound Jitter**: Changed `sync` from `FALSE` to `TRUE` on GStreamer `srtsink` in `gst_pipeline.c`. Paces packet output based on GStreamer's master clock to prevent micro-bursting and dropped frames.
+- **Elixir Pipeline Raw Line Logging**: Changed `inspect(line)` to raw line logging in `RouteHandler` to prevent truncation of warning logs from the C binary.
+
+---
+
 ## [1.0.0] - 2026-07-07
 
 ### Added

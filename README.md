@@ -4,7 +4,7 @@
 
 **High-performance video routing with secure, reliable transport**
 
-> **v0.3.0**: SDI output, RTMP/ffmpeg sidecar, event log, watchdog, auto-reconnect. Actively improving based on real-world usage.
+> **v1.0.1**: Real-time health diagnostics, timestamp correction, clock-pacing, tsparse packet alignment, SDI output, RTMP/ffmpeg sidecar. Actively improving based on real-world usage.
 
 ---
 
