@@ -680,6 +680,11 @@ defmodule Blackgate.RouteHandler do
       |> maybe_add_param(opts, "pbkeylen")
       |> maybe_add_param(opts, "poll-timeout")
       |> maybe_add_param(opts, "streamid")
+      |> maybe_add_param(opts, "latency")
+      |> maybe_add_param(opts, "sndbuf")
+      |> maybe_add_param(opts, "rcvbuf")
+      |> maybe_add_param(opts, "oheadbw")
+      |> maybe_add_param(opts, "maxbw")
 
     URI.to_string(%URI{
       scheme: "srt",
