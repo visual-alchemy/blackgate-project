@@ -852,7 +852,7 @@ defmodule Blackgate.RouteHandler do
     "ffmpeg -hide_banner -loglevel warning " <>
       "#{reconnect_flags} " <>
       "-i \"#{url}\" " <>
-      "-c copy -mpegts_copyts 1 -pcr_period 40 -f mpegts " <>
+      "-c copy -mpegts_copyts 0 -pcr_period 40 -f mpegts " <>
       "\"srt://127.0.0.1:#{internal_port}?mode=listener&latency=500000\""
   end
 

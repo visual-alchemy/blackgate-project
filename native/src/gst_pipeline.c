@@ -2150,6 +2150,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
     // =========================================================================
 
     GstElement *queue = gst_element_factory_make("queue2", NULL);
+    GstElement *tsparse = NULL;
     GstElement *sink_element = gst_element_factory_make(sink_type->valuestring, NULL);
 
     if (!queue || !sink_element) {
@@ -2181,12 +2182,29 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             sink_count++;
             g_print("Stored SRT sink element at index %d for stats collection\n", sink_index);
         }
+
+        // Create tsparse for packet alignment (1316 bytes MTU) and PCR timing smoothing
+        tsparse = gst_element_factory_make("tsparse", NULL);
+        if (tsparse) {
+            g_object_set(tsparse, "alignment", 7, "set-timestamps", TRUE, NULL);
+            g_print("Configured tsparse before SRT sink for packet alignment and PCR smoothing\n");
+        } else {
+            g_printerr("Warning: tsparse plugin not found. Pacing and alignment disabled.\n");
+        }
     }
 
-    gst_bin_add_many(GST_BIN(pipeline), queue, sink_element, NULL);
-    if (!gst_element_link_many(tee, queue, sink_element, NULL)) {
-        g_printerr("Could not link sink elements.\n");
-        return FALSE;
+    if (tsparse) {
+        gst_bin_add_many(GST_BIN(pipeline), queue, tsparse, sink_element, NULL);
+        if (!gst_element_link_many(tee, queue, tsparse, sink_element, NULL)) {
+            g_printerr("Could not link sink elements with tsparse.\n");
+            return FALSE;
+        }
+    } else {
+        gst_bin_add_many(GST_BIN(pipeline), queue, sink_element, NULL);
+        if (!gst_element_link_many(tee, queue, sink_element, NULL)) {
+            g_printerr("Could not link sink elements.\n");
+            return FALSE;
+        }
     }
 
     return TRUE;
