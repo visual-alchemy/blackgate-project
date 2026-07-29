@@ -14,7 +14,7 @@ defmodule Blackgate.RouteHealth do
   @loss_critical 10.0
 
   # RTT thresholds (milliseconds)
-  @rtt_warning 150.0
+  @rtt_warning 300.0
   @rtt_critical 500.0
 
   @doc """
