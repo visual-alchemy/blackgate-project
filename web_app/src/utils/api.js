@@ -171,6 +171,15 @@ export const routesApi = {
     return response.json();
   },
 
+  // Switch failover source (primary ↔ secondary)
+  switchSource: async (id, target) => {
+    const response = await authFetch(`/api/routes/${id}/switch-source`, {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    });
+    return response.json();
+  },
+
   // Fetch live thumbnail as a Blob (returns null if not yet available)
   previewBlob: async (id) => {
     const response = await authFetch(`/api/routes/${id}/preview`);

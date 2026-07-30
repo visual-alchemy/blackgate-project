@@ -301,6 +301,26 @@ const RouteItem = () => {
   // Helper function to check if route is started
   const isRouteStarted = routeData && routeData.status && routeData.status.toLowerCase() === 'started';
 
+  // Failover mode human-readable labels
+  const failoverModeLabels = {
+    'maintain-primary': 'Maintain Primary',
+    'maintain-stability': 'Maintain Stability',
+    'manual-switchback': 'Manual Switchback',
+    'manual': 'Manual',
+  };
+
+  // Switch failover source handler
+  const handleSwitchSource = async () => {
+    const target = routeData.active_source === 'primary' ? 'secondary' : 'primary';
+    try {
+      await routesApi.switchSource(id, target);
+      messageApi.success(`Switched source to ${target}`);
+      fetchRouteData();
+    } catch (error) {
+      messageApi.error(`Failed to switch source: ${error.message}`);
+    }
+  };
+
   // Route status toggle handler
   const handleRouteStatusToggle = async () => {
     try {
@@ -571,7 +591,28 @@ const RouteItem = () => {
               <Descriptions.Item label="MTU">{routeData.schema_options?.mtu || '1492 (Default)'}</Descriptions.Item>
             </>
           ) : null}
+
+          {routeData.failover_enabled && (
+            <>
+              <Descriptions.Item label="Failover Mode">
+                {failoverModeLabels[routeData.failover_mode] || routeData.failover_mode}
+              </Descriptions.Item>
+              <Descriptions.Item label="Active Source">
+                <Tag color={routeData.active_source === 'primary' ? 'blue' : 'orange'}>
+                  {routeData.active_source}
+                </Tag>
+              </Descriptions.Item>
+            </>
+          )}
         </Descriptions>
+
+        {isRouteStarted && routeData.failover_enabled && (
+          <Space style={{ marginTop: 16 }}>
+            <Button onClick={handleSwitchSource}>
+              Switch to {routeData.active_source === 'primary' ? 'Secondary' : 'Primary'}
+            </Button>
+          </Space>
+        )}
       </Card>
 
       {/* Source Statistics - Show when route is running */}
