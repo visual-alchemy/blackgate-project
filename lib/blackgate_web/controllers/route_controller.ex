@@ -7,10 +7,12 @@ defmodule BlackgateWeb.RouteController do
 
   def index(conn, _params) do
     with {:ok, routes} <- Db.get_all_routes(true) do
-      enriched_routes = Enum.map(routes, fn route ->
-        is_connected = route_connected?(route["id"])
-        Map.put(route, "connected", is_connected)
-      end)
+      enriched_routes =
+        Enum.map(routes, fn route ->
+          is_connected = route_connected?(route["id"])
+          Map.put(route, "connected", is_connected)
+        end)
+
       data(conn, enriched_routes)
     else
       error ->
@@ -28,17 +30,20 @@ defmodule BlackgateWeb.RouteController do
         receive_mbps = Map.get(stats, "receive-rate-mbps", 0)
         bytes_received = Map.get(stats, "bytes-received", 0)
         total_bytes_received = Map.get(stats, "total-bytes-received", 0)
-        caller_mbps = case callers do
-          [first_caller | _] -> Map.get(first_caller, "receive-rate-mbps", 0)
-          _ -> 0
-        end
+
+        caller_mbps =
+          case callers do
+            [first_caller | _] -> Map.get(first_caller, "receive-rate-mbps", 0)
+            _ -> 0
+          end
 
         # In caller mode, connected-callers is 0 and receive-rate-mbps may report 0
         # even when data is flowing. Check bytes-received as a reliable fallback.
         connected_callers > 0 or receive_mbps > 0 or caller_mbps > 0 or
           bytes_received > 0 or total_bytes_received > 0
 
-      nil -> false
+      nil ->
+        false
     end
   end
 
@@ -122,6 +127,40 @@ defmodule BlackgateWeb.RouteController do
         |> put_status(:unprocessable_entity)
         |> json(%{error: inspect(reason)})
     end
+  end
+
+  def switch_source(conn, %{"route_id" => route_id, "target" => target}) do
+    cond do
+      target not in ["primary", "secondary"] ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "Invalid target. Must be 'primary' or 'secondary'."})
+
+      true ->
+        {:ok, route} = Db.get_route(route_id, true)
+
+        if failover_enabled?(route) do
+          case Blackgate.switch_route_source(route_id, target) do
+            :ok ->
+              conn
+              |> put_status(:ok)
+              |> data(%{status: "switched", active_source: target})
+
+            {:error, reason} ->
+              conn
+              |> put_status(:unprocessable_entity)
+              |> json(%{error: inspect(reason)})
+          end
+        else
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "Failover is not enabled for this route"})
+        end
+    end
+  end
+
+  defp failover_enabled?(route) do
+    Map.get(route, "failover_enabled") == true
   end
 
   def stats(conn, %{"route_id" => route_id}) do

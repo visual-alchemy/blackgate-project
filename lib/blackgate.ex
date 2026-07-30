@@ -46,6 +46,24 @@ defmodule Blackgate do
     end
   end
 
+  @doc """
+  Manually switches a running route's active SRT source to `target`.
+
+  The route's `RouteHandler` gen_statem receives a `{:switch_source, target}` cast,
+  persists the new `active_source`, and restarts the pipeline against the chosen
+  source. Returns `:ok` as soon as the cast is dispatched.
+  """
+  @spec switch_route_source(String.t(), String.t()) :: :ok | {:error, term()}
+  def switch_route_source(id, target) do
+    case get_route(id) do
+      {:ok, pid} ->
+        :gen_statem.cast(pid, {:switch_source, target})
+
+      other ->
+        other
+    end
+  end
+
   @spec set_route_status(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_route_status(id, status) do
     with {:ok, route} <- Db.update_route(id, %{"status" => status}) do

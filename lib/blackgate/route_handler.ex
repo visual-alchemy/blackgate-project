@@ -569,6 +569,45 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # Manual source switch requested by the operator via the REST API
+  # (POST /api/routes/:route_id/switch-source).
+  #
+  # The operator's explicit choice must win, so this path bypasses
+  # trigger_restart/1's failure-driven chooser (choose_next_source), which would
+  # otherwise toggle or override the requested source based on failover_mode.
+  # Instead we close the live ports, persist the new active_source, and re-enter
+  # the reconnect loop; the reconnect retry starts the pipeline against the
+  # chosen source via active_route_for_pipeline/1.
+  def handle_event(:cast, {:switch_source, target}, _state, data)
+      when target in ["primary", "secondary"] do
+    Logger.info("RouteHandler: manual source switch -> #{target} for route #{data.id}")
+
+    _ = Db.update_route(data.id, %{"active_source" => target})
+
+    Blackgate.EventLog.log(
+      :info,
+      "failover_manual_switch",
+      "Operator switched active source to #{target}",
+      %{
+        route_id: data.id,
+        route_name: get_in(data, [:route, "name"]) || data.id
+      }
+    )
+
+    if data.port && is_port(data.port), do: close_port(data.port)
+
+    if data.ffmpeg_port && is_port(data.ffmpeg_port),
+      do: close_port(data.ffmpeg_port)
+
+    enter_reconnecting(%{data | active_source: target, port: nil, ffmpeg_port: nil})
+  end
+
+  # Invalid switch target — log and ignore.
+  def handle_event(:cast, {:switch_source, target}, _state, _data) do
+    Logger.warning("RouteHandler: ignoring invalid switch_source target #{inspect(target)}")
+    :keep_state_and_data
+  end
+
   def handle_event(type, content, state, data) do
     Logger.error(
       "RouteHandler: Undefined msg: #{inspect([{"type", type}, {"content", content}, {"state", state}, {"data", data}],

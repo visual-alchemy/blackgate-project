@@ -31,11 +31,12 @@ defmodule BlackgateWeb.Router do
 
   scope "/api", BlackgateWeb do
     pipe_through [:api, :auth]
-    
+
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/:route_id/start", RouteController, :start
     get "/routes/:route_id/stop", RouteController, :stop
     get "/routes/:route_id/restart", RouteController, :restart
+    post "/routes/:route_id/switch-source", RouteController, :switch_source
     get "/routes/:route_id/stats", RouteController, :stats
     get "/routes/:route_id/destination-stats", RouteController, :destination_stats
     get "/routes/:route_id/preview", RouteController, :preview
