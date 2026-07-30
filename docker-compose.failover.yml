@@ -1,0 +1,110 @@
+# =============================================================================
+# docker-compose.failover.yml — SRT Failover Integration Test Harness
+# =============================================================================
+# Override file for testing primary/secondary SRT failover.
+#
+# Brings up two ffmpeg SRT emitters (emitter-a / emitter-b) that push MPEG-TS
+# test patterns into Blackgate's primary (12100) and secondary (12101) SRT
+# listeners, so the failover state machine can be exercised end-to-end.
+#
+# Usage (merge with the base file):
+#   docker compose -f docker-compose.yml -f docker-compose.failover.yml up -d
+#
+# IMPORTANT — deviations from the base docker-compose.yml required for testing:
+#   1. `network_mode: host` is RESET. Host networking would let the emitters
+#      talk to Blackgate over localhost, but it also bypasses Docker DNS — the
+#      emitters could not resolve the `blackgate` hostname. Switching to the
+#      default user-defined bridge network gives us service-name DNS
+#      (`srt://blackgate:12100`) and explicit port publishing.
+#   2. `devices:` is RESET. The base file passes through DeckLink (/dev/blackmagic/*)
+#      and Intel GPU (/dev/dri) devices, which do not exist on dev laptops or
+#      CI hosts. A failover test does not need SDI output, so dropping the
+#      passthrough makes this harness portable.
+#
+# See: docs/failover-runbook.md for the full step-by-step test procedure.
+# =============================================================================
+
+services:
+  blackgate:
+    # Reset host networking so the default bridge network + DNS is used and
+    # ports can be explicitly published. `!reset null` is the supported way
+    # to unset a key inherited from the base file.
+    network_mode: !reset null
+    # Reset hardware device passthrough — not needed for an SRT-only failover
+    # test and absent on non-SDI hosts (macOS / CI).
+    devices: !reset null
+    ports:
+      # Blackgate web UI + REST API
+      - "4000:4000"
+      # Primary SRT listener (emitter-a calls in here)
+      - "12100:12100"
+      # Secondary SRT listener (emitter-b calls in here)
+      - "12101:12101"
+
+  # ---------------------------------------------------------------------------
+  # emitter-a — PRIMARY source
+  # Pushes an MPEG-TS test pattern as an SRT CALLER into Blackgate's primary
+  # listener on port 12100.
+  # ---------------------------------------------------------------------------
+  emitter-a:
+    image: mwader/static-ffmpeg
+    depends_on:
+      - blackgate
+    restart: unless-stopped
+    command:
+      - "-re"
+      - "-f"
+      - "lavfi"
+      - "-i"
+      - "testsrc2=size=1280x720:rate=30"
+      - "-f"
+      - "lavfi"
+      - "-i"
+      - "sine=frequency=440:sample_rate=44100"
+      - "-c:v"
+      - "libx264"
+      - "-preset"
+      - "ultrafast"
+      - "-tune"
+      - "zerolatency"
+      - "-b:v"
+      - "1M"
+      - "-c:a"
+      - "aac"
+      - "-f"
+      - "mpegts"
+      - "srt://blackgate:12100?mode=caller&transtype=live"
+
+  # ---------------------------------------------------------------------------
+  # emitter-b — SECONDARY source
+  # Pushes an MPEG-TS test pattern as an SRT CALLER into Blackgate's secondary
+  # listener on port 12101. Used as the failover target when emitter-a dies.
+  # ---------------------------------------------------------------------------
+  emitter-b:
+    image: mwader/static-ffmpeg
+    depends_on:
+      - blackgate
+    restart: unless-stopped
+    command:
+      - "-re"
+      - "-f"
+      - "lavfi"
+      - "-i"
+      - "testsrc2=size=1280x720:rate=30"
+      - "-f"
+      - "lavfi"
+      - "-i"
+      - "sine=frequency=330:sample_rate=44100"
+      - "-c:v"
+      - "libx264"
+      - "-preset"
+      - "ultrafast"
+      - "-tune"
+      - "zerolatency"
+      - "-b:v"
+      - "1M"
+      - "-c:a"
+      - "aac"
+      - "-f"
+      - "mpegts"
+      - "srt://blackgate:12101?mode=caller&transtype=live"
