@@ -13,48 +13,54 @@ defmodule Blackgate.RouteHandlerTest do
 
     # Mock Db, Blackgate.EventLog, and Blackgate
     :meck.new(Blackgate.Db, [:non_strict])
+
     :meck.expect(Blackgate.Db, :get_route, fn
       "test_route", _assoc ->
-        {:ok, %{
-          "id" => "test_route",
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4201,
-            "mode" => "listener"
-          },
-          "destinations" => [
-            %{
-              "schema" => "SRT",
-              "schema_options" => %{
-                "localaddress" => "127.0.0.1",
-                "localport" => 4202,
-                "mode" => "listener"
-              }
-            }
-          ]
-        }}
+        {:ok,
+         %{
+           "id" => "test_route",
+           "schema" => "SRT",
+           "schema_options" => %{
+             "localaddress" => "127.0.0.1",
+             "localport" => 4201,
+             "mode" => "listener"
+           },
+           "destinations" => [
+             %{
+               "schema" => "SRT",
+               "schema_options" => %{
+                 "localaddress" => "127.0.0.1",
+                 "localport" => 4202,
+                 "mode" => "listener"
+               }
+             }
+           ]
+         }}
+
       "test_route_sdi", _assoc ->
-        {:ok, %{
-          "id" => "test_route_sdi",
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4201,
-            "mode" => "listener"
-          },
-          "destinations" => [
-            %{
-              "schema" => "SDI",
-              "device-number" => 2,
-              "video-mode" => "1080p25",
-              "interlaced" => false
-            }
-          ]
-        }}
+        {:ok,
+         %{
+           "id" => "test_route_sdi",
+           "schema" => "SRT",
+           "schema_options" => %{
+             "localaddress" => "127.0.0.1",
+             "localport" => 4201,
+             "mode" => "listener"
+           },
+           "destinations" => [
+             %{
+               "schema" => "SDI",
+               "device-number" => 2,
+               "video-mode" => "1080p25",
+               "interlaced" => false
+             }
+           ]
+         }}
+
       _id, _assoc ->
         {:ok, %{}}
     end)
+
     :meck.expect(Blackgate.Db, :update_route, fn _id, _params -> {:ok, %{}} end)
 
     :meck.new(Blackgate, [:non_strict])
@@ -103,7 +109,7 @@ defmodule Blackgate.RouteHandlerTest do
         "latency" => 200,
         "auto-reconnect" => true,
         "keep-listening" => true,
-        "rcvbuf" => 50000000,
+        "rcvbuf" => 50_000_000,
         "lossmaxttl" => 10,
         "oheadbw" => 50
       }
@@ -116,7 +122,7 @@ defmodule Blackgate.RouteHandlerTest do
     assert source["latency"] == 200
     assert source["auto-reconnect"] == true
     assert source["keep-listening"] == true
-    assert source["rcvbuf"] == 50000000
+    assert source["rcvbuf"] == 50_000_000
     assert source["lossmaxttl"] == 10
     assert source["oheadbw"] == 50
   end
@@ -129,10 +135,10 @@ defmodule Blackgate.RouteHandlerTest do
         "localport" => 4202,
         "mode" => "caller",
         "latency" => 250,
-        "sndbuf" => 12000000,
-        "rcvbuf" => 8000000,
+        "sndbuf" => 12_000_000,
+        "rcvbuf" => 8_000_000,
         "oheadbw" => 30,
-        "maxbw" => 50000000
+        "maxbw" => 50_000_000
       }
     }
 
@@ -141,10 +147,10 @@ defmodule Blackgate.RouteHandlerTest do
     assert sink["uri"] =~ "srt://127.0.0.1:4202"
     assert sink["uri"] =~ "mode=caller"
     assert sink["latency"] == 250
-    assert sink["sndbuf"] == 12000000
-    assert sink["rcvbuf"] == 8000000
+    assert sink["sndbuf"] == 12_000_000
+    assert sink["rcvbuf"] == 8_000_000
     assert sink["oheadbw"] == 30
-    assert sink["maxbw"] == 50000000
+    assert sink["maxbw"] == 50_000_000
   end
 
   test "source_from_record with SRT schema and passphrase" do
@@ -229,31 +235,32 @@ defmodule Blackgate.RouteHandlerTest do
     # Setting up meck to return a route with multiple destinations
     :meck.expect(Blackgate.Db, :get_route, fn
       "test_route_multiple", _assoc ->
-        {:ok, %{
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4201,
-            "mode" => "listener"
-          },
-          "destinations" => [
-            %{
-              "schema" => "SRT",
-              "schema_options" => %{
-                "localaddress" => "127.0.0.1",
-                "localport" => 4202,
-                "mode" => "listener"
-              }
-            },
-            %{
-              "schema" => "UDP",
-              "schema_options" => %{
-                "address" => "127.0.0.1",
-                "port" => 4203
-              }
-            }
-          ]
-        }}
+        {:ok,
+         %{
+           "schema" => "SRT",
+           "schema_options" => %{
+             "localaddress" => "127.0.0.1",
+             "localport" => 4201,
+             "mode" => "listener"
+           },
+           "destinations" => [
+             %{
+               "schema" => "SRT",
+               "schema_options" => %{
+                 "localaddress" => "127.0.0.1",
+                 "localport" => 4202,
+                 "mode" => "listener"
+               }
+             },
+             %{
+               "schema" => "UDP",
+               "schema_options" => %{
+                 "address" => "127.0.0.1",
+                 "port" => 4203
+               }
+             }
+           ]
+         }}
     end)
 
     route_id = "test_route_multiple"
@@ -305,6 +312,7 @@ defmodule Blackgate.RouteHandlerTest do
 
   test "watchdog skips check during grace period" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route",
       route: %{
@@ -320,15 +328,18 @@ defmodule Blackgate.RouteHandlerTest do
       last_bytes_changed_at: now,
       last_sdi_frames: %{},
       last_sdi_frames_changed_at: now,
-      started_at: now - 10_000, # 10 seconds ago (grace period is 30s)
+      # 10 seconds ago (grace period is 30s)
+      started_at: now - 10_000,
       consecutive_startup_crashes: 0
     }
 
-    assert {:keep_state_and_data, _} = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+    assert {:keep_state_and_data, _} =
+             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
   end
 
   test "watchdog keeps state when network data is flowing" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route",
       route: %{
@@ -344,7 +355,8 @@ defmodule Blackgate.RouteHandlerTest do
       last_bytes_changed_at: now - 20_000,
       last_sdi_frames: %{},
       last_sdi_frames_changed_at: now - 20_000,
-      started_at: now - 40_000, # past grace period
+      # past grace period
+      started_at: now - 40_000,
       consecutive_startup_crashes: 0
     }
 
@@ -352,13 +364,16 @@ defmodule Blackgate.RouteHandlerTest do
     stats = %{"total-bytes-received" => 200}
     Blackgate.RouteStatsRegistry.put_stats("test_route", stats)
 
-    assert {:keep_state, updated_data, _} = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+    assert {:keep_state, updated_data, _} =
+             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+
     assert updated_data.last_bytes_received == 200
     assert updated_data.last_bytes_changed_at > now - 5000
   end
 
   test "watchdog restarts route when network data is stalled" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route",
       route: %{
@@ -371,7 +386,8 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_started_at: nil,
       reconnect_count: 0,
       last_bytes_received: 100,
-      last_bytes_changed_at: now - 70_000, # stalled for 70 seconds (> 60s threshold)
+      # stalled for 70 seconds (> 60s threshold)
+      last_bytes_changed_at: now - 70_000,
       last_sdi_frames: %{},
       last_sdi_frames_changed_at: now - 70_000,
       started_at: now - 80_000,
@@ -389,6 +405,7 @@ defmodule Blackgate.RouteHandlerTest do
 
   test "watchdog keeps state when SDI output is flowing" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route_sdi",
       route: %{
@@ -417,15 +434,19 @@ defmodule Blackgate.RouteHandlerTest do
         %{"device_number" => 2, "video_frames" => 510}
       ]
     }
+
     Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
 
-    assert {:keep_state, updated_data, _} = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+    assert {:keep_state, updated_data, _} =
+             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+
     assert updated_data.last_sdi_frames[2] == 510
     assert updated_data.last_sdi_frames_changed_at > now - 5000
   end
 
   test "watchdog restarts route when SDI playout is frozen" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route_sdi",
       route: %{
@@ -440,9 +461,11 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_started_at: nil,
       reconnect_count: 0,
       last_bytes_received: 100,
-      last_bytes_changed_at: now, # network is fine
+      # network is fine
+      last_bytes_changed_at: now,
       last_sdi_frames: %{2 => 500},
-      last_sdi_frames_changed_at: now - 70_000, # playout frozen for 70 seconds (> 60s threshold)
+      # playout frozen for 70 seconds (> 60s threshold)
+      last_sdi_frames_changed_at: now - 70_000,
       started_at: now - 80_000,
       consecutive_startup_crashes: 0
     }
@@ -454,10 +477,318 @@ defmodule Blackgate.RouteHandlerTest do
         %{"device_number" => 2, "video_frames" => 500}
       ]
     }
+
     Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
 
     res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
     assert elem(res, 0) == :next_state
     assert elem(res, 1) == :reconnecting
+  end
+
+  # =========================================================================
+  # FAILOVER HELPER TESTS
+  # =========================================================================
+
+  describe "failover helpers" do
+    test "failover_active? returns false when route has no failover_enabled key" do
+      route = %{"schema" => "SRT", "secondary_source" => %{"schema" => "SRT"}}
+      refute RouteHandler.failover_active?(route)
+    end
+
+    test "failover_active? returns false when failover_enabled is false" do
+      route = %{
+        "schema" => "SRT",
+        "failover_enabled" => false,
+        "secondary_source" => %{"schema" => "SRT"}
+      }
+
+      refute RouteHandler.failover_active?(route)
+    end
+
+    test "failover_active? returns false when schema is UDP (not SRT)" do
+      route = %{
+        "schema" => "UDP",
+        "failover_enabled" => true,
+        "secondary_source" => %{"schema" => "SRT"}
+      }
+
+      refute RouteHandler.failover_active?(route)
+    end
+
+    test "failover_active? returns false when secondary_source is nil" do
+      route = %{
+        "schema" => "SRT",
+        "failover_enabled" => true,
+        "secondary_source" => nil
+      }
+
+      refute RouteHandler.failover_active?(route)
+    end
+
+    test "failover_active? returns true when SRT + enabled + secondary configured" do
+      route = %{
+        "schema" => "SRT",
+        "failover_enabled" => true,
+        "secondary_source" => %{"schema" => "SRT", "schema_options" => %{}}
+      }
+
+      assert RouteHandler.failover_active?(route)
+    end
+
+    test "active_route_for_pipeline returns original route when active is primary" do
+      route = %{
+        "schema" => "SRT",
+        "schema_options" => %{"localaddress" => "primary-host"},
+        "secondary_source" => %{
+          "schema" => "SRT",
+          "schema_options" => %{"localaddress" => "secondary-host"}
+        }
+      }
+
+      data = %{active_source: "primary", route: route}
+
+      result = RouteHandler.active_route_for_pipeline(data)
+      assert result["schema_options"]["localaddress"] == "primary-host"
+      assert result == route
+    end
+
+    test "active_route_for_pipeline overlays secondary schema + schema_options when active is secondary" do
+      route = %{
+        "schema" => "SRT",
+        "schema_options" => %{"localaddress" => "primary-host", "localport" => 4201},
+        "secondary_source" => %{
+          "schema" => "SRT",
+          "schema_options" => %{"localaddress" => "secondary-host", "localport" => 9999}
+        }
+      }
+
+      data = %{active_source: "secondary", route: route}
+
+      result = RouteHandler.active_route_for_pipeline(data)
+      assert result["schema"] == "SRT"
+      assert result["schema_options"]["localaddress"] == "secondary-host"
+      assert result["schema_options"]["localport"] == 9999
+    end
+
+    test "choose_next_source with maintain-stability toggles primary to secondary and back" do
+      route = %{}
+
+      assert RouteHandler.choose_next_source("primary", false, "maintain-stability", route) ==
+               "secondary"
+
+      assert RouteHandler.choose_next_source("secondary", false, "maintain-stability", route) ==
+               "primary"
+    end
+
+    test "choose_next_source with manual-switchback switches once then stays" do
+      route = %{}
+
+      assert RouteHandler.choose_next_source("primary", false, "manual-switchback", route) ==
+               "secondary"
+
+      assert RouteHandler.choose_next_source("secondary", true, "manual-switchback", route) ==
+               "secondary"
+    end
+
+    test "choose_next_source with manual never changes source" do
+      route = %{}
+
+      assert RouteHandler.choose_next_source("primary", false, "manual", route) == "primary"
+      assert RouteHandler.choose_next_source("secondary", true, "manual", route) == "secondary"
+    end
+
+    test "choose_next_source with maintain-primary always returns primary" do
+      route = %{}
+
+      assert RouteHandler.choose_next_source("primary", false, "maintain-primary", route) ==
+               "primary"
+
+      assert RouteHandler.choose_next_source("secondary", true, "maintain-primary", route) ==
+               "primary"
+    end
+  end
+
+  # =========================================================================
+  # FAILOVER INTEGRATION (gen_statem failure paths)
+  # =========================================================================
+
+  describe "failover integration" do
+    # Mirrors RouteHandler.init data struct shape.
+    defp base_data(overrides) do
+      now = System.monotonic_time(:millisecond)
+
+      %{
+        id: "test_route",
+        route: %{
+          "id" => "test_route",
+          "name" => "Test Route",
+          "schema" => "SRT",
+          "destinations" => [],
+          "schema_options" => %{"localaddress" => "127.0.0.1", "localport" => 4201}
+        },
+        port: nil,
+        ffmpeg_port: nil,
+        reconnect_started_at: nil,
+        reconnect_count: 0,
+        last_bytes_received: 0,
+        last_bytes_changed_at: now,
+        last_sdi_frames: %{},
+        last_sdi_frames_changed_at: now,
+        started_at: now - 20_000,
+        consecutive_startup_crashes: 0,
+        sdi_audio_last_restart_at: nil,
+        active_source: "primary",
+        failover_switched: false
+      }
+      |> Map.merge(overrides)
+    end
+
+    defp failover_route(mode) do
+      %{
+        "id" => "test_route",
+        "name" => "Test Route",
+        "schema" => "SRT",
+        "destinations" => [],
+        "schema_options" => %{"localaddress" => "primary-host", "localport" => 4201},
+        "failover_enabled" => true,
+        "failover_mode" => mode,
+        "secondary_source" => %{
+          "schema" => "SRT",
+          "schema_options" => %{"localaddress" => "secondary-host", "localport" => 9999}
+        }
+      }
+    end
+
+    # Captures Db.update_route calls into the process dictionary for assertions.
+    defp capture_update_route do
+      Process.put(:captured_update_route, [])
+
+      :meck.expect(Blackgate.Db, :update_route, fn id, params ->
+        Process.put(:captured_update_route, [{id, params} | Process.get(:captured_update_route)])
+        {:ok, %{}}
+      end)
+    end
+
+    defp captured_update_route, do: Enum.reverse(Process.get(:captured_update_route, []))
+
+    # Scenario (a): failover_enabled=false -> exit_status triggers normal restart,
+    # active_source stays "primary", no Db.update_route for active_source.
+    # Regression test: proves failover-off path is unchanged.
+    test "failover_enabled=false: exit_status triggers restart, active_source stays primary" do
+      capture_update_route()
+
+      port = Port.open({:spawn, "cat"}, [:binary])
+
+      data =
+        base_data(%{
+          port: port,
+          route: %{
+            "id" => "test_route",
+            "name" => "Test Route",
+            "schema" => "SRT",
+            "destinations" => [],
+            "failover_enabled" => false
+          }
+        })
+
+      res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
+
+      assert elem(res, 0) == :next_state
+      assert elem(res, 1) == :reconnecting
+
+      new_data = elem(res, 2)
+      assert new_data.active_source == "primary"
+
+      refute Enum.any?(captured_update_route(), fn {_id, params} ->
+               Map.has_key?(params, "active_source")
+             end)
+    end
+
+    # Scenario (b): mode="manual" on source failure -> route stops (no auto-switch).
+    test "mode=manual on source failure stops route without auto-switch" do
+      capture_update_route()
+
+      port = Port.open({:spawn, "cat"}, [:binary])
+      data = base_data(%{port: port, route: failover_route("manual")})
+
+      res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
+
+      assert elem(res, 0) == :stop
+
+      refute Enum.any?(captured_update_route(), fn {_id, params} ->
+               Map.has_key?(params, "active_source")
+             end)
+    end
+
+    # Scenario (c): mode="maintain-stability" on failure -> active toggles to
+    # secondary, pipeline respawns with other source (re-enters reconnecting).
+    test "mode=maintain-stability on failure toggles active_source to secondary" do
+      capture_update_route()
+
+      port = Port.open({:spawn, "cat"}, [:binary])
+      data = base_data(%{port: port, route: failover_route("maintain-stability")})
+
+      res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
+
+      assert elem(res, 0) == :next_state
+      assert elem(res, 1) == :reconnecting
+
+      new_data = elem(res, 2)
+      assert new_data.active_source == "secondary"
+      assert new_data.port == nil
+      assert new_data.ffmpeg_port == nil
+
+      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
+    end
+
+    # Scenario (d): maintain-primary reconnect timeout -> one-shot fallback to
+    # secondary (re-enters :reconnecting instead of stopping).
+    test "maintain-primary reconnect timeout falls back to secondary once" do
+      capture_update_route()
+
+      now = System.monotonic_time(:millisecond)
+
+      data =
+        base_data(%{
+          route: failover_route("maintain-primary"),
+          # Exceeds @reconnect_timeout_ms (180_000)
+          reconnect_started_at: now - 200_000,
+          reconnect_count: 5,
+          active_source: "primary",
+          failover_switched: false
+        })
+
+      res = RouteHandler.handle_event({:timeout, :reconnect}, :retry, :reconnecting, data)
+
+      assert elem(res, 0) == :next_state
+      assert elem(res, 1) == :reconnecting
+
+      new_data = elem(res, 2)
+      assert new_data.active_source == "secondary"
+      assert new_data.failover_switched == true
+      assert new_data.reconnect_count == 0
+
+      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
+    end
+
+    # Scenario (d') guard: once already switched, timeout stops (no repeat switch).
+    test "maintain-primary reconnect timeout stops when already switched to secondary" do
+      capture_update_route()
+
+      now = System.monotonic_time(:millisecond)
+
+      data =
+        base_data(%{
+          route: failover_route("maintain-primary"),
+          reconnect_started_at: now - 200_000,
+          reconnect_count: 5,
+          active_source: "secondary",
+          failover_switched: true
+        })
+
+      res = RouteHandler.handle_event({:timeout, :reconnect}, :retry, :reconnecting, data)
+
+      assert elem(res, 0) == :stop
+    end
   end
 end

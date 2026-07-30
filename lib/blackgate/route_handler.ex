@@ -10,13 +10,18 @@ defmodule Blackgate.RouteHandler do
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
 
   # Reconnect configuration
-  @reconnect_interval_ms 10_000   # Retry every 10 seconds
-  @reconnect_timeout_ms 180_000   # Give up after 3 minutes
+  # Retry every 10 seconds
+  @reconnect_interval_ms 10_000
+  # Give up after 3 minutes
+  @reconnect_timeout_ms 180_000
 
   # Watchdog configuration
-  @watchdog_check_interval_ms 30_000  # Check every 30 seconds
-  @watchdog_stall_threshold_ms 60_000 # Restart if no data for 60 seconds
-  @watchdog_grace_period_ms 30_000    # Don't check for first 30 seconds after start
+  # Check every 30 seconds
+  @watchdog_check_interval_ms 30_000
+  # Restart if no data for 60 seconds
+  @watchdog_stall_threshold_ms 60_000
+  # Don't check for first 30 seconds after start
+  @watchdog_grace_period_ms 30_000
 
   # SDI audio desync auto-recovery (RTMP/HTTP/HLS only)
   # Minimum total audio buffers before we treat a silence event as a hardware desync.
@@ -24,7 +29,8 @@ defmodule Blackgate.RouteHandler do
   @sdi_audio_min_buffers_before_restart 5_000
   # After an auto-restart for audio desync, wait this long before restarting again.
   # Prevents an infinite loop if the source permanently loses audio.
-  @sdi_audio_restart_cooldown_ms 300_000  # 5 minutes
+  # 5 minutes
+  @sdi_audio_restart_cooldown_ms 300_000
 
   @impl true
   def callback_mode, do: [:handle_event_function]
@@ -51,7 +57,9 @@ defmodule Blackgate.RouteHandler do
       consecutive_startup_crashes: 0,
       # Tracks last time we auto-restarted due to SDI audio desync.
       # Used to enforce a cooldown and prevent restart loops.
-      sdi_audio_last_restart_at: nil
+      sdi_audio_last_restart_at: nil,
+      active_source: "primary",
+      failover_switched: false
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -69,39 +77,67 @@ defmodule Blackgate.RouteHandler do
       :ok ->
         Blackgate.set_route_status(data.id, "started")
         Blackgate.set_route_error(data.id, nil)
+
         Blackgate.EventLog.log(:info, "route_started", "Route started", %{
           route_id: data.id,
           route_name: data.route["name"]
         })
+
         now = System.monotonic_time(:millisecond)
+
         {:next_state, :started,
-         %{data | port: port, ffmpeg_port: ffmpeg_port, started_at: now, last_bytes_changed_at: now,
-                  last_sdi_frames_changed_at: now, last_sdi_frames: %{}, consecutive_startup_crashes: 0,
-                  sdi_audio_last_restart_at: nil},
-         {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+         %{
+           data
+           | port: port,
+             ffmpeg_port: ffmpeg_port,
+             started_at: now,
+             last_bytes_changed_at: now,
+             last_sdi_frames_changed_at: now,
+             last_sdi_frames: %{},
+             consecutive_startup_crashes: 0,
+             sdi_audio_last_restart_at: nil,
+             failover_switched: false
+         }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
         # Kill ffmpeg if it was started
         if ffmpeg_port, do: close_port(ffmpeg_port)
-        
+
         consecutive = data.consecutive_startup_crashes + 1
-        
+
         if consecutive >= 3 do
           error_msg = diagnose_hardware_issue()
-          Logger.error("RouteHandler: Circuit breaker triggered after 3 consecutive start failures: #{error_msg}")
+
+          Logger.error(
+            "RouteHandler: Circuit breaker triggered after 3 consecutive start failures: #{error_msg}"
+          )
+
           Blackgate.set_route_status(data.id, "error")
           Blackgate.set_route_error(data.id, error_msg)
-          Blackgate.EventLog.log(:critical, "route_hardware_error", "Route startup failed repeatedly: #{error_msg}", %{
-            route_id: data.id,
-            route_name: data.route["name"]
-          })
+
+          Blackgate.EventLog.log(
+            :critical,
+            "route_hardware_error",
+            "Route startup failed repeatedly: #{error_msg}",
+            %{
+              route_id: data.id,
+              route_name: data.route["name"]
+            }
+          )
+
           {:stop, :normal, %{data | consecutive_startup_crashes: consecutive}}
         else
-          Blackgate.EventLog.log(:critical, "route_start_failed", "Route failed to start: #{inspect(reason)}", %{
-            route_id: data.id,
-            route_name: data.route["name"]
-          })
+          Blackgate.EventLog.log(
+            :critical,
+            "route_start_failed",
+            "Route failed to start: #{inspect(reason)}",
+            %{
+              route_id: data.id,
+              route_name: data.route["name"]
+            }
+          )
+
           {:stop, reason, %{data | consecutive_startup_crashes: consecutive}}
         end
     end
@@ -126,11 +162,16 @@ defmodule Blackgate.RouteHandler do
         # Detect SDI audio silence — log always, then check if we should auto-restart
         acc =
           if String.contains?(line, "SDI_AUDIO_SILENT:") do
-            Blackgate.EventLog.log(:warning, "sdi_audio_silent",
-              "SDI audio stopped: #{String.trim(line)}", %{
-              route_id: acc.id,
-              route_name: get_in(acc, [:route, "name"]) || acc.id
-            })
+            Blackgate.EventLog.log(
+              :warning,
+              "sdi_audio_silent",
+              "SDI audio stopped: #{String.trim(line)}",
+              %{
+                route_id: acc.id,
+                route_name: get_in(acc, [:route, "name"]) || acc.id
+              }
+            )
+
             maybe_restart_for_audio_desync(line, state, acc)
           else
             acc
@@ -138,11 +179,15 @@ defmodule Blackgate.RouteHandler do
 
         # Detect SDI audio recovery
         if String.contains?(line, "SDI_AUDIO_RECOVERED:") do
-          Blackgate.EventLog.log(:info, "sdi_audio_recovered",
-            "SDI audio recovered: #{String.trim(line)}", %{
-            route_id: acc.id,
-            route_name: get_in(acc, [:route, "name"]) || acc.id
-          })
+          Blackgate.EventLog.log(
+            :info,
+            "sdi_audio_recovered",
+            "SDI audio recovered: #{String.trim(line)}",
+            %{
+              route_id: acc.id,
+              route_name: get_in(acc, [:route, "name"]) || acc.id
+            }
+          )
         end
 
         acc
@@ -171,6 +216,7 @@ defmodule Blackgate.RouteHandler do
         case data.route["destinations"] do
           destinations when is_list(destinations) ->
             Enum.any?(destinations, &(&1["schema"] == "SDI"))
+
           _ ->
             false
         end
@@ -187,6 +233,7 @@ defmodule Blackgate.RouteHandler do
           Enum.reduce(stats["sdi_video_stats"], %{}, fn sdi_item, acc ->
             dev = sdi_item["device_number"]
             frames = sdi_item["video_frames"] || 0
+
             if is_integer(dev) do
               Map.put(acc, dev, frames)
             else
@@ -234,31 +281,50 @@ defmodule Blackgate.RouteHandler do
 
       cond do
         net_stall_duration >= @watchdog_stall_threshold_ms ->
-          Logger.warning("RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route")
-          Blackgate.EventLog.log(:warning, "watchdog_restart",
-            "No data for #{div(net_stall_duration, 1000)}s, restarting route", %{
+          Logger.warning(
+            "RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route"
+          )
+
+          Blackgate.EventLog.log(
+            :warning,
+            "watchdog_restart",
+            "No data for #{div(net_stall_duration, 1000)}s, restarting route",
+            %{
               route_id: data.id,
               route_name: get_in(data, [:route, "name"]) || data.id
-            })
+            }
+          )
+
           trigger_restart(data)
 
         sdi_stall_duration >= @watchdog_stall_threshold_ms ->
-          Logger.warning("RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route")
-          Blackgate.EventLog.log(:warning, "watchdog_restart",
-            "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route", %{
+          Logger.warning(
+            "RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route"
+          )
+
+          Blackgate.EventLog.log(
+            :warning,
+            "watchdog_restart",
+            "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route",
+            %{
               route_id: data.id,
               route_name: get_in(data, [:route, "name"]) || data.id
-            })
+            }
+          )
+
           trigger_restart(data)
 
         true ->
-          updated_data = %{data |
-            last_bytes_received: last_bytes_received,
-            last_bytes_changed_at: last_bytes_changed_at,
-            last_sdi_frames: last_sdi_frames,
-            last_sdi_frames_changed_at: last_sdi_frames_changed_at
+          updated_data = %{
+            data
+            | last_bytes_received: last_bytes_received,
+              last_bytes_changed_at: last_bytes_changed_at,
+              last_sdi_frames: last_sdi_frames,
+              last_sdi_frames_changed_at: last_sdi_frames_changed_at
           }
-          {:keep_state, updated_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+
+          {:keep_state, updated_data,
+           {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
       end
     end
   end
@@ -269,63 +335,116 @@ defmodule Blackgate.RouteHandler do
     cond do
       port == data.port ->
         # GStreamer pipeline exited
-        Logger.warning("RouteHandler: Pipeline exited with status #{status}, entering reconnect mode")
-        
+        Logger.warning(
+          "RouteHandler: Pipeline exited with status #{status}, entering reconnect mode"
+        )
+
         # Calculate uptime to check if this is a startup crash
         uptime = System.monotonic_time(:millisecond) - data.started_at
         consecutive = if uptime < 15_000, do: data.consecutive_startup_crashes + 1, else: 0
-        
+
         if consecutive >= 3 do
           error_msg = diagnose_hardware_issue()
-          Logger.error("RouteHandler: Circuit breaker triggered after 3 consecutive startup crashes: #{error_msg}")
+
+          Logger.error(
+            "RouteHandler: Circuit breaker triggered after 3 consecutive startup crashes: #{error_msg}"
+          )
+
           Blackgate.set_route_status(data.id, "error")
           Blackgate.set_route_error(data.id, error_msg)
-          Blackgate.EventLog.log(:critical, "route_hardware_error", "Route crashed repeatedly on startup: #{error_msg}", %{
-            route_id: data.id,
-            route_name: get_in(data, [:route, "name"]) || data.id
-          })
-          
+
+          Blackgate.EventLog.log(
+            :critical,
+            "route_hardware_error",
+            "Route crashed repeatedly on startup: #{error_msg}",
+            %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            }
+          )
+
           # Kill ffmpeg too if running
           if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
-          {:stop, :normal, %{data | port: nil, ffmpeg_port: nil, consecutive_startup_crashes: consecutive}}
+
+          {:stop, :normal,
+           %{data | port: nil, ffmpeg_port: nil, consecutive_startup_crashes: consecutive}}
         else
-          enter_reconnecting(%{data | consecutive_startup_crashes: consecutive})
+          trigger_restart(%{data | consecutive_startup_crashes: consecutive})
         end
 
       port == data.ffmpeg_port ->
         # ffmpeg sidecar exited — pipeline will likely follow
-        Logger.warning("RouteHandler: FFmpeg sidecar exited with status #{status}, entering reconnect mode")
+        Logger.warning(
+          "RouteHandler: FFmpeg sidecar exited with status #{status}, entering reconnect mode"
+        )
+
         # Kill the pipeline too since it depends on ffmpeg
         if data.port && is_port(data.port), do: close_port(data.port)
-        enter_reconnecting(data)
+        trigger_restart(data)
 
       true ->
         :keep_state_and_data
     end
   end
 
-
   # Reconnect timer fired — attempt to restart the pipeline
   def handle_event({:timeout, :reconnect}, :retry, :reconnecting, data) do
     elapsed = System.monotonic_time(:millisecond) - data.reconnect_started_at
 
     if elapsed >= @reconnect_timeout_ms do
-      # Timeout exceeded — give up
-      Logger.error("RouteHandler: Reconnect timeout (#{div(elapsed, 1000)}s), stopping route")
-      Blackgate.set_route_status(data.id, "stopped")
-      Blackgate.EventLog.log(:critical, "reconnect_failed",
-        "Reconnect failed after #{data.reconnect_count} attempts (#{div(elapsed, 1000)}s), route stopped", %{
-          route_id: data.id,
-          route_name: get_in(data, [:route, "name"]) || data.id
-        })
-      {:stop, :normal, data}
+      cond do
+        maintain_primary_fallback_eligible?(data) ->
+          # One-shot fallback: primary would not reconnect within the timeout
+          # window, so switch to the configured secondary source once and give
+          # it a fresh reconnect window. failover_switched prevents repeat hops.
+          _ = Db.update_route(data.id, %{"active_source" => "secondary"})
+
+          Blackgate.EventLog.log(
+            :warning,
+            "failover_primary_timeout",
+            "Primary source did not reconnect within #{div(@reconnect_timeout_ms, 1000)}s, " <>
+              "falling back to secondary source",
+            %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            }
+          )
+
+          {:next_state, :reconnecting,
+           %{
+             data
+             | active_source: "secondary",
+               failover_switched: true,
+               reconnect_started_at: System.monotonic_time(:millisecond),
+               reconnect_count: 0
+           }, {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+
+        true ->
+          # Timeout exceeded — give up
+          Logger.error("RouteHandler: Reconnect timeout (#{div(elapsed, 1000)}s), stopping route")
+          Blackgate.set_route_status(data.id, "stopped")
+
+          Blackgate.EventLog.log(
+            :critical,
+            "reconnect_failed",
+            "Reconnect failed after #{data.reconnect_count} attempts (#{div(elapsed, 1000)}s), route stopped",
+            %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
+            }
+          )
+
+          {:stop, :normal, data}
+      end
     else
       # Attempt reconnect
       count = data.reconnect_count + 1
       Logger.info("RouteHandler: Reconnect attempt ##{count} (#{div(elapsed, 1000)}s elapsed)")
 
       try do
-        {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(data.route)
+        {route_for_pipeline, ffmpeg_port} =
+          maybe_start_ffmpeg_sidecar(active_route_for_pipeline(data))
+
         port = start_native_pipeline(route_for_pipeline)
 
         case send_initial_command(port, route_for_pipeline) do
@@ -333,58 +452,99 @@ defmodule Blackgate.RouteHandler do
             Logger.info("RouteHandler: Reconnect successful on attempt ##{count}")
             Blackgate.set_route_status(data.id, "started")
             Blackgate.set_route_error(data.id, nil)
-            Blackgate.EventLog.log(:info, "route_reconnected",
-              "Route reconnected after #{count} attempts", %{
+
+            Blackgate.EventLog.log(
+              :info,
+              "route_reconnected",
+              "Route reconnected after #{count} attempts",
+              %{
                 route_id: data.id,
                 route_name: get_in(data, [:route, "name"]) || data.id
-              })
+              }
+            )
+
             now = System.monotonic_time(:millisecond)
+
             {:next_state, :started,
-             %{data | port: port, ffmpeg_port: ffmpeg_port, reconnect_started_at: nil, reconnect_count: 0,
-               started_at: now, last_bytes_changed_at: now, last_sdi_frames_changed_at: now,
-               last_sdi_frames: %{}, last_bytes_received: 0, consecutive_startup_crashes: 0,
-               sdi_audio_last_restart_at: nil},
-             {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+             %{
+               data
+               | port: port,
+                 ffmpeg_port: ffmpeg_port,
+                 reconnect_started_at: nil,
+                 reconnect_count: 0,
+                 started_at: now,
+                 last_bytes_changed_at: now,
+                 last_sdi_frames_changed_at: now,
+                 last_sdi_frames: %{},
+                 last_bytes_received: 0,
+                 consecutive_startup_crashes: 0,
+                 sdi_audio_last_restart_at: nil,
+                 failover_switched: false
+             }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
             if ffmpeg_port, do: close_port(ffmpeg_port)
             close_port(port)
-            
+
             consecutive = data.consecutive_startup_crashes + 1
-            
+
             if consecutive >= 3 do
               error_msg = diagnose_hardware_issue()
-              Logger.error("RouteHandler: Circuit breaker triggered during reconnect after 3 consecutive failures: #{error_msg}")
+
+              Logger.error(
+                "RouteHandler: Circuit breaker triggered during reconnect after 3 consecutive failures: #{error_msg}"
+              )
+
               Blackgate.set_route_status(data.id, "error")
               Blackgate.set_route_error(data.id, error_msg)
-              Blackgate.EventLog.log(:critical, "route_hardware_error", "Route startup failed repeatedly: #{error_msg}", %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              })
+
+              Blackgate.EventLog.log(
+                :critical,
+                "route_hardware_error",
+                "Route startup failed repeatedly: #{error_msg}",
+                %{
+                  route_id: data.id,
+                  route_name: get_in(data, [:route, "name"]) || data.id
+                }
+              )
+
               {:stop, :normal, %{data | consecutive_startup_crashes: consecutive}}
             else
-              {:keep_state, %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
+              {:keep_state,
+               %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
                {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
             end
         end
       rescue
         e ->
           Logger.error("RouteHandler: Reconnect attempt ##{count} failed: #{inspect(e)}")
-          
+
           consecutive = data.consecutive_startup_crashes + 1
-          
+
           if consecutive >= 3 do
             error_msg = diagnose_hardware_issue()
-            Logger.error("RouteHandler: Circuit breaker triggered during reconnect rescue after 3 consecutive failures: #{error_msg}")
+
+            Logger.error(
+              "RouteHandler: Circuit breaker triggered during reconnect rescue after 3 consecutive failures: #{error_msg}"
+            )
+
             Blackgate.set_route_status(data.id, "error")
             Blackgate.set_route_error(data.id, error_msg)
-            Blackgate.EventLog.log(:critical, "route_hardware_error", "Route startup failed repeatedly: #{error_msg}", %{
-              route_id: data.id,
-              route_name: get_in(data, [:route, "name"]) || data.id
-            })
+
+            Blackgate.EventLog.log(
+              :critical,
+              "route_hardware_error",
+              "Route startup failed repeatedly: #{error_msg}",
+              %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              }
+            )
+
             {:stop, :normal, %{data | consecutive_startup_crashes: consecutive}}
           else
-            {:keep_state, %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
+            {:keep_state,
+             %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
              {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
           end
       end
@@ -418,18 +578,141 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # ===========================================================================
+  # Failover Helpers (pure)
+  # ===========================================================================
+
+  @doc false
+  def failover_active?(route_map) when is_map(route_map) do
+    Map.get(route_map, "failover_enabled") == true and
+      Map.get(route_map, "schema") == "SRT" and
+      secondary_source_configured?(Map.get(route_map, "secondary_source"))
+  end
+
+  defp secondary_source_configured?(secondary) when is_map(secondary) and map_size(secondary) > 0,
+    do: true
+
+  defp secondary_source_configured?(_), do: false
+
+  @doc false
+  def active_source_from_route(route_map) when is_map(route_map) do
+    case Map.get(route_map, "active_source") do
+      source when source in ["primary", "secondary"] -> source
+      _ -> "primary"
+    end
+  end
+
+  @doc false
+  def active_route_for_pipeline(%{route: route, active_source: active_source}) do
+    overlay_secondary_source(route, active_source)
+  end
+
+  defp overlay_secondary_source(route, "secondary") do
+    case Map.get(route, "secondary_source") do
+      %{"schema" => schema, "schema_options" => opts} when is_map(opts) ->
+        route
+        |> Map.put("schema", schema)
+        |> Map.put("schema_options", opts)
+
+      _ ->
+        route
+    end
+  end
+
+  defp overlay_secondary_source(route, _primary), do: route
+
+  @doc false
+  def choose_next_source(current_active, failover_switched, mode, _route_map) do
+    case mode do
+      "maintain-primary" ->
+        "primary"
+
+      "maintain-stability" ->
+        toggle_source(current_active)
+
+      "manual-switchback" ->
+        if failover_switched, do: current_active, else: toggle_source(current_active)
+
+      "manual" ->
+        current_active
+    end
+  end
+
+  defp toggle_source("primary"), do: "secondary"
+  defp toggle_source(_other), do: "primary"
+
+  # One-shot fallback to secondary is allowed only when failover is active, the
+  # mode is maintain-primary (which otherwise insists on primary), we are
+  # currently on primary, and we have not already performed the one-shot hop.
+  defp maintain_primary_fallback_eligible?(data) do
+    failover_active?(data.route) and
+      Map.get(data.route, "failover_mode") == "maintain-primary" and
+      data.active_source == "primary" and
+      data.failover_switched == false
+  end
+
   defp get_total_bytes_received(route_id) do
     case Blackgate.RouteStatsRegistry.get_stats(route_id) do
       %{stats: stats} when is_map(stats) ->
         Map.get(stats, "total-bytes-received", 0)
-      _ -> 0
+
+      _ ->
+        0
     end
   end
 
   defp trigger_restart(data) do
     if data.port && is_port(data.port), do: close_port(data.port)
     if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
-    enter_reconnecting(%{data | port: nil, ffmpeg_port: nil})
+
+    cleared = %{data | port: nil, ffmpeg_port: nil}
+
+    if failover_active?(data.route) do
+      failover_restart(cleared)
+    else
+      enter_reconnecting(cleared)
+    end
+  end
+
+  # Failover-aware restart. "manual" mode leaves switching to the operator: the
+  # route is stopped instead of auto-reconnecting to a known-dead source.
+  # All other modes compute the next source via choose_next_source/4, persist it,
+  # and re-enter the reconnect loop against the new source.
+  defp failover_restart(data) do
+    mode = Map.get(data.route, "failover_mode", "manual")
+
+    if mode == "manual" do
+      Blackgate.set_route_status(data.id, "stopped")
+
+      Blackgate.EventLog.log(
+        :critical,
+        "failover_manual_stop",
+        "Source failed in manual failover mode, route stopped (operator action required)",
+        %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        }
+      )
+
+      {:stop, :normal, data}
+    else
+      next =
+        choose_next_source(data.active_source, data.failover_switched, mode, data.route)
+
+      _ = Db.update_route(data.id, %{"active_source" => next})
+
+      Blackgate.EventLog.log(
+        :warning,
+        "failover_switched",
+        "Failover switched active_source #{data.active_source} -> #{next} (mode=#{mode})",
+        %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        }
+      )
+
+      enter_reconnecting(%{data | active_source: next})
+    end
   end
 
   # Decides whether to auto-restart the pipeline after an SDI_AUDIO_SILENT event.
@@ -461,41 +744,69 @@ defmodule Blackgate.RouteHandler do
 
         cond do
           total_buffers < @sdi_audio_min_buffers_before_restart ->
-            Logger.info("RouteHandler: SDI_AUDIO_SILENT with total_buffers=#{total_buffers} " <>
-              "(< #{@sdi_audio_min_buffers_before_restart}), source likely has no audio — skipping restart")
-            Blackgate.EventLog.log(:warning, "sdi_audio_source_silent",
-              "SDI audio silence detected but source appears to have no audio (total_buffers=#{total_buffers})", %{
-              route_id: data.id,
-              route_name: get_in(data, [:route, "name"]) || data.id
-            })
+            Logger.info(
+              "RouteHandler: SDI_AUDIO_SILENT with total_buffers=#{total_buffers} " <>
+                "(< #{@sdi_audio_min_buffers_before_restart}), source likely has no audio — skipping restart"
+            )
+
+            Blackgate.EventLog.log(
+              :warning,
+              "sdi_audio_source_silent",
+              "SDI audio silence detected but source appears to have no audio (total_buffers=#{total_buffers})",
+              %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              }
+            )
+
             data
 
           # Rule 3: Within cooldown window after a previous auto-restart
           data.sdi_audio_last_restart_at != nil and
-          System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at < @sdi_audio_restart_cooldown_ms ->
-            remaining_s = div(
-              @sdi_audio_restart_cooldown_ms - (System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at),
-              1000
+              System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at <
+                @sdi_audio_restart_cooldown_ms ->
+            remaining_s =
+              div(
+                @sdi_audio_restart_cooldown_ms -
+                  (System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at),
+                1000
+              )
+
+            Logger.warning(
+              "RouteHandler: SDI_AUDIO_SILENT within cooldown window (#{remaining_s}s remaining), " <>
+                "skipping auto-restart — manual check may be required"
             )
-            Logger.warning("RouteHandler: SDI_AUDIO_SILENT within cooldown window (#{remaining_s}s remaining), " <>
-              "skipping auto-restart — manual check may be required")
-            Blackgate.EventLog.log(:critical, "sdi_audio_desync_repeated",
+
+            Blackgate.EventLog.log(
+              :critical,
+              "sdi_audio_desync_repeated",
               "SDI audio desynced again within cooldown window (#{remaining_s}s remaining). " <>
-              "Source audio may be intermittent — manual check required.", %{
-              route_id: data.id,
-              route_name: get_in(data, [:route, "name"]) || data.id
-            })
+                "Source audio may be intermittent — manual check required.",
+              %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              }
+            )
+
             data
 
           # Rule 4: Genuine hardware embedder desync — restart the pipeline
           state == :started ->
-            Logger.warning("RouteHandler: SDI_AUDIO_SILENT on #{source_schema} source with " <>
-              "total_buffers=#{total_buffers} — triggering auto-restart for hardware desync recovery")
-            Blackgate.EventLog.log(:warning, "sdi_audio_desync_restart",
-              "SDI audio embedder desynced (total_buffers=#{total_buffers}), auto-restarting pipeline", %{
-              route_id: data.id,
-              route_name: get_in(data, [:route, "name"]) || data.id
-            })
+            Logger.warning(
+              "RouteHandler: SDI_AUDIO_SILENT on #{source_schema} source with " <>
+                "total_buffers=#{total_buffers} — triggering auto-restart for hardware desync recovery"
+            )
+
+            Blackgate.EventLog.log(
+              :warning,
+              "sdi_audio_desync_restart",
+              "SDI audio embedder desynced (total_buffers=#{total_buffers}), auto-restarting pipeline",
+              %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              }
+            )
+
             # Record timestamp BEFORE trigger_restart (which is a gen_statem state transition)
             # We embed it in data so the reconnect path carries it forward.
             # trigger_restart will call enter_reconnecting which transitions state.
@@ -514,14 +825,25 @@ defmodule Blackgate.RouteHandler do
 
   defp enter_reconnecting(data) do
     Blackgate.set_route_status(data.id, "reconnecting")
-    Blackgate.EventLog.log(:warning, "route_reconnecting", "Source disconnected, attempting reconnect...", %{
-      route_id: data.id,
-      route_name: get_in(data, [:route, "name"]) || data.id
-    })
+
+    Blackgate.EventLog.log(
+      :warning,
+      "route_reconnecting",
+      "Source disconnected, attempting reconnect...",
+      %{
+        route_id: data.id,
+        route_name: get_in(data, [:route, "name"]) || data.id
+      }
+    )
 
     {:next_state, :reconnecting,
-     %{data | port: nil, ffmpeg_port: nil, reconnect_started_at: System.monotonic_time(:millisecond), reconnect_count: 0},
-     {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+     %{
+       data
+       | port: nil,
+         ffmpeg_port: nil,
+         reconnect_started_at: System.monotonic_time(:millisecond),
+         reconnect_count: 0
+     }, {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
   end
 
   @impl true
@@ -533,12 +855,14 @@ defmodule Blackgate.RouteHandler do
     Blackgate.set_route_status(id, "stopped")
 
     route_name = get_in(data, [:route, "name"]) || id
+
     case reason do
       :shutdown ->
         Blackgate.EventLog.log(:info, "route_stopped", "Route stopped", %{
           route_id: id,
           route_name: route_name
         })
+
       _ ->
         Blackgate.EventLog.log(:critical, "route_crashed", "Route crashed: #{inspect(reason)}", %{
           route_id: id,
@@ -554,12 +878,14 @@ defmodule Blackgate.RouteHandler do
     Blackgate.set_route_status(data.id, "stopped")
 
     route_name = get_in(data, [:route, "name"]) || data.id
+
     case reason do
       :shutdown ->
         Blackgate.EventLog.log(:info, "route_stopped", "Route stopped", %{
           route_id: data.id,
           route_name: route_name
         })
+
       _ ->
         Blackgate.EventLog.log(:critical, "route_crashed", "Route crashed: #{inspect(reason)}", %{
           route_id: data.id,
@@ -802,25 +1128,30 @@ defmodule Blackgate.RouteHandler do
     else
       # Pick an available internal port for SRT loopback
       internal_port = find_available_port()
-      Logger.info("RouteHandler: Starting ffmpeg sidecar: #{url} → srt://127.0.0.1:#{internal_port}")
+
+      Logger.info(
+        "RouteHandler: Starting ffmpeg sidecar: #{url} → srt://127.0.0.1:#{internal_port}"
+      )
 
       # Spawn ffmpeg: pull source URL → remux to MPEG-TS → push SRT to internal port
       ffmpeg_cmd = build_ffmpeg_command(url, internal_port)
       Logger.info("RouteHandler: ffmpeg command: #{ffmpeg_cmd}")
 
-      ffmpeg_port = Port.open({:spawn, ffmpeg_cmd}, [
-        :stderr_to_stdout,
-        :use_stdio,
-        :binary,
-        :exit_status,
-        :stream
-      ])
+      ffmpeg_port =
+        Port.open({:spawn, ffmpeg_cmd}, [
+          :stderr_to_stdout,
+          :use_stdio,
+          :binary,
+          :exit_status,
+          :stream
+        ])
 
       # Give ffmpeg time to start listening on the SRT port
       Process.sleep(3000)
 
       # Rewrite the route to use SRT caller on the internal port
-      modified_route = route
+      modified_route =
+        route
         |> Map.put("schema", "SRT")
         |> Map.put("schema_options", %{
           "localaddress" => "127.0.0.1",
@@ -843,11 +1174,12 @@ defmodule Blackgate.RouteHandler do
 
   defp build_ffmpeg_command(url, internal_port) do
     # -reconnect flags for HTTP sources (auto-retry on disconnect)
-    reconnect_flags = if String.starts_with?(url, "http") do
-      "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
-    else
-      ""
-    end
+    reconnect_flags =
+      if String.starts_with?(url, "http") do
+        "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+      else
+        ""
+      end
 
     "ffmpeg -hide_banner -loglevel warning " <>
       "#{reconnect_flags} " <>
@@ -870,9 +1202,11 @@ defmodule Blackgate.RouteHandler do
     port = Enum.random(@internal_port_range)
 
     # Check both TCP and UDP since the loopback sidecar binds on UDP for SRT
-    with {:ok, tcp_socket} <- :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]),
+    with {:ok, tcp_socket} <-
+           :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]),
          :ok <- :gen_tcp.close(tcp_socket),
-         {:ok, udp_socket} <- :gen_udp.open(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]),
+         {:ok, udp_socket} <-
+           :gen_udp.open(port, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true]),
          :ok <- :gen_udp.close(udp_socket) do
       port
     else
@@ -954,21 +1288,21 @@ defmodule Blackgate.RouteHandler do
 
   defp diagnose_hardware_issue do
     # 1. Check if GStreamer plugin is installed
-    gst_status = 
+    gst_status =
       case System.cmd("gst-inspect-1.0", ["decklinkvideosink"], stderr_to_stdout: true) do
         {_, 0} -> :ok
         _ -> :error
       end
-    
+
     # 2. Check if DesktopVideoHelper is running
-    helper_status = 
+    helper_status =
       case System.cmd("pgrep", ["-f", "DesktopVideoHelper"]) do
         {_, 0} -> :ok
         _ -> :error
       end
-    
+
     # 3. Check if physical hardware node exists
-    dev_status = 
+    dev_status =
       case System.cmd("sh", ["-c", "ls /dev/blackmagic/io*"], stderr_to_stdout: true) do
         {_, 0} -> :ok
         _ -> :error
@@ -977,10 +1311,13 @@ defmodule Blackgate.RouteHandler do
     cond do
       gst_status != :ok ->
         "GStreamer DeckLink plugin not available. Please install the gstreamer1.0-plugins-bad package."
+
       helper_status != :ok ->
         "Blackmagic DesktopVideoHelper service is not running. Start it with '/usr/lib/blackmagic/DesktopVideo/DesktopVideoHelper -n' or via systemctl."
+
       dev_status != :ok ->
         "No Blackmagic DeckLink hardware detected (missing /dev/blackmagic/io*). Check PCIe card installation."
+
       true ->
         "SDI Pipeline failed to initialize. The DeckLink device may be occupied by another application or in an invalid video mode."
     end
