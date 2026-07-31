@@ -485,6 +485,11 @@ const RouteItem = () => {
               >
                 {statusDetails.buttonText}
               </Button>
+              {isRouteStarted && routeData.failover_enabled && (
+                <Button onClick={handleSwitchSource}>
+                  Switch to {routeData.active_source === 'primary' ? 'Secondary' : 'Primary'}
+                </Button>
+              )}
               <Button
                 icon={<CopyOutlined />}
                 onClick={async () => {
@@ -605,14 +610,6 @@ const RouteItem = () => {
             </>
           )}
         </Descriptions>
-
-        {isRouteStarted && routeData.failover_enabled && (
-          <Space style={{ marginTop: 16 }}>
-            <Button onClick={handleSwitchSource}>
-              Switch to {routeData.active_source === 'primary' ? 'Secondary' : 'Primary'}
-            </Button>
-          </Space>
-        )}
       </Card>
 
       {/* Source Statistics - Show when route is running */}
