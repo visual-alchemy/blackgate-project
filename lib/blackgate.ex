@@ -56,11 +56,23 @@ defmodule Blackgate do
   @spec switch_route_source(String.t(), String.t()) :: :ok | {:error, term()}
   def switch_route_source(id, target) do
     case get_route(id) do
-      {:ok, pid} ->
-        # Persist before cast so GET /api/routes/:id returns updated active_source
-        # immediately (frontend refetch won't see stale data).
-        _ = Db.update_route(id, %{"active_source" => target})
-        :gen_statem.cast(pid, {:switch_source, target})
+      {:ok, sup_pid} ->
+        # find the RouteHandler child pid from the supervisor
+        handler_pid =
+          sup_pid
+          |> Supervisor.which_children()
+          |> Enum.find_value(fn
+            {{:route_handler, ^id}, pid, _, _} -> pid
+            _ -> nil
+          end)
+
+        if handler_pid == nil do
+          Logger.error("RouteHandler: pid not found for route #{id}")
+          {:error, :handler_not_found}
+        else
+          _ = Db.update_route(id, %{"active_source" => target})
+          :gen_statem.cast(handler_pid, {:switch_source, target})
+        end
 
       other ->
         other
