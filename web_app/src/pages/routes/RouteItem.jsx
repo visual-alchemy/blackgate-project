@@ -311,7 +311,7 @@ const RouteItem = () => {
 
   // Switch failover source handler
   const handleSwitchSource = async () => {
-    const target = routeData.active_source === 'primary' ? 'secondary' : 'primary';
+    const target = (routeData.active_source || 'primary') === 'primary' ? 'secondary' : 'primary';
     try {
       await routesApi.switchSource(id, target);
       messageApi.success(`Switched source to ${target}`);
@@ -487,7 +487,7 @@ const RouteItem = () => {
               </Button>
               {isRouteStarted && routeData.failover_enabled && (
                 <Button onClick={handleSwitchSource}>
-                  Switch to {routeData.active_source === 'primary' ? 'Secondary' : 'Primary'}
+                   Switch to {(routeData.active_source || 'primary') === 'primary' ? 'Secondary' : 'Primary'}
                 </Button>
               )}
               <Button
@@ -603,8 +603,8 @@ const RouteItem = () => {
                 {failoverModeLabels[routeData.failover_mode] || routeData.failover_mode}
               </Descriptions.Item>
               <Descriptions.Item label="Active Source">
-                <Tag color={routeData.active_source === 'primary' ? 'blue' : 'orange'}>
-                  {routeData.active_source}
+                <Tag color={(routeData.active_source || 'primary') === 'primary' ? 'blue' : 'orange'}>
+                  {routeData.active_source || 'primary'}
                 </Tag>
               </Descriptions.Item>
             </>

@@ -62,6 +62,11 @@ defmodule Blackgate.RouteHandler do
       failover_switched: false
     }
 
+    # Backfill active_source for routes created before failover feature
+    if is_nil(route["active_source"]) do
+      Db.update_route(args.id, %{"active_source" => "primary"})
+    end
+
     {:ok, :start, data, {:next_event, :internal, :start}}
   end
 
