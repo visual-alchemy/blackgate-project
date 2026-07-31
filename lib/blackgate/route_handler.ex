@@ -610,7 +610,14 @@ defmodule Blackgate.RouteHandler do
     if data.ffmpeg_port && is_port(data.ffmpeg_port),
       do: close_port(data.ffmpeg_port)
 
-    enter_reconnecting(%{data | active_source: target, port: nil, ffmpeg_port: nil, failover_switched: false})
+    enter_reconnecting(%{
+      data
+      | active_source: target,
+        port: nil,
+        ffmpeg_port: nil,
+        failover_switched: false,
+        consecutive_startup_crashes: 0
+    })
   end
 
   # Invalid switch target — log and ignore.
