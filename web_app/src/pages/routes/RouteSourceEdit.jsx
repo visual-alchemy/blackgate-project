@@ -259,6 +259,46 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                       style={{ width: '100%' }}
                     />
                   </Form.Item>
+
+                  {/* Failover — SRT only */}
+                  <Form.Item noStyle dependencies={['schema']}>
+                    {({ getFieldValue }) =>
+                      getFieldValue('schema') === 'SRT' && (
+                        <>
+                          <Form.Item
+                            label="Failover"
+                            name="failover_enabled"
+                            valuePropName="checked"
+                            extra="Automatically switch to secondary SRT source when primary fails"
+                          >
+                            <Switch />
+                          </Form.Item>
+
+                          <Form.Item noStyle dependencies={['failover_enabled']}>
+                            {({ getFieldValue: getFF }) =>
+                              getFF('failover_enabled') && (
+                                <Form.Item
+                                  label="Failover Mode"
+                                  name="failover_mode"
+                                  rules={[{ required: true, message: 'Please select a failover mode' }]}
+                                >
+                                  <Select
+                                    options={[
+                                      { label: 'Maintain Primary', value: 'maintain-primary' },
+                                      { label: 'Maintain Stability', value: 'maintain-stability' },
+                                      { label: 'Manual Switchback', value: 'manual-switchback' },
+                                      { label: 'Manual', value: 'manual' },
+                                    ]}
+                                    style={{ width: '250px' }}
+                                  />
+                                </Form.Item>
+                              )
+                            }
+                          </Form.Item>
+                        </>
+                      )
+                    }
+                  </Form.Item>
                 </Card>
 
                 <Card title="Source Options" size="small" loading={loading}>
@@ -290,45 +330,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
                 </Card>
 
-                {/* Failover Card — visible only for SRT schema */}
-                <Form.Item noStyle dependencies={['schema']}>
-                  {({ getFieldValue }) =>
-                    getFieldValue('schema') === 'SRT' && (
-                      <Card title="Failover" size="small" loading={loading}>
-                        <Form.Item
-                          label="Enable Failover"
-                          name="failover_enabled"
-                          valuePropName="checked"
-                          extra="Automatically switch to secondary source when primary fails"
-                        >
-                          <Switch />
-                        </Form.Item>
 
-                        <Form.Item noStyle dependencies={['failover_enabled']}>
-                          {({ getFieldValue: getFF }) =>
-                            getFF('failover_enabled') && (
-                              <Form.Item
-                                label="Failover Mode"
-                                name="failover_mode"
-                                rules={[{ required: true, message: 'Please select a failover mode' }]}
-                              >
-                                <Select
-                                  options={[
-                                    { label: 'Maintain Primary', value: 'maintain-primary' },
-                                    { label: 'Maintain Stability', value: 'maintain-stability' },
-                                    { label: 'Manual Switchback', value: 'manual-switchback' },
-                                    { label: 'Manual', value: 'manual' },
-                                  ]}
-                                  style={{ width: '250px' }}
-                                />
-                              </Form.Item>
-                            )
-                          }
-                        </Form.Item>
-                      </Card>
-                    )
-                  }
-                </Form.Item>
               </Space>
 
               {id === 'new' && (
