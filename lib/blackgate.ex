@@ -57,6 +57,9 @@ defmodule Blackgate do
   def switch_route_source(id, target) do
     case get_route(id) do
       {:ok, pid} ->
+        # Persist before cast so GET /api/routes/:id returns updated active_source
+        # immediately (frontend refetch won't see stale data).
+        _ = Db.update_route(id, %{"active_source" => target})
         :gen_statem.cast(pid, {:switch_source, target})
 
       other ->
