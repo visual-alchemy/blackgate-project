@@ -90,19 +90,19 @@ defmodule Blackgate.RouteHandler do
 
         now = System.monotonic_time(:millisecond)
 
-        {:next_state, :started,
-         %{
-           data
-           | port: port,
-             ffmpeg_port: ffmpeg_port,
-             started_at: now,
-             last_bytes_changed_at: now,
-             last_sdi_frames_changed_at: now,
-             last_sdi_frames: %{},
-             consecutive_startup_crashes: 0,
-             sdi_audio_last_restart_at: nil,
-             failover_switched: false
-         }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+            {:next_state, :started,
+             %{
+               data
+               | port: port,
+                 ffmpeg_port: ffmpeg_port,
+                 started_at: now,
+                 last_bytes_changed_at: now,
+                 last_sdi_frames_changed_at: now,
+                 last_sdi_frames: %{},
+                 consecutive_startup_crashes: 0,
+                 sdi_audio_last_restart_at: nil,
+                 failover_switched: false
+             }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
@@ -447,8 +447,13 @@ defmodule Blackgate.RouteHandler do
       Logger.info("RouteHandler: Reconnect attempt ##{count} (#{div(elapsed, 1000)}s elapsed)")
 
       try do
+        # Re-fetch route from DB so destinations added/edited after route start
+        # are included in the new pipeline. The in-memory data.route is stale.
+        {:ok, fresh_route} = Db.get_route(data.id, true)
+        active_route = active_route_for_pipeline(%{data | route: fresh_route})
+
         {route_for_pipeline, ffmpeg_port} =
-          maybe_start_ffmpeg_sidecar(active_route_for_pipeline(data))
+          maybe_start_ffmpeg_sidecar(active_route)
 
         port = start_native_pipeline(route_for_pipeline)
 
@@ -471,21 +476,22 @@ defmodule Blackgate.RouteHandler do
             now = System.monotonic_time(:millisecond)
 
             {:next_state, :started,
-             %{
-               data
-               | port: port,
-                 ffmpeg_port: ffmpeg_port,
-                 reconnect_started_at: nil,
-                 reconnect_count: 0,
-                 started_at: now,
-                 last_bytes_changed_at: now,
-                 last_sdi_frames_changed_at: now,
-                 last_sdi_frames: %{},
-                 last_bytes_received: 0,
-                 consecutive_startup_crashes: 0,
-                 sdi_audio_last_restart_at: nil,
-                 failover_switched: false
-             }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+              %{
+                data
+                | route: fresh_route,
+                  port: port,
+                  ffmpeg_port: ffmpeg_port,
+                  reconnect_started_at: nil,
+                  reconnect_count: 0,
+                  started_at: now,
+                  last_bytes_changed_at: now,
+                  last_sdi_frames_changed_at: now,
+                  last_sdi_frames: %{},
+                  last_bytes_received: 0,
+                  consecutive_startup_crashes: 0,
+                  sdi_audio_last_restart_at: nil,
+                  failover_switched: false
+              }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
             if ffmpeg_port, do: close_port(ffmpeg_port)
@@ -604,7 +610,7 @@ defmodule Blackgate.RouteHandler do
     if data.ffmpeg_port && is_port(data.ffmpeg_port),
       do: close_port(data.ffmpeg_port)
 
-    enter_reconnecting(%{data | active_source: target, port: nil, ffmpeg_port: nil})
+    enter_reconnecting(%{data | active_source: target, port: nil, ffmpeg_port: nil, failover_switched: false})
   end
 
   # Invalid switch target — log and ignore.
