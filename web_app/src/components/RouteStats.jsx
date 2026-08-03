@@ -106,6 +106,11 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
     const bandwidth = (stats?.['bandwidth-mbps'] && stats['bandwidth-mbps'] > 0)
         ? stats['bandwidth-mbps']
         : (caller['bandwidth-mbps'] || 0);
+
+    const packetsReceived = stats?.['packets-received'] ?? caller['packets-received'] ?? 0;
+    const packetsLost = stats?.['packets-received-lost'] ?? caller['packets-received-lost'] ?? 0;
+    const packetsDropped = stats?.['packets-received-dropped'] ?? caller['packets-received-dropped'] ?? 0;
+
     const packetLoss = calculatePacketLoss(packetsReceived, packetsLost);
 
     const videoWidth = stats?.['video-width'] ?? null;
