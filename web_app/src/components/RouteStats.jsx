@@ -95,12 +95,17 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
     const connectedCallers = stats?.['connected-callers'] || 0;
     const totalBytes = stats?.['total-bytes-received'] || 0;
 
-    const bitrate = stats?.['receive-rate-mbps'] ?? caller['receive-rate-mbps'] ?? 0;
-    const rtt = stats?.['rtt-ms'] ?? caller['rtt-ms'] ?? 0;
-    const packetsReceived = stats?.['packets-received'] ?? caller['packets-received'] ?? 0;
-    const packetsLost = stats?.['packets-received-lost'] ?? caller['packets-received-lost'] ?? 0;
-    const packetsDropped = stats?.['packets-received-dropped'] ?? caller['packets-received-dropped'] ?? 0;
-    const bandwidth = stats?.['bandwidth-mbps'] ?? caller['bandwidth-mbps'] ?? 0;
+    const bitrate = (stats?.['receive-rate-mbps'] && stats['receive-rate-mbps'] > 0)
+        ? stats['receive-rate-mbps']
+        : (caller['receive-rate-mbps'] || 0);
+
+    const rtt = (stats?.['rtt-ms'] && stats['rtt-ms'] > 0)
+        ? stats['rtt-ms']
+        : (caller['rtt-ms'] || 0);
+
+    const bandwidth = (stats?.['bandwidth-mbps'] && stats['bandwidth-mbps'] > 0)
+        ? stats['bandwidth-mbps']
+        : (caller['bandwidth-mbps'] || 0);
     const packetLoss = calculatePacketLoss(packetsReceived, packetsLost);
 
     const videoWidth = stats?.['video-width'] ?? null;

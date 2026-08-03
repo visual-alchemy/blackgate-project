@@ -606,6 +606,10 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
             cJSON_AddNumberToObject(root, "connected-callers", num_callers);
             cJSON *callers = cJSON_AddArrayToObject(root, "callers");
 
+            gdouble max_rtt = 0.0;
+            gdouble total_receive_rate = 0.0;
+            gdouble total_bandwidth = 0.0;
+
             for (gint i = 0; i < num_callers; i++) {
                 GValue *caller_val = &callers_array->values[i];
                 if (!G_VALUE_HOLDS(caller_val, GST_TYPE_STRUCTURE)) {
@@ -631,7 +635,16 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
                     } else if (G_VALUE_HOLDS(value, G_TYPE_UINT64)) {
                         cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_uint64(value));
                     } else if (G_VALUE_HOLDS(value, G_TYPE_DOUBLE)) {
-                        cJSON_AddNumberToObject(caller, field_name, g_value_get_double(value));
+                        gdouble val = g_value_get_double(value);
+                        cJSON_AddNumberToObject(caller, field_name, val);
+
+                        if (g_strcmp0(field_name, "rtt-ms") == 0 && val > max_rtt) {
+                            max_rtt = val;
+                        } else if (g_strcmp0(field_name, "receive-rate-mbps") == 0) {
+                            total_receive_rate += val;
+                        } else if (g_strcmp0(field_name, "bandwidth-mbps") == 0) {
+                            total_bandwidth += val;
+                        }
                     } else if (G_VALUE_HOLDS(value, G_TYPE_OBJECT) && g_strcmp0(field_name, "caller-address") == 0) {
                         GObject *addr_obj = g_value_get_object(value);
                         if (G_IS_INET_SOCKET_ADDRESS(addr_obj)) {
@@ -648,6 +661,17 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
                 }
 
                 cJSON_AddItemToArray(callers, caller);
+            }
+
+            // Fallback top-level listener stats from active callers array if top-level structure returned 0
+            if (rtt_ms <= 0.0 && max_rtt > 0.0) {
+                cJSON_ReplaceItemInObject(root, "rtt-ms", cJSON_CreateNumber(max_rtt));
+            }
+            if (receive_rate_mbps <= 0.0 && total_receive_rate > 0.0) {
+                cJSON_ReplaceItemInObject(root, "receive-rate-mbps", cJSON_CreateNumber(total_receive_rate));
+            }
+            if (bandwidth_mbps <= 0.0 && total_bandwidth > 0.0) {
+                cJSON_ReplaceItemInObject(root, "bandwidth-mbps", cJSON_CreateNumber(total_bandwidth));
             }
         }
     } else {
