@@ -141,15 +141,12 @@ const RouteItem = () => {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      sorter: (a, b) => a.name.localeCompare(b.name),
+      sorter: (a, b) => (a?.name || '').localeCompare(b?.name || ''),
       render: (text, record) => (
         <Space>
           <a href={`#/routes/${id}/destinations/${record.id}/edit`}>
-            {text}
+            {text || 'Unnamed'}
           </a>
-          {/* <Tag color={record.enabled ? 'green' : 'red'}>
-            {record.enabled ? 'Active' : 'Inactive'}
-          </Tag> */}
         </Space>
       ),
     },
@@ -161,42 +158,23 @@ const RouteItem = () => {
         { text: 'SRT', value: 'SRT' },
         { text: 'Other', value: 'Other' }
       ],
-      onFilter: (value, record) => record.schema === value,
+      onFilter: (value, record) => record?.schema === value,
       render: (schema) => (
         <Tag color={schema === 'SRT' ? 'blue' : 'orange'}>
-          {schema}
+          {schema || 'N/A'}
         </Tag>
       ),
     },
-    // {
-    //   title: 'Authentication',
-    //   key: 'authentication',
-    //   filters: [
-    //     { text: 'Enabled', value: true },
-    //     { text: 'Disabled', value: false }
-    //   ],
-    //   onFilter: (value, record) => {
-    //     if (record.schema !== 'SRT') return !value;
-    //     return (record.schema_options && record.schema_options.authentication) === value;
-    //   },
-    //   render: (_, record) => {
-    //     if (record.schema !== 'SRT') return <Tag color="default">N/A</Tag>;
-    //     return record.schema_options && record.schema_options.authentication ? (
-    //       <Tag color="green">Enabled</Tag>
-    //     ) : (
-    //       <Tag color="red">Disabled</Tag>
-    //     );
-    //   },
-    // },
     {
       title: 'Destination',
       key: 'host_port',
       render: (_, record) => {
+        if (!record) return '—';
         switch (record.schema) {
           case 'SRT':
-            return (`${record.schema_options?.localaddress}:${record.schema_options?.localport}:${record.schema_options?.mode}`)
+            return `${record.schema_options?.localaddress || 'N/A'}:${record.schema_options?.localport || 'N/A'}:${record.schema_options?.mode || 'N/A'}`;
           case 'UDP':
-            return (`${record.schema_options?.host}:${record.schema_options?.port}`)
+            return `${record.schema_options?.host || record.schema_options?.address || 'N/A'}:${record.schema_options?.port || 'N/A'}`;
           case 'SDI': {
             const deviceToSdi = { 0: 1, 4: 2, 1: 3, 5: 4, 2: 5, 6: 6, 3: 7, 7: 8 };
             const port = deviceToSdi[record.schema_options?.device_number] ?? '?';
@@ -205,24 +183,26 @@ const RouteItem = () => {
             return `SDI ${port} · ${mode}`;
           }
           default:
-            return '—'
+            return '—';
         }
       },
-      sorter: (a, b) => a.port - b.port,
+      sorter: (a, b) => {
+        const aPort = a?.schema_options?.localport || a?.schema_options?.port || 0;
+        const bPort = b?.schema_options?.localport || b?.schema_options?.port || 0;
+        return aPort - bPort;
+      },
     },
     {
       title: 'Latency',
       key: 'latency',
       render: (_, record) => {
-        if (record.schema === 'SDI') return '—';
-        const latency = record.schema_options?.latency || record.latency;
+        if (record?.schema === 'SDI') return '—';
+        const latency = record?.schema_options?.latency || record?.latency;
         return latency ? `${latency}ms` : '—';
       },
       sorter: (a, b) => {
-        const aLatency = a.schema_options?.latency || a.latency;
-        const bLatency = b.schema_options?.latency || b.latency;
-        if (!aLatency) return 1;
-        if (!bLatency) return -1;
+        const aLatency = a?.schema_options?.latency || a?.latency || 0;
+        const bLatency = b?.schema_options?.latency || b?.latency || 0;
         return aLatency - bLatency;
       },
     },
@@ -230,8 +210,8 @@ const RouteItem = () => {
       title: 'Last Updated',
       dataIndex: 'updated_at',
       key: 'updated_at',
-      render: (date) => new Date(date).toLocaleString(),
-      sorter: (a, b) => new Date(a.updated_at) - new Date(b.updated_at),
+      render: (date) => date ? new Date(date).toLocaleString() : '—',
+      sorter: (a, b) => new Date(a?.updated_at || 0) - new Date(b?.updated_at || 0),
     },
     {
       title: 'Actions',
@@ -442,11 +422,15 @@ const RouteItem = () => {
     }
   };
 
-  // Filter destinations
-  const filteredDestinations = routeData?.destinations.filter(dest =>
-    (dest.name?.toLowerCase() || '').includes(destinationFilter.toLowerCase()) ||
-    (dest.host && dest.host.toLowerCase().includes(destinationFilter.toLowerCase()))
-  ) || [];
+  // Filter destinations safely
+  const filteredDestinations = (routeData?.destinations || []).filter(dest => {
+    if (!dest) return false;
+    const filter = (destinationFilter || '').toLowerCase();
+    if (!filter) return true;
+    const nameMatch = (dest.name || '').toLowerCase().includes(filter);
+    const hostMatch = (dest.host || dest.schema_options?.localaddress || dest.schema_options?.address || '').toString().toLowerCase().includes(filter);
+    return nameMatch || hostMatch;
+  });
 
   return (
     <Space
