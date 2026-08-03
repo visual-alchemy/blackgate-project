@@ -585,41 +585,66 @@ defmodule Blackgate.RouteHandler do
   # Manual source switch requested by the operator via the REST API
   # (POST /api/routes/:route_id/switch-source).
   #
-  # The operator's explicit choice must win, so this path bypasses
-  # trigger_restart/1's failure-driven chooser (choose_next_source), which would
-  # otherwise toggle or override the requested source based on failover_mode.
-  # Instead we close the live ports, persist the new active_source, and re-enter
-  # the reconnect loop; the reconnect retry starts the pipeline against the
-  # chosen source via active_route_for_pipeline/1.
+  # Dual-ingest SRT routes switch in-process: the C pipeline's dual-srtsrc bin
+  # receives a "switch-source" command over its stdin channel and re-points its
+  # ghost pad without tearing the pipeline down. This preserves all downstream
+  # SRT connections (no reconnect storm) and is the whole point of dual-ingest.
+  #
+  # Non-dual-ingest routes (no failover, non-SRT secondary) or routes whose
+  # pipeline port is not live fall back to the legacy kill/respawn path: close
+  # the ports, persist the choice, and re-enter the reconnect loop.
   def handle_event(:cast, {:switch_source, target}, _state, data)
       when target in ["primary", "secondary"] do
-    Logger.info("RouteHandler: manual source switch -> #{target} for route #{data.id}")
+    Logger.info("RouteHandler: source switch -> #{target} for route #{data.id}")
 
-    _ = Db.update_route(data.id, %{"active_source" => target})
+    if dual_ingest_eligible?(data.route) and is_port(data.port) do
+      maybe_join_or_leave_for_auto_join(data, target)
 
-    Blackgate.EventLog.log(
-      :info,
-      "failover_manual_switch",
-      "Operator switched active source to #{target}",
-      %{
-        route_id: data.id,
-        route_name: get_in(data, [:route, "name"]) || data.id
-      }
-    )
+      Port.command(
+        data.port,
+        Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
+      )
 
-    if data.port && is_port(data.port), do: close_port(data.port)
+      _ = Db.update_route(data.id, %{"active_source" => target})
 
-    if data.ffmpeg_port && is_port(data.ffmpeg_port),
-      do: close_port(data.ffmpeg_port)
+      Blackgate.EventLog.log(
+        :info,
+        "failover_inprocess_switch",
+        "Switched active source to #{target} (in-process)",
+        %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+      )
 
-    enter_reconnecting(%{
-      data
-      | active_source: target,
-        port: nil,
-        ffmpeg_port: nil,
-        failover_switched: false,
-        consecutive_startup_crashes: 0
-    })
+      {:keep_state,
+       %{
+         data
+         | active_source: target,
+           failover_switched: true,
+           consecutive_startup_crashes: 0
+       }}
+    else
+      _ = Db.update_route(data.id, %{"active_source" => target})
+
+      Blackgate.EventLog.log(
+        :info,
+        "failover_manual_switch",
+        "Manual source switch -> #{target} (kill/respawn)",
+        %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+      )
+
+      if data.port && is_port(data.port), do: close_port(data.port)
+
+      if data.ffmpeg_port && is_port(data.ffmpeg_port),
+        do: close_port(data.ffmpeg_port)
+
+      enter_reconnecting(%{
+        data
+        | active_source: target,
+          port: nil,
+          ffmpeg_port: nil,
+          failover_switched: false,
+          consecutive_startup_crashes: 0
+      })
+    end
   end
 
   # Invalid switch target — log and ignore.
@@ -652,6 +677,35 @@ defmodule Blackgate.RouteHandler do
     do: true
 
   defp secondary_source_configured?(_), do: false
+
+  # Dual-ingest eligibility: in-process source switching is only safe when the
+  # pipeline can actually receive a second SRT source. Requires failover to be
+  # active (SRT primary + configured secondary) AND the secondary itself to be
+  # SRT (so the C pipeline's dual-srtsrc bin can switch without restructure).
+  defp dual_ingest_eligible?(route) do
+    failover_active?(route) and
+      case Map.get(route, "secondary_source") do
+        %{"schema" => "SRT"} -> true
+        _ -> false
+      end
+  end
+
+  # When auto_join is false, the C pipeline did not join the secondary at
+  # startup. On an in-process switch we must tell it to join (switch to
+  # secondary) or leave (switch back to primary) explicitly. When auto_join is
+  # true, both sources are already live and only the switch-source command is
+  # needed.
+  defp maybe_join_or_leave_for_auto_join(data, target) do
+    if data.auto_join == false do
+      cmd =
+        case target do
+          "secondary" -> %{"command" => "join-secondary"}
+          "primary" -> %{"command" => "leave-secondary"}
+        end
+
+      Port.command(data.port, Jason.encode!(cmd) <> "\n")
+    end
+  end
 
   @doc false
   def active_source_from_route(route_map) when is_map(route_map) do
@@ -721,15 +775,37 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp trigger_restart(data) do
-    if data.port && is_port(data.port), do: close_port(data.port)
-    if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+    if dual_ingest_eligible?(data.route) and is_port(data.port) do
+      # In-process auto-failover: the pipeline is still alive, so just tell the
+      # C dual-srtsrc bin to point at the other source. STUB for now: naively
+      # toggles to the opposite source. Task 6 replaces this with a mode-aware
+      # evaluate_failover/1 that respects failover_mode.
+      target = if data.active_source == "primary", do: "secondary", else: "primary"
 
-    cleared = %{data | port: nil, ffmpeg_port: nil}
+      maybe_join_or_leave_for_auto_join(data, target)
 
-    if failover_active?(data.route) do
-      failover_restart(cleared)
+      Port.command(
+        data.port,
+        Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
+      )
+
+      _ = Db.update_route(data.id, %{"active_source" => target})
+
+      Blackgate.EventLog.log(
+        :warning,
+        "failover_inprocess_auto",
+        "Auto-switched to #{target} (stub engine — Task 6 refines)",
+        %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+      )
+
+      {:keep_state, %{data | active_source: target, failover_switched: true}}
     else
-      enter_reconnecting(cleared)
+      if data.port && is_port(data.port), do: close_port(data.port)
+      if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+
+      cleared = %{data | port: nil, ffmpeg_port: nil}
+
+      if failover_active?(data.route), do: failover_restart(cleared), else: enter_reconnecting(cleared)
     end
   end
 

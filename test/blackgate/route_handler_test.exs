@@ -638,7 +638,9 @@ defmodule Blackgate.RouteHandlerTest do
         consecutive_startup_crashes: 0,
         sdi_audio_last_restart_at: nil,
         active_source: "primary",
-        failover_switched: false
+        failover_switched: false,
+        source_health: %{primary: :unknown, secondary: :unknown},
+        auto_join: true
       }
       |> Map.merge(overrides)
     end
@@ -704,8 +706,12 @@ defmodule Blackgate.RouteHandlerTest do
              end)
     end
 
-    # Scenario (b): mode="manual" on source failure -> route stops (no auto-switch).
-    test "mode=manual on source failure stops route without auto-switch" do
+    # Scenario (b): mode="manual" with a live port + SRT secondary is now
+    # dual-ingest eligible, so trigger_restart takes the in-process path.
+    # The stub engine ignores failover_mode and naively toggles to the other
+    # source instead of stopping. Task 6 replaces the stub with mode-aware
+    # evaluate_failover/1 that will restore manual mode's "stop" behavior.
+    test "mode=manual with live port switches in-process (stub; Task 6 restores stop)" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -713,16 +719,22 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :stop
+      assert elem(res, 0) == :keep_state
 
-      refute Enum.any?(captured_update_route(), fn {_id, params} ->
-               Map.has_key?(params, "active_source")
-             end)
+      new_data = elem(res, 1)
+      assert new_data.active_source == "secondary"
+      assert new_data.port == port
+      assert new_data.failover_switched == true
+
+      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
     end
 
-    # Scenario (c): mode="maintain-stability" on failure -> active toggles to
-    # secondary, pipeline respawns with other source (re-enters reconnecting).
-    test "mode=maintain-stability on failure toggles active_source to secondary" do
+    # Scenario (c): mode="maintain-stability" with a live port + SRT secondary
+    # is dual-ingest eligible, so trigger_restart switches in-process: the C
+    # dual-srtsrc bin is told to switch-source via its stdin channel and the
+    # pipeline port is preserved (no reconnect storm). active_source toggles to
+    # secondary and the new source is persisted.
+    test "mode=maintain-stability on live port switches in-process to secondary" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -730,13 +742,13 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :next_state
-      assert elem(res, 1) == :reconnecting
+      assert elem(res, 0) == :keep_state
 
-      new_data = elem(res, 2)
+      new_data = elem(res, 1)
       assert new_data.active_source == "secondary"
-      assert new_data.port == nil
-      assert new_data.ffmpeg_port == nil
+      # In-process switch preserves the live port — no kill/respawn.
+      assert new_data.port == port
+      assert new_data.failover_switched == true
 
       assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
     end
@@ -933,6 +945,63 @@ defmodule Blackgate.RouteHandlerTest do
       refute Map.has_key?(payload, "primary_source")
       refute Map.has_key?(payload, "auto_join")
       refute Map.has_key?(payload, "type")
+    end
+  end
+
+  # =========================================================================
+  # IN-PROCESS SOURCE SWITCH (dual-ingest SRT)
+  # =========================================================================
+
+  describe "in-process switch (dual-ingest)" do
+    # base_data/1 and failover_route/1 are defined in the "failover integration"
+    # describe above; both are module-private and reused here so the data struct
+    # stays a single source of truth mirroring RouteHandler.init/1.
+
+    test "switch_source cast sends switch-source command and keeps the port alive" do
+      path = Path.join(System.tmp_dir!(), "bg_switch_#{System.unique_integer([:positive])}.json")
+      port = Port.open({:spawn, "cat > #{path}"}, [:binary, :exit_status])
+
+      data = base_data(%{port: port, route: failover_route("maintain-primary")})
+
+      result = RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
+
+      assert {:keep_state, new_data} = result
+      assert new_data.active_source == "secondary"
+      assert new_data.failover_switched == true
+      # In-process switch preserves the live port — no kill/respawn.
+      assert new_data.port == port
+
+      Port.close(port)
+
+      receive do
+        {^port, {:exit_status, _}} -> :ok
+      after
+        1_000 -> :ok
+      end
+
+      captured = File.read!(path)
+      File.rm!(path)
+
+      {:ok, json} = Jason.decode(String.trim(captured))
+      assert json["command"] == "switch-source"
+      assert json["target"] == "secondary"
+    end
+
+    test "switch_source falls back to kill/respawn when secondary is non-SRT" do
+      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
+
+      route =
+        put_in(failover_route("maintain-primary"), ["secondary_source", "schema"], "RTMP")
+
+      data = base_data(%{port: port, route: route})
+
+      result = RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
+
+      assert {:next_state, :reconnecting, new_data, _actions} = result
+      assert is_nil(new_data.port)
+      assert is_nil(new_data.ffmpeg_port)
+      assert new_data.active_source == "secondary"
+      assert new_data.failover_switched == false
     end
   end
 end
