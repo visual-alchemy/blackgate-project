@@ -91,12 +91,18 @@ defmodule Blackgate.UnixSockHandler do
           RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
 
         {:ok, stats} ->
-          RouteStatsRegistry.put_stats(data.route_id, stats)
-          try do
-            stats_to_metrics(stats, data)
-          rescue
-            error ->
-              Logger.error("Error processing stats: #{inspect(error)}")
+          case stats["source"] do
+            "secondary" ->
+              RouteStatsRegistry.put_secondary_stats(data.route_id, stats)
+
+            _ ->
+              RouteStatsRegistry.put_stats(data.route_id, Map.delete(stats, "source"))
+              try do
+                stats_to_metrics(stats, data)
+              rescue
+                error ->
+                  Logger.error("Error processing stats: #{inspect(error)}")
+              end
           end
         _ -> :ok
       end
@@ -127,7 +133,13 @@ defmodule Blackgate.UnixSockHandler do
           RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
 
         {:ok, stats} ->
-          RouteStatsRegistry.put_stats(route_id, stats)
+          case stats["source"] do
+            "secondary" ->
+              RouteStatsRegistry.put_secondary_stats(route_id, stats)
+
+            _ ->
+              RouteStatsRegistry.put_stats(route_id, Map.delete(stats, "source"))
+          end
         _ -> :ok
       end
     end

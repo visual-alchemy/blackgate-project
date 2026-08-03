@@ -640,7 +640,10 @@ defmodule Blackgate.RouteHandlerTest do
         active_source: "primary",
         failover_switched: false,
         source_health: %{primary: :unknown, secondary: :unknown},
-        auto_join: true
+        auto_join: true,
+        last_secondary_bytes_at: nil,
+        last_secondary_bytes_received: 0,
+        both_dead_reported: false
       }
       |> Map.merge(overrides)
     end
@@ -706,12 +709,11 @@ defmodule Blackgate.RouteHandlerTest do
              end)
     end
 
-    # Scenario (b): mode="manual" with a live port + SRT secondary is now
-    # dual-ingest eligible, so trigger_restart takes the in-process path.
-    # The stub engine ignores failover_mode and naively toggles to the other
-    # source instead of stopping. Task 6 replaces the stub with mode-aware
-    # evaluate_failover/1 that will restore manual mode's "stop" behavior.
-    test "mode=manual with live port switches in-process (stub; Task 6 restores stop)" do
+    # Scenario (b): mode="manual" with a live port + SRT secondary is
+    # dual-ingest eligible, so trigger_restart routes through evaluate_failover.
+    # The mode-aware engine treats "manual" as fully operator-driven: with no
+    # health signal forcing a switch, it holds position on primary.
+    test "mode=manual with live port: evaluate_failover no-ops on unknown health" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -722,19 +724,20 @@ defmodule Blackgate.RouteHandlerTest do
       assert elem(res, 0) == :keep_state
 
       new_data = elem(res, 1)
-      assert new_data.active_source == "secondary"
+      # manual mode + unknown health → no automatic switch
+      assert new_data.active_source == "primary"
       assert new_data.port == port
-      assert new_data.failover_switched == true
 
-      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
+      Port.close(port)
     end
 
     # Scenario (c): mode="maintain-stability" with a live port + SRT secondary
-    # is dual-ingest eligible, so trigger_restart switches in-process: the C
-    # dual-srtsrc bin is told to switch-source via its stdin channel and the
-    # pipeline port is preserved (no reconnect storm). active_source toggles to
-    # secondary and the new source is persisted.
-    test "mode=maintain-stability on live port switches in-process to secondary" do
+    # is dual-ingest eligible, so trigger_restart routes through evaluate_failover.
+    # With source_health=unknown (no stats yet) the engine has no signal to
+    # switch, so it holds position. The in-process switch path is exercised by
+    # the dedicated "failover mode engine" describe block below via
+    # evaluate_failover_for_test/1 with explicit health maps.
+    test "mode=maintain-stability on live port: no switch without health signal" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -745,12 +748,11 @@ defmodule Blackgate.RouteHandlerTest do
       assert elem(res, 0) == :keep_state
 
       new_data = elem(res, 1)
-      assert new_data.active_source == "secondary"
-      # In-process switch preserves the live port — no kill/respawn.
+      # unknown health -> engine holds position
+      assert new_data.active_source == "primary"
       assert new_data.port == port
-      assert new_data.failover_switched == true
 
-      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
+      Port.close(port)
     end
 
     # Scenario (d): maintain-primary reconnect timeout -> one-shot fallback to
@@ -1002,6 +1004,94 @@ defmodule Blackgate.RouteHandlerTest do
       assert is_nil(new_data.ffmpeg_port)
       assert new_data.active_source == "secondary"
       assert new_data.failover_switched == false
+    end
+  end
+
+  # =========================================================================
+  # 4-MODE FAILOVER ENGINE (T6 evaluate_failover/1)
+  # =========================================================================
+
+  describe "failover mode engine" do
+    defp engine_state(mode, health, active) do
+      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
+
+      base_data(%{
+        port: port,
+        route: failover_route(mode),
+        active_source: active,
+        source_health: health
+      })
+    end
+
+    test "maintain-primary: primary INVALID -> switch to secondary" do
+      data = engine_state("maintain-primary", %{primary: :invalid, secondary: :valid}, "primary")
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "secondary"
+      assert new_data.failover_switched == true
+      Port.close(data.port)
+    end
+
+    test "maintain-primary: primary VALID again -> switch back" do
+      data = engine_state("maintain-primary", %{primary: :valid, secondary: :valid}, "secondary")
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "primary"
+      Port.close(data.port)
+    end
+
+    test "maintain-stability: primary INVALID -> switch to secondary" do
+      data =
+        engine_state("maintain-stability", %{primary: :invalid, secondary: :valid}, "primary")
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "secondary"
+      Port.close(data.port)
+    end
+
+    test "maintain-stability: secondary INVALID (primary VALID) -> switch back" do
+      data =
+        engine_state("maintain-stability", %{primary: :valid, secondary: :invalid}, "secondary")
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "primary"
+      Port.close(data.port)
+    end
+
+    test "manual-switchback: primary INVALID -> switch to secondary" do
+      data =
+        engine_state("manual-switchback", %{primary: :invalid, secondary: :valid}, "primary")
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "secondary"
+      Port.close(data.port)
+    end
+
+    test "manual-switchback: primary recovers -> STAY on secondary" do
+      data =
+        engine_state("manual-switchback", %{primary: :valid, secondary: :valid}, "secondary")
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "secondary"
+      refute new_data.failover_switched
+      Port.close(data.port)
+    end
+
+    test "manual: nothing automatic even with primary INVALID" do
+      data = engine_state("manual", %{primary: :invalid, secondary: :valid}, "primary")
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "primary"
+      refute new_data.failover_switched
+      Port.close(data.port)
+    end
+
+    test "both sources invalid: hold position and latch both_dead_reported" do
+      data =
+        engine_state("maintain-stability", %{primary: :invalid, secondary: :invalid}, "primary")
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+      assert new_data.active_source == "primary"
+      assert new_data.both_dead_reported == true
+      refute new_data.failover_switched
+      Port.close(data.port)
     end
   end
 end

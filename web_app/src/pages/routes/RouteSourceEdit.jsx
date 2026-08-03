@@ -197,6 +197,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
           },
           failover_enabled: false,
           failover_mode: 'maintain-primary',
+          auto_join: true,
           active_source: 'primary',
           secondary_source: { schema: 'SRT', schema_options: {} },
           ...initialValues
@@ -277,21 +278,32 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                           <Form.Item noStyle dependencies={['failover_enabled']}>
                             {({ getFieldValue: getFF }) =>
                               getFF('failover_enabled') && (
-                                <Form.Item
-                                  label="Failover Mode"
-                                  name="failover_mode"
-                                  rules={[{ required: true, message: 'Please select a failover mode' }]}
-                                >
-                                  <Select
-                                    options={[
-                                      { label: 'Maintain Primary', value: 'maintain-primary' },
-                                      { label: 'Maintain Stability', value: 'maintain-stability' },
-                                      { label: 'Manual Switchback', value: 'manual-switchback' },
-                                      { label: 'Manual', value: 'manual' },
-                                    ]}
-                                    style={{ width: '250px' }}
-                                  />
-                                </Form.Item>
+                                <>
+                                  <Form.Item
+                                    label="Auto-Join"
+                                    name="auto_join"
+                                    valuePropName="checked"
+                                    tooltip="True: both primary and secondary always connected (zero reconnect delay, more bandwidth). False: secondary connects only when it becomes active."
+                                  >
+                                    <Switch defaultChecked />
+                                  </Form.Item>
+
+                                  <Form.Item
+                                    label="Failover Mode"
+                                    name="failover_mode"
+                                    rules={[{ required: true, message: 'Please select a failover mode' }]}
+                                  >
+                                    <Select
+                                      options={[
+                                        { label: 'Automatic - Maintain Primary', value: 'maintain-primary' },
+                                        { label: 'Automatic - Maintain Stability', value: 'maintain-stability' },
+                                        { label: 'Manual Switchback', value: 'manual-switchback' },
+                                        { label: 'Manual Failover', value: 'manual' },
+                                      ]}
+                                      style={{ width: '250px' }}
+                                    />
+                                  </Form.Item>
+                                </>
                               )
                             }
                           </Form.Item>

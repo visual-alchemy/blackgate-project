@@ -61,7 +61,10 @@ defmodule Blackgate.RouteHandler do
       active_source: "primary",
       failover_switched: false,
       source_health: %{primary: :unknown, secondary: :unknown},
-      auto_join: Map.get(route, "auto_join", true)
+      auto_join: Map.get(route, "auto_join", true),
+      last_secondary_bytes_at: nil,
+      last_secondary_bytes_received: 0,
+      both_dead_reported: false
     }
 
     # Backfill active_source for routes created before failover feature
@@ -166,6 +169,37 @@ defmodule Blackgate.RouteHandler do
           })
         end
 
+        # C dual-srtsrc bin reports per-source liveness. Drive immediate
+        # in-process failover on SOURCE_INVALID for dual-ingest routes.
+        acc =
+          if String.starts_with?(line, "SOURCE_INVALID:") do
+            [_, rest] = String.split(line, "SOURCE_INVALID:", parts: 2)
+            tag_src = rest |> String.trim() |> String.split(" ") |> hd()
+            tag = if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
+            new_acc = put_in(acc, [:source_health, tag], :invalid)
+
+            if dual_ingest_eligible?(new_acc.route) and is_port(new_acc.port) do
+              case evaluate_failover(new_acc) do
+                {:keep_state, final_data} -> final_data
+                _ -> new_acc
+              end
+            else
+              new_acc
+            end
+          else
+            acc
+          end
+
+        acc =
+          if String.starts_with?(line, "SOURCE_VALID:") do
+            [_, rest] = String.split(line, "SOURCE_VALID:", parts: 2)
+            tag_src = rest |> String.trim() |> String.split(" ") |> hd()
+            tag = if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
+            put_in(acc, [:source_health, tag], :valid)
+          else
+            acc
+          end
+
         # Detect SDI audio silence — log always, then check if we should auto-restart
         acc =
           if String.contains?(line, "SDI_AUDIO_SILENT:") do
@@ -215,8 +249,21 @@ defmodule Blackgate.RouteHandler do
     if now - data.started_at < @watchdog_grace_period_ms do
       {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
     else
-      # Get current bytes from stats registry
-      current_bytes = get_total_bytes_received(data.id)
+      # Dual-ingest routes never kill/respawn on stall — they switch sources
+      # in-process via evaluate_failover based on stats-driven health.
+      if dual_ingest_eligible?(data.route) do
+        refreshed = refresh_source_health_from_stats(data)
+
+        case evaluate_failover(refreshed) do
+          {:keep_state, new_data} ->
+            {:keep_state, new_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+
+          _ ->
+            {:keep_state, refreshed, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+        end
+      else
+        # Get current bytes from stats registry
+        current_bytes = get_total_bytes_received(data.id)
 
       # Determine if the route has an active SDI destination
       has_sdi_destination? =
@@ -332,6 +379,7 @@ defmodule Blackgate.RouteHandler do
 
           {:keep_state, updated_data,
            {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+      end
       end
     end
   end
@@ -776,29 +824,7 @@ defmodule Blackgate.RouteHandler do
 
   defp trigger_restart(data) do
     if dual_ingest_eligible?(data.route) and is_port(data.port) do
-      # In-process auto-failover: the pipeline is still alive, so just tell the
-      # C dual-srtsrc bin to point at the other source. STUB for now: naively
-      # toggles to the opposite source. Task 6 replaces this with a mode-aware
-      # evaluate_failover/1 that respects failover_mode.
-      target = if data.active_source == "primary", do: "secondary", else: "primary"
-
-      maybe_join_or_leave_for_auto_join(data, target)
-
-      Port.command(
-        data.port,
-        Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
-      )
-
-      _ = Db.update_route(data.id, %{"active_source" => target})
-
-      Blackgate.EventLog.log(
-        :warning,
-        "failover_inprocess_auto",
-        "Auto-switched to #{target} (stub engine — Task 6 refines)",
-        %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
-      )
-
-      {:keep_state, %{data | active_source: target, failover_switched: true}}
+      evaluate_failover(data)
     else
       if data.port && is_port(data.port), do: close_port(data.port)
       if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
@@ -806,6 +832,139 @@ defmodule Blackgate.RouteHandler do
       cleared = %{data | port: nil, ffmpeg_port: nil}
 
       if failover_active?(data.route), do: failover_restart(cleared), else: enter_reconnecting(cleared)
+    end
+  end
+
+  # Dual-ingest stats-driven health refresh. Pulls primary + secondary stats
+  # from RouteStatsRegistry, advances the byte-change timestamps, and writes
+  # source_health back into data. Pure except for the ETS reads; no side
+  # effects on the port or DB.
+  defp refresh_source_health_from_stats(data) do
+    primary =
+      case Blackgate.RouteStatsRegistry.get_stats(data.id) do
+        %{stats: s} when is_map(s) -> s
+        _ -> nil
+      end
+
+    secondary = Blackgate.RouteStatsRegistry.get_secondary_stats(data.id)
+    now = System.monotonic_time(:millisecond)
+
+    primary_bytes = (primary && Map.get(primary, "total-bytes-received", 0)) || 0
+    secondary_bytes = (secondary && Map.get(secondary, "total-bytes-received", 0)) || 0
+
+    last_bytes_changed_at =
+      if primary_bytes > (data.last_bytes_received || 0) do
+        now
+      else
+        data.last_bytes_changed_at
+      end
+
+    last_secondary_bytes_at =
+      if secondary_bytes > (data.last_secondary_bytes_received || 0) do
+        now
+      else
+        data.last_secondary_bytes_at
+      end
+
+    primary_health = classify_health(primary, last_bytes_changed_at, now)
+    secondary_health = classify_health(secondary, last_secondary_bytes_at, now)
+
+    %{
+      data
+      | source_health: %{primary: primary_health, secondary: secondary_health},
+        last_bytes_changed_at: last_bytes_changed_at,
+        last_bytes_received: primary_bytes,
+        last_secondary_bytes_at: last_secondary_bytes_at,
+        last_secondary_bytes_received: secondary_bytes
+    }
+  end
+
+  defp classify_health(nil, _last_seen, _now), do: :unknown
+
+  defp classify_health(stats, last_seen, now) when is_map(stats) do
+    bytes = Map.get(stats, "total-bytes-received", 0)
+
+    cond do
+      bytes == 0 -> :invalid
+      last_seen && now - last_seen > @watchdog_stall_threshold_ms -> :invalid
+      true -> :valid
+    end
+  end
+
+  defp classify_health(_other, _last_seen, _now), do: :unknown
+
+  # 4-mode failover decision engine for dual-ingest SRT routes.
+  #
+  # Modes:
+  #   maintain-primary   — prefer primary; switch away only when it dies,
+  #                        switch back as soon as it recovers.
+  #   maintain-stability — prefer the current source; switch only when it dies
+  #                        AND the other is healthy.
+  #   manual-switchback  — one-way automatic switch on failure; never switch
+  #                        back without operator action.
+  #   manual             — no automatic switching at all.
+  #
+  # When both sources are invalid the engine holds position and logs once
+  # (both_dead_reported latch) to avoid log spam; the latch clears as soon as
+  # any source recovers or a switch succeeds.
+  defp evaluate_failover(data) do
+    mode = Map.get(data.route, "failover_mode", "manual")
+    h = data.source_health
+
+    if h[:primary] == :invalid and h[:secondary] == :invalid do
+      unless data.both_dead_reported do
+        Blackgate.EventLog.log(
+          :error,
+          "failover_both_invalid",
+          "Both primary and secondary sources are invalid",
+          %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+        )
+      end
+
+      {:keep_state, %{data | both_dead_reported: true}}
+    else
+      desired =
+        case {data.active_source, mode} do
+          {"primary", m} when m in ["maintain-primary", "maintain-stability", "manual-switchback"] ->
+            if h[:primary] == :invalid, do: "secondary"
+
+          {"secondary", "maintain-primary"} ->
+            if h[:primary] == :valid, do: "primary"
+
+          {"secondary", "maintain-stability"} ->
+            if h[:secondary] == :invalid and h[:primary] == :valid, do: "primary"
+
+          {"secondary", "manual-switchback"} ->
+            nil
+
+          _ ->
+            nil
+        end
+
+      case desired do
+        nil ->
+          {:keep_state, %{data | both_dead_reported: false}}
+
+        target ->
+          maybe_join_or_leave_for_auto_join(data, target)
+
+          Port.command(
+            data.port,
+            Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
+          )
+
+          _ = Db.update_route(data.id, %{"active_source" => target})
+
+          Blackgate.EventLog.log(
+            :warning,
+            "failover_auto",
+            "Auto-switched to #{target} (mode=#{mode})",
+            %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+          )
+
+          {:keep_state,
+           %{data | active_source: target, failover_switched: true, both_dead_reported: false}}
+      end
     end
   end
 
@@ -1488,5 +1647,10 @@ defmodule Blackgate.RouteHandler do
       true ->
         "SDI Pipeline failed to initialize. The DeckLink device may be occupied by another application or in an invalid video mode."
     end
+  end
+
+  if Mix.env() == :test do
+    @doc false
+    def evaluate_failover_for_test(data), do: evaluate_failover(data)
   end
 end

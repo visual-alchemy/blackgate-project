@@ -191,6 +191,38 @@ defmodule Blackgate.RouteStatsRegistry do
   end
 
   @doc """
+  Store secondary-source stats for a dual-ingest route.
+  Keyed under {:secondary, route_id} so it never collides with the primary
+  stats slot. Broadcasts a {:stats_update, %{secondary_source_stats: stats}}
+  tuple on the route stats PubSub topic so the React client can render
+  secondary telemetry independently from the primary.
+  """
+  def put_secondary_stats(route_id, stats) when is_binary(route_id) and is_map(stats) do
+    updated_at = System.system_time(:millisecond)
+    :ets.insert(@table_name, {{:secondary, route_id}, stats, updated_at})
+
+    Phoenix.PubSub.broadcast(
+      Blackgate.PubSub,
+      "route:stats:#{route_id}",
+      {:stats_update, %{secondary_source_stats: stats, updated_at: updated_at}}
+    )
+
+    :ok
+  end
+
+  @doc """
+  Get secondary-source stats for a route. Returns the raw stats map or nil.
+  Unlike get_stats/1, this returns the bare map (no wrapping) because
+  secondary stats skip the SDI-drop / health-evaluation pipeline.
+  """
+  def get_secondary_stats(route_id) when is_binary(route_id) do
+    case :ets.lookup(@table_name, {:secondary, route_id}) do
+      [{{:secondary, ^route_id}, stats, _timestamp}] -> stats
+      [] -> nil
+    end
+  end
+
+  @doc """
   Delete stats for a route. Called when route stops.
   """
   def delete_stats(route_id) when is_binary(route_id) do
