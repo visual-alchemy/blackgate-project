@@ -56,9 +56,20 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def show(conn, %{"id" => id}) do
-    # :timer.sleep(1500)
-    {:ok, route} = Db.get_route(id, true)
-    data(conn, route)
+    case Db.get_route(id, true) do
+      {:ok, nil} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Route not found"})
+
+      {:ok, route} ->
+        data(conn, route)
+
+      {:error, reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: inspect(reason)})
+    end
   end
 
   def update(conn, %{"id" => id, "route" => route_params}) do
