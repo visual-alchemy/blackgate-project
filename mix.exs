@@ -118,6 +118,9 @@ defmodule Blackgate.MixProject do
     IO.puts("Building and copying web app to release...")
 
     web_app_dir = "web_app"
+    File.rm_rf!(Path.join(web_app_dir, "dist"))
+    File.rm_rf!(Path.join([web_app_dir, "node_modules", ".vite"]))
+
     IO.puts("Building web app with npm run build...")
 
     {build_result, build_exit_code} = System.cmd("npm", ["run", "build"], cd: web_app_dir)
@@ -136,6 +139,7 @@ defmodule Blackgate.MixProject do
     app_dir = Path.join([release.path, "lib", "blackgate-#{release.version}"])
     web_app_dest = Path.join(app_dir, "priv/static")
 
+    File.rm_rf!(web_app_dest)
     File.mkdir_p!(web_app_dest)
 
     web_app_source
