@@ -791,4 +791,148 @@ defmodule Blackgate.RouteHandlerTest do
       assert elem(res, 0) == :stop
     end
   end
+
+  # =========================================================================
+  # DUAL-SOURCE INIT PAYLOAD (send_initial_command)
+  # =========================================================================
+
+  describe "send_initial_command dual-source payload" do
+    # Spawns a real port that redirects stdin to a temp file so we can inspect
+    # the JSON bytes that RouteHandler.send_initial_command emits.
+    defp capture_port(path) do
+      Port.open({:spawn, "cat > #{path}"}, [:binary, :exit_status])
+    end
+
+    defp read_and_cleanup(path) do
+      captured = File.read!(path)
+      File.rm!(path)
+      captured
+    end
+
+    defp failover_route_with_sinks do
+      %{
+        "id" => "test_route_failover",
+        "name" => "Failover Route",
+        "schema" => "SRT",
+        "schema_options" => %{
+          "localaddress" => "primary-host",
+          "localport" => 4201,
+          "mode" => "listener"
+        },
+        "destinations" => [
+          %{
+            "schema" => "SRT",
+            "schema_options" => %{
+              "localaddress" => "127.0.0.1",
+              "localport" => 4202,
+              "mode" => "listener"
+            }
+          }
+        ],
+        "failover_enabled" => true,
+        "failover_mode" => "maintain-stability",
+        "secondary_source" => %{
+          "schema" => "SRT",
+          "schema_options" => %{
+            "localaddress" => "secondary-host",
+            "localport" => 9999,
+            "mode" => "caller"
+          }
+        },
+        "auto_join" => true
+      }
+    end
+
+    defp plain_route do
+      %{
+        "id" => "test_route_plain",
+        "schema" => "SRT",
+        "schema_options" => %{
+          "localaddress" => "127.0.0.1",
+          "localport" => 4201,
+          "mode" => "listener"
+        },
+        "destinations" => [
+          %{
+            "schema" => "SRT",
+            "schema_options" => %{
+              "localaddress" => "127.0.0.1",
+              "localport" => 4202,
+              "mode" => "listener"
+            }
+          }
+        ]
+      }
+    end
+
+    test "send_initial_command emits dual-source JSON for failover route" do
+      path = Path.join(System.tmp_dir!(), "bg_init_#{System.unique_integer([:positive])}.json")
+      port = capture_port(path)
+      route = failover_route_with_sinks()
+
+      assert :ok = RouteHandler.send_initial_command(port, route)
+
+      Port.close(port)
+
+      receive do
+        {^port, {:exit_status, _}} -> :ok
+      after
+        1_000 -> :ok
+      end
+
+      captured = read_and_cleanup(path)
+      assert is_binary(captured)
+      assert String.ends_with?(captured, "\n")
+
+      {:ok, payload} = captured |> String.trim_trailing("\n") |> Jason.decode()
+
+      assert payload["type"] == "init"
+      assert payload["route_id"] == "test_route_failover"
+      assert Map.has_key?(payload, "primary_source")
+      assert Map.has_key?(payload, "secondary_source")
+
+      assert is_map(payload["primary_source"])
+      assert payload["primary_source"]["type"] == "srtsrc"
+      assert payload["primary_source"]["uri"] =~ "primary-host"
+
+      assert is_map(payload["secondary_source"])
+      assert payload["secondary_source"]["type"] == "srtsrc"
+      assert payload["secondary_source"]["uri"] =~ "secondary-host"
+
+      assert payload["auto_join"] == true
+      assert is_list(payload["sinks"])
+      refute Map.has_key?(payload, "source")
+    end
+
+    test "send_initial_command emits legacy source-only JSON for non-failover route" do
+      path = Path.join(System.tmp_dir!(), "bg_init_#{System.unique_integer([:positive])}.json")
+      port = capture_port(path)
+      route = plain_route()
+
+      assert :ok = RouteHandler.send_initial_command(port, route)
+
+      Port.close(port)
+
+      receive do
+        {^port, {:exit_status, _}} -> :ok
+      after
+        1_000 -> :ok
+      end
+
+      captured = read_and_cleanup(path)
+      assert is_binary(captured)
+      assert String.ends_with?(captured, "\n")
+
+      {:ok, payload} = captured |> String.trim_trailing("\n") |> Jason.decode()
+
+      assert Map.has_key?(payload, "source")
+      assert is_map(payload["source"])
+      assert payload["source"]["type"] == "srtsrc"
+      assert is_list(payload["sinks"])
+      refute Map.has_key?(payload, "secondary_source")
+      refute Map.has_key?(payload, "primary_source")
+      refute Map.has_key?(payload, "auto_join")
+      refute Map.has_key?(payload, "type")
+    end
+  end
 end

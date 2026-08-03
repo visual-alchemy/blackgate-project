@@ -59,7 +59,9 @@ defmodule Blackgate.RouteHandler do
       # Used to enforce a cooldown and prevent restart loops.
       sdi_audio_last_restart_at: nil,
       active_source: "primary",
-      failover_switched: false
+      failover_switched: false,
+      source_health: %{primary: :unknown, secondary: :unknown},
+      auto_join: Map.get(route, "auto_join", true)
     }
 
     # Backfill active_source for routes created before failover feature
@@ -985,13 +987,38 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  defp send_initial_command(port, route) when is_map(route) do
+  def send_initial_command(port, route) when is_map(route) do
     with {:ok, source} <- source_from_record(route),
-         {:ok, sinks} <- sinks_from_record(route),
-         {:ok, params} <- Jason.encode(%{"source" => source, "sinks" => sinks}),
-         true <- Port.command(port, params <> "\n") do
-      Logger.info("RouteHandler: sent initial command")
-      :ok
+         {:ok, sinks} <- sinks_from_record(route) do
+      payload =
+        if failover_active?(route) do
+          case secondary_source_from_record(route) do
+            {:ok, secondary} ->
+              %{
+                "type" => "init",
+                "route_id" => route["id"],
+                "primary_source" => source,
+                "secondary_source" => secondary,
+                "auto_join" => Map.get(route, "auto_join", true),
+                "sinks" => sinks
+              }
+
+            {:error, _} ->
+              %{"source" => source, "sinks" => sinks}
+          end
+        else
+          %{"source" => source, "sinks" => sinks}
+        end
+
+      with {:ok, params} <- Jason.encode(payload),
+           true <- Port.command(port, params <> "\n") do
+        Logger.info("RouteHandler: sent initial command")
+        :ok
+      else
+        error ->
+          Logger.error("RouteHandler: send_initial_command failed: #{inspect(error)}")
+          {:error, error}
+      end
     else
       error ->
         Logger.error("RouteHandler: send_initial_command failed: #{inspect(error)}")
@@ -1309,6 +1336,13 @@ defmodule Blackgate.RouteHandler do
   end
 
   def source_from_record(_), do: {:error, :invalid_source}
+
+  defp secondary_source_from_record(%{
+         "secondary_source" => %{"schema" => "SRT", "schema_options" => opts}
+       }),
+       do: source_from_record(%{"schema" => "SRT", "schema_options" => opts})
+
+  defp secondary_source_from_record(_), do: {:error, :no_srt_secondary}
 
   # Helper Functions
 
