@@ -480,6 +480,16 @@ static int sink_count = 0;
 // Store tee element for video caps query
 static GstElement *tee_element = NULL;
 
+// Dual-ingest (input-selector) state — populated when secondary_source JSON present.
+// T3 reads selector_element/primary_sink_pad/secondary_sink_pad to switch active pad.
+static GstElement *selector_element = NULL;
+static GstElement *primary_source_element = NULL;
+static GstElement *secondary_source_element = NULL;
+static GstPad *primary_sink_pad = NULL;
+static GstPad *secondary_sink_pad = NULL;
+static gboolean dual_ingest_active = FALSE;
+static gboolean auto_join_enabled = TRUE;
+
 // Thumbnail capture state
 static GstElement *thumbnail_appsink = NULL;
 static pthread_t thumbnail_thread;
@@ -1615,6 +1625,57 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
     }
 }
 
+// Build a single source element from its JSON config. Mirrors the source setup
+// historically inlined in create_pipeline (type lookup → factory make →
+// set_element_properties → SDI do-timestamp → srtsrc caller-connecting signal).
+// `name` becomes both the GstElement name and the user_data passed to
+// on_caller_connecting so T3 can attribute health to primary vs secondary.
+static GstElement *make_source(cJSON *source_obj, const char *name, cJSON *sinks_array)
+{
+    cJSON *source_type = cJSON_GetObjectItem(source_obj, "type");
+    if (!cJSON_IsString(source_type)) {
+        g_printerr("Invalid source config: missing or invalid 'type' in %s\n", name);
+        return NULL;
+    }
+
+    GstElement *src = gst_element_factory_make(source_type->valuestring, name);
+    if (!src) {
+        g_printerr("Failed to create %s source element (type: %s)\n", name, source_type->valuestring);
+        return NULL;
+    }
+
+    g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(src), G_OBJECT_TYPE_NAME(src));
+
+    set_element_properties(src, source_obj, source_type->valuestring, "type");
+
+    gboolean has_sdi_sink = FALSE;
+    if (cJSON_IsArray(sinks_array)) {
+        cJSON *sink_item;
+        cJSON_ArrayForEach(sink_item, sinks_array) {
+            cJSON *sink_type = cJSON_GetObjectItem(sink_item, "type");
+            if (sink_type && cJSON_IsString(sink_type) &&
+                strcmp(sink_type->valuestring, "sdisink") == 0) {
+                has_sdi_sink = TRUE;
+                break;
+            }
+        }
+    }
+
+    if (has_sdi_sink) {
+        g_object_set(src, "do-timestamp", TRUE, NULL);
+        g_print("Set do-timestamp=TRUE for %s source element (SDI playout detected)\n", name);
+    } else {
+        g_object_set(src, "do-timestamp", FALSE, NULL);
+        g_print("Set do-timestamp=FALSE for %s source element (pure passthrough)\n", name);
+    }
+
+    if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
+        g_signal_connect(src, "caller-connecting", G_CALLBACK(on_caller_connecting), (gpointer)name);
+    }
+
+    return src;
+}
+
 // =============================================================================
 // Pipeline Creation
 // =============================================================================
@@ -1630,73 +1691,124 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         global_route_id[0] = '\0';
     }
 
-    cJSON *source_obj = cJSON_GetObjectItem(json, "source");
+    // Normalize source JSON: prefer "primary_source", fall back to legacy "source".
+    cJSON *source_obj = cJSON_GetObjectItem(json, "primary_source");
+    if (!cJSON_IsObject(source_obj)) {
+        source_obj = cJSON_GetObjectItem(json, "source");
+    }
+    cJSON *secondary_obj = cJSON_GetObjectItem(json, "secondary_source");
     cJSON *sinks_array = cJSON_GetObjectItem(json, "sinks");
 
     if (!cJSON_IsObject(source_obj) || !cJSON_IsArray(sinks_array)) {
-        g_printerr("Invalid JSON format: missing 'source' object or 'sinks' array\n");
+        g_printerr("Invalid JSON format: missing source object or 'sinks' array\n");
         return NULL;
     }
 
-    cJSON *source_type = cJSON_GetObjectItem(source_obj, "type");
-    if (!cJSON_IsString(source_type)) {
-        g_printerr("Invalid JSON format: missing or invalid 'type' in source\n");
-        return NULL;
-    }
+    // Dual-ingest activates iff a secondary_source object is present.
+    dual_ingest_active = cJSON_IsObject(secondary_obj);
+
+    // auto_join defaults TRUE; set FALSE to hold secondary at NULL after build.
+    cJSON *auto_join_json = cJSON_GetObjectItem(json, "auto_join");
+    auto_join_enabled = auto_join_json ? cJSON_IsTrue(auto_join_json) : TRUE;
 
     pipeline = gst_pipeline_new("test-pipeline");
-    source = gst_element_factory_make(source_type->valuestring, "source");
     tee = gst_element_factory_make("tee", "tee");
 
-    if (!pipeline || !source || !tee) {
-        g_printerr("Failed to create elements\n");
+    if (!pipeline || !tee) {
+        g_printerr("Failed to create pipeline or tee element\n");
         return NULL;
     }
 
     g_object_set(tee, "allow-not-linked", TRUE, NULL);
     g_print("Set allow-not-linked=TRUE for tee element\n");
 
-    g_print("Created source element: %s (type: %s)\n", GST_ELEMENT_NAME(source), G_OBJECT_TYPE_NAME(source));
-
-    set_element_properties(source, source_obj, source_type->valuestring, "type");
-
-    // If SDI destination is present, enable do-timestamp=TRUE to align timestamps
-    // with local clock and avoid "too late" drops in decklinkaudiosink.
-    // Otherwise, keep do-timestamp=FALSE for pure MPEG-TS passthrough to avoid
-    // corrupting PES packet structures.
-    gboolean has_sdi_sink = FALSE;
-    if (cJSON_IsArray(sinks_array)) {
-        cJSON *sink_item;
-        cJSON_ArrayForEach(sink_item, sinks_array) {
-            cJSON *sink_type = cJSON_GetObjectItem(sink_item, "type");
-            if (sink_type && cJSON_IsString(sink_type) && strcmp(sink_type->valuestring, "sdisink") == 0) {
-                has_sdi_sink = TRUE;
-                break;
-            }
-        }
-    }
-
-    if (has_sdi_sink) {
-        g_object_set(source, "do-timestamp", TRUE, NULL);
-        g_print("Set do-timestamp=TRUE for source element (SDI playout detected)\n");
-    } else {
-        g_object_set(source, "do-timestamp", FALSE, NULL);
-        g_print("Set do-timestamp=FALSE for source element (pure passthrough)\n");
-    }
-
-    if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
-        // Signal for logging incoming connections
-        g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
-    }
-
-    // ULTRA-SIMPLE PIPELINE: source -> tee (no queues, no processing)
-    gst_bin_add_many(GST_BIN(pipeline), source, tee, NULL);
-    if (!gst_element_link(source, tee)) {
-        g_printerr("Elements could not be linked.\n");
+    primary_source_element = make_source(source_obj, "source", sinks_array);
+    if (!primary_source_element) {
         gst_object_unref(pipeline);
+        gst_object_unref(tee);
         return NULL;
     }
-    g_print("ULTRA-SIMPLE Pipeline: source -> tee (no intermediate processing)\n");
+    // Alias so the existing stats thread + print_stats(source) keep working.
+    source = primary_source_element;
+    source_element = primary_source_element;
+
+    if (dual_ingest_active) {
+        // =================================================================
+        // DUAL-INGEST: primary + secondary → input-selector → tee
+        // =================================================================
+        selector_element = gst_element_factory_make("input-selector", "input-selector");
+        secondary_source_element = make_source(secondary_obj, "secondary_source", sinks_array);
+
+        if (!selector_element || !secondary_source_element) {
+            g_printerr("Failed to create input-selector or secondary source for dual-ingest\n");
+            if (selector_element) gst_object_unref(selector_element);
+            if (secondary_source_element) gst_object_unref(secondary_source_element);
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        // sync-mode=1 (SYNC_ACTIVE), cache-buffers + drop-backwards for clean failover.
+        g_object_set(selector_element,
+                     "sync-mode", 1,
+                     "cache-buffers", TRUE,
+                     "drop-backwards", TRUE,
+                     NULL);
+
+        gst_bin_add_many(GST_BIN(pipeline),
+                         primary_source_element, secondary_source_element,
+                         selector_element, tee, NULL);
+
+        // Request sink pads sink_0 (primary), sink_1 (secondary).
+        primary_sink_pad = gst_element_request_pad_simple(selector_element, "sink_%u");
+        secondary_sink_pad = gst_element_request_pad_simple(selector_element, "sink_%u");
+        if (!primary_sink_pad || !secondary_sink_pad) {
+            g_printerr("Failed to request sink pads on input-selector\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        // MANDATORY: always-ok=TRUE keeps inactive srtsrc alive — without it the
+        // inactive pad returns GST_FLOW_NOT_LINKED and the srtsrc task dies.
+        g_object_set(G_OBJECT(primary_sink_pad), "always-ok", TRUE, NULL);
+        g_object_set(G_OBJECT(secondary_sink_pad), "always-ok", TRUE, NULL);
+
+        GstPad *primary_src_pad = gst_element_get_static_pad(primary_source_element, "src");
+        GstPad *secondary_src_pad = gst_element_get_static_pad(secondary_source_element, "src");
+        if (gst_pad_link(primary_src_pad, primary_sink_pad) != GST_PAD_LINK_OK) {
+            g_printerr("DUAL-INGEST: failed to link primary source → selector sink_0\n");
+        }
+        if (gst_pad_link(secondary_src_pad, secondary_sink_pad) != GST_PAD_LINK_OK) {
+            g_printerr("DUAL-INGEST: failed to link secondary source → selector sink_1\n");
+        }
+        gst_object_unref(primary_src_pad);
+        gst_object_unref(secondary_src_pad);
+
+        if (!gst_element_link(selector_element, tee)) {
+            g_printerr("DUAL-INGEST: failed to link input-selector → tee\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+
+        // active-pad takes GstPad*, not string — fetch sink_0 explicitly.
+        GstPad *active_pad = gst_element_get_static_pad(selector_element, "sink_0");
+        if (active_pad) {
+            g_object_set(selector_element, "active-pad", active_pad, NULL);
+            gst_object_unref(active_pad);
+        }
+
+        g_print("DUAL-INGEST Pipeline: primary+secondary → input-selector → tee\n");
+    } else {
+        // =================================================================
+        // SINGLE-SOURCE (legacy): source → tee
+        // =================================================================
+        gst_bin_add_many(GST_BIN(pipeline), primary_source_element, tee, NULL);
+        if (!gst_element_link(primary_source_element, tee)) {
+            g_printerr("Elements could not be linked.\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+        g_print("ULTRA-SIMPLE Pipeline: source -> tee (no intermediate processing)\n");
+    }
 
     // Reset video info for new pipeline
     pthread_mutex_lock(&video_info.mutex);
@@ -1761,6 +1873,13 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     running = TRUE;
     if (pthread_create(&stats_thread, NULL, print_stats, source) != 0) {
         g_printerr("Failed to create stats thread\n");
+    }
+
+    // auto_join=false: hold secondary at NULL so it does not connect until T3
+    // explicitly raises it via join_secondary(). Primary still plays.
+    if (dual_ingest_active && !auto_join_enabled && secondary_source_element) {
+        gst_element_set_state(secondary_source_element, GST_STATE_NULL);
+        g_print("DUAL-INGEST: secondary held at NULL (auto_join=false)\n");
     }
 
     return pipeline;
@@ -2242,4 +2361,30 @@ void cleanup_pipeline(GstElement *pipeline)
         g_main_loop_unref(loop);
         loop = NULL;
     }
+}
+
+// Runtime command interface (T2 stubs; T3 fills handle_command_line).
+static GMainLoop *run_loop = NULL;
+
+void set_main_loop(GMainLoop *l)
+{
+    run_loop = l;
+}
+
+void handle_command_line(const char *line)
+{
+    (void)line; /* T3 fills this */
+}
+
+void switch_source(const char *target)
+{
+    (void)target;
+}
+
+void join_secondary(void)
+{
+}
+
+void leave_secondary(void)
+{
 }
