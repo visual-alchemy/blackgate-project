@@ -287,10 +287,29 @@ const RouteItem = () => {
     }
   };
 
-  if (loading || !routeData) {
+  if (loading) {
     return (
       <div style={{ padding: '24px' }}>
         <Card loading={true} />
+      </div>
+    );
+  }
+
+  if (!routeData) {
+    return (
+      <div style={{ padding: '24px' }}>
+        {contextHolder}
+        <Alert
+          message="Route Not Found"
+          description="The requested route could not be found or may have been deleted."
+          type="error"
+          showIcon
+          action={
+            <Button type="primary" onClick={() => navigate('/routes')}>
+              Back to Routes
+            </Button>
+          }
+        />
       </div>
     );
   }
