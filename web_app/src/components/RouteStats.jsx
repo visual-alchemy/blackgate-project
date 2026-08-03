@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Statistic, Row, Col, Table, Typography, Tag, Spin, Empty, Alert } from 'antd';
+import { Card, Statistic, Row, Col, Table, Typography, Tag, Empty, Alert, Space } from 'antd';
 import {
     ArrowUpOutlined,
     ArrowDownOutlined,
@@ -8,7 +8,7 @@ import {
     SyncOutlined,
     VideoCameraOutlined,
     FieldTimeOutlined
-} from '@ant-design/icons'
+} from '@ant-design/icons';
 import { useRouteStats } from '../hooks/useRouteStats';
 import HealthBadge from './HealthBadge';
 
@@ -57,7 +57,6 @@ const formatFramerate = (num, den, isInferred = false) => {
     if (!num || !den || den === 0) return 'N/A';
     const fps = num / den;
     const prefix = isInferred ? '~' : '';
-    // Round to 2 decimal places, but show as integer if it's a whole number
     if (Number.isInteger(fps)) return `${prefix}${fps} fps`;
     return `${prefix}${fps.toFixed(2)} fps`;
 };
@@ -74,23 +73,28 @@ const formatScanType = (interlaceMode) => {
     return { label: '?', full: interlaceMode, color: 'default' };
 };
 
-const RouteStats = ({ routeId, isRunning }) => {
-    // Live stats via WebSocket — no polling needed
-    const { stats, health } = useRouteStats(routeId, isRunning);
-    const [lastUpdated] = useState(null); // kept for layout compat; WS updates are immediate
-
-    if (!isRunning) {
-        return null;
+const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive = true }) => {
+    if (!stats) {
+        return (
+            <Card
+                size="small"
+                title={
+                    <Space>
+                        <Tag color={tagColor}>{sourceTitle}</Tag>
+                        <Tag color={isActive ? 'green' : 'default'}>{isActive ? 'ACTIVE (LIVE)' : 'STANDBY'}</Tag>
+                    </Space>
+                }
+                style={{ marginBottom: 16 }}
+            >
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`No live statistics reported for ${sourceTitle}`} />
+            </Card>
+        );
     }
 
-
-    // Get stats - use top-level stats (works for both caller and listener modes)
-    // Fall back to first caller if top-level stats are not available
     const caller = stats?.callers?.[0] || {};
     const connectedCallers = stats?.['connected-callers'] || 0;
     const totalBytes = stats?.['total-bytes-received'] || 0;
 
-    // Use top-level stats first (available in caller mode), fallback to caller array (listener mode)
     const bitrate = stats?.['receive-rate-mbps'] ?? caller['receive-rate-mbps'] ?? 0;
     const rtt = stats?.['rtt-ms'] ?? caller['rtt-ms'] ?? 0;
     const packetsReceived = stats?.['packets-received'] ?? caller['packets-received'] ?? 0;
@@ -99,7 +103,6 @@ const RouteStats = ({ routeId, isRunning }) => {
     const bandwidth = stats?.['bandwidth-mbps'] ?? caller['bandwidth-mbps'] ?? 0;
     const packetLoss = calculatePacketLoss(packetsReceived, packetsLost);
 
-    // Video metadata from caps
     const videoWidth = stats?.['video-width'] ?? null;
     const videoHeight = stats?.['video-height'] ?? null;
     const fpsNum = stats?.['video-framerate-num'] ?? null;
@@ -108,100 +111,111 @@ const RouteStats = ({ routeId, isRunning }) => {
     const interlaceMode = stats?.['video-interlace-mode'] ?? null;
     const scanType = formatScanType(interlaceMode);
 
-    // Connected callers table columns
-    const callerColumns = [
-        {
-            title: 'Address',
-            dataIndex: 'caller-address',
-            key: 'address',
-            render: (addr) => <Tag color="blue">{addr || 'Unknown'}</Tag>,
-        },
-        {
-            title: 'Latency',
-            dataIndex: 'negotiated-latency-ms',
-            key: 'latency',
-            render: (val) => `${val || 0} ms`,
-        },
-        {
-            title: 'Bitrate',
-            dataIndex: 'receive-rate-mbps',
-            key: 'bitrate',
-            render: (val) => formatMbps(val),
-        },
-        {
-            title: 'RTT',
-            dataIndex: 'rtt-ms',
-            key: 'rtt',
-            render: (val) => `${val?.toFixed ? val.toFixed(2) : val || 0} ms`,
-        },
-        {
-            title: 'Packet Loss',
-            key: 'loss',
-            render: (_, record) => {
-                const loss = calculatePacketLoss(
-                    record['packets-received'],
-                    record['packets-received-lost']
-                );
-                return (
-                    <Tag color={parseFloat(loss) > 5 ? 'red' : parseFloat(loss) > 1 ? 'orange' : 'green'}>
-                        {loss}%
-                    </Tag>
-                );
-            },
-        },
-        {
-            title: 'Bytes Received',
-            dataIndex: 'bytes-received',
-            key: 'bytes',
-            render: (val) => formatBytes(val),
-        },
-    ];
+    const statisticStyle = { fontSize: 14 };
 
-    // SDI Playout stats table columns
-    const sdiColumns = [
-        {
-            title: 'Device',
-            dataIndex: 'device_number',
-            key: 'device_number',
-            render: (num) => <Tag color="purple">SDI {num}</Tag>,
-        },
-        {
-            title: 'Cumulative Drops',
-            dataIndex: 'dropped_frames',
-            key: 'dropped_frames',
-            render: (val) => `${val || 0}`,
-        },
-        {
-            title: 'Drops / Sec',
-            dataIndex: 'drops_per_sec',
-            key: 'drops_per_sec',
-            render: (val) => (
-                <Tag color={val > 5 ? 'red' : val > 1 ? 'orange' : 'green'}>
-                    {val || 0} fps
-                </Tag>
-            ),
-        },
-        {
-            title: 'Cumulative Dups',
-            dataIndex: 'duplicated_frames',
-            key: 'duplicated_frames',
-            render: (val) => `${val || 0}`,
-        },
-        {
-            title: 'Dups / Sec',
-            dataIndex: 'duplicates_per_sec',
-            key: 'duplicates_per_sec',
-            render: (val) => (
-                <Tag color={val > 5 ? 'red' : val > 1 ? 'orange' : 'green'}>
-                    {val || 0} fps
-                </Tag>
-            ),
-        },
-    ];
+    return (
+        <Card
+            size="small"
+            title={
+                <Space>
+                    <Tag color={tagColor}>{sourceTitle}</Tag>
+                    <Tag color={isActive ? 'green' : 'default'}>{isActive ? 'ACTIVE (LIVE)' : 'STANDBY'}</Tag>
+                </Space>
+            }
+            style={{ marginBottom: 16 }}
+        >
+            <Row gutter={[16, 16]}>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Bitrate"
+                        value={formatMbps(bitrate)}
+                        prefix={<ArrowDownOutlined style={{ color: '#52c41a' }} />}
+                        valueStyle={{ color: '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="RTT"
+                        value={`${typeof rtt === 'number' ? rtt.toFixed(2) : rtt} ms`}
+                        prefix={<ClockCircleOutlined style={{ color: '#1890ff' }} />}
+                        valueStyle={{ color: '#1890ff', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Packet Loss"
+                        value={`${packetLoss}%`}
+                        prefix={<ArrowUpOutlined style={{ color: parseFloat(packetLoss) > 1 ? '#ff4d4f' : '#52c41a' }} />}
+                        valueStyle={{ color: parseFloat(packetLoss) > 1 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Total Bytes"
+                        value={formatBytes(totalBytes)}
+                        valueStyle={{ color: '#722ed1', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Connected Callers"
+                        value={connectedCallers}
+                        prefix={<WifiOutlined style={{ color: '#faad14' }} />}
+                        valueStyle={{ color: '#faad14', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Bandwidth"
+                        value={`${typeof bandwidth === 'number' ? bandwidth.toFixed(1) : bandwidth} Mbps`}
+                        valueStyle={{ color: '#13c2c2', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Dropped"
+                        value={packetsDropped}
+                        valueStyle={{ color: packetsDropped > 0 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Resolution"
+                        value={formatResolution(videoWidth, videoHeight)}
+                        prefix={<VideoCameraOutlined style={{ color: '#722ed1' }} />}
+                        valueStyle={{ color: '#722ed1', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Framerate"
+                        value={formatFramerate(fpsNum, fpsDen, fpsInferred)}
+                        prefix={<FieldTimeOutlined style={{ color: '#eb2f96' }} />}
+                        valueStyle={{ color: '#eb2f96', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Scan"
+                        value={scanType.label}
+                        formatter={(val) => <Tag color={scanType.color}>{val}</Tag>}
+                        valueStyle={statisticStyle}
+                    />
+                </Col>
+            </Row>
+        </Card>
+    );
+};
 
-    const statisticStyle = {
-        fontSize: 14,
-    };
+const RouteStats = ({ routeId, isRunning, failoverEnabled = false, activeSource = 'primary' }) => {
+    // Live stats via WebSocket & polling
+    const { stats, secondaryStats, health } = useRouteStats(routeId, isRunning);
+
+    if (!isRunning) {
+        return null;
+    }
+
+    const hasDualStats = failoverEnabled || secondaryStats !== null;
 
     return (
         <Card
@@ -209,21 +223,21 @@ const RouteStats = ({ routeId, isRunning }) => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span>
                         Source Statistics
-                        {!stats && <SyncOutlined spin style={{ marginLeft: 8 }} />}
+                        {!stats && !secondaryStats && <SyncOutlined spin style={{ marginLeft: 8 }} />}
                     </span>
                     {health && <HealthBadge health={health} />}
                 </div>
             }
             style={{ marginBottom: 24 }}
         >
-            {!stats ? (
+            {!stats && !secondaryStats ? (
                 <Empty description="No statistics available. Start streaming to see stats." />
             ) : (
                 <>
                     {health === 'source_corrupted' && (
                         <Alert
                             message="Source Stream Corrupted"
-                            description={`The video decoder is reporting H.264 slice decoding warnings (${stats?.last_warning_message || 'corrupt slices'}). The network loopback has 0% packet loss, indicating the upstream source/camera is sending corrupted video.`}
+                            description={`The video decoder is reporting H.264 slice decoding warnings (${stats?.last_warning_message || 'corrupt slices'}).`}
                             type="warning"
                             showIcon
                             style={{ marginBottom: 16 }}
@@ -233,134 +247,35 @@ const RouteStats = ({ routeId, isRunning }) => {
                     {health === 'blackgate_config_issue' && (
                         <Alert
                             message="Appliance Configuration Issue"
-                            description={`The video decoder is reporting H.264 slice decoding warnings (${stats?.last_warning_message || 'corrupt slices'}) and local loopback packet loss is active (${packetLoss}%). This indicates a Blackgate configuration mismatch (e.g. latency/socket buffer limits) or CPU scheduling bottleneck.`}
+                            description="The video decoder is reporting H.264 slice decoding warnings and local loopback packet loss is active."
                             type="error"
                             showIcon
                             style={{ marginBottom: 16 }}
                         />
                     )}
 
-                    {health === 'network_loss_egress' && (
-                        <Alert
-                            message="Egress Transmission Packet Loss"
-                            description="The video stream is decoded cleanly inside the gateway, but transmission to the output SRT client/player is experiencing packet loss. Verify client network bandwidth and buffer configurations."
-                            type="warning"
-                            showIcon
-                            style={{ marginBottom: 16 }}
+                    {hasDualStats ? (
+                        <div>
+                            <SingleSourceMetrics
+                                sourceTitle="Primary Source"
+                                stats={stats}
+                                tagColor="blue"
+                                isActive={activeSource === 'primary'}
+                            />
+                            <SingleSourceMetrics
+                                sourceTitle="Secondary Source"
+                                stats={secondaryStats}
+                                tagColor="orange"
+                                isActive={activeSource === 'secondary'}
+                            />
+                        </div>
+                    ) : (
+                        <SingleSourceMetrics
+                            sourceTitle="Primary Source"
+                            stats={stats}
+                            tagColor="blue"
+                            isActive={true}
                         />
-                    )}
-
-                    {/* Summary Statistics */}
-                    <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Bitrate"
-                                value={formatMbps(bitrate)}
-                                prefix={<ArrowDownOutlined style={{ color: '#52c41a' }} />}
-                                valueStyle={{ color: '#52c41a', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="RTT"
-                                value={`${typeof rtt === 'number' ? rtt.toFixed(2) : rtt} ms`}
-                                prefix={<ClockCircleOutlined style={{ color: '#1890ff' }} />}
-                                valueStyle={{ color: '#1890ff', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Packet Loss"
-                                value={`${packetLoss}%`}
-                                prefix={<ArrowUpOutlined style={{ color: parseFloat(packetLoss) > 1 ? '#ff4d4f' : '#52c41a' }} />}
-                                valueStyle={{ color: parseFloat(packetLoss) > 1 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Total Bytes"
-                                value={formatBytes(totalBytes)}
-                                valueStyle={{ color: '#722ed1', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Connected Callers"
-                                value={connectedCallers}
-                                prefix={<WifiOutlined style={{ color: '#faad14' }} />}
-                                valueStyle={{ color: '#faad14', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Bandwidth"
-                                value={`${typeof bandwidth === 'number' ? bandwidth.toFixed(1) : bandwidth} Mbps`}
-                                valueStyle={{ color: '#13c2c2', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Dropped"
-                                value={packetsDropped}
-                                valueStyle={{ color: packetsDropped > 0 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Resolution"
-                                value={formatResolution(videoWidth, videoHeight)}
-                                prefix={<VideoCameraOutlined style={{ color: '#722ed1' }} />}
-                                valueStyle={{ color: '#722ed1', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Framerate"
-                                value={formatFramerate(fpsNum, fpsDen, fpsInferred)}
-                                prefix={<FieldTimeOutlined style={{ color: '#eb2f96' }} />}
-                                valueStyle={{ color: '#eb2f96', ...statisticStyle }}
-                            />
-                        </Col>
-                        <Col xs={12} sm={8} md={6} lg={4}>
-                            <Statistic
-                                title="Scan"
-                                value={scanType.label}
-                                formatter={(val) => <Tag color={scanType.color}>{val}</Tag>}
-                                valueStyle={statisticStyle}
-                            />
-                        </Col>
-                    </Row>
-
-                    {/* Connected Callers Table */}
-                    {stats.callers && stats.callers.length > 0 && (
-                        <>
-                            <Typography.Title level={5} style={{ marginTop: 16, marginBottom: 8 }}>
-                                Connected Callers ({connectedCallers})
-                            </Typography.Title>
-                            <Table
-                                dataSource={stats.callers}
-                                columns={callerColumns}
-                                pagination={false}
-                                size="small"
-                                rowKey={(record, index) => record['caller-address'] || index}
-                            />
-                        </>
-                    )}
-
-                    {/* SDI Playout Stats Table */}
-                    {stats.sdi_video_stats && stats.sdi_video_stats.length > 0 && (
-                        <>
-                            <Typography.Title level={5} style={{ marginTop: 24, marginBottom: 8 }}>
-                                SDI Playout Statistics
-                            </Typography.Title>
-                            <Table
-                                dataSource={stats.sdi_video_stats}
-                                columns={sdiColumns}
-                                pagination={false}
-                                size="small"
-                                rowKey={(record, index) => record.device_number ?? index}
-                            />
-                        </>
                     )}
                 </>
             )}

@@ -179,10 +179,8 @@ defmodule Blackgate.RouteHandler do
             new_acc = put_in(acc, [:source_health, tag], :invalid)
 
             if dual_ingest_eligible?(new_acc.route) and is_port(new_acc.port) do
-              case evaluate_failover(new_acc) do
-                {:keep_state, final_data} -> final_data
-                _ -> new_acc
-              end
+              {:keep_state, final_data} = evaluate_failover(new_acc)
+              final_data
             else
               new_acc
             end
@@ -254,13 +252,8 @@ defmodule Blackgate.RouteHandler do
       if dual_ingest_eligible?(data.route) do
         refreshed = refresh_source_health_from_stats(data)
 
-        case evaluate_failover(refreshed) do
-          {:keep_state, new_data} ->
-            {:keep_state, new_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
-
-          _ ->
-            {:keep_state, refreshed, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
-        end
+        {:keep_state, new_data} = evaluate_failover(refreshed)
+        {:keep_state, new_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
       else
         # Get current bytes from stats registry
         current_bytes = get_total_bytes_received(data.id)
@@ -662,10 +655,13 @@ defmodule Blackgate.RouteHandler do
         %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
       )
 
+      updated_route = Map.put(data.route, "active_source", target)
+
       {:keep_state,
        %{
          data
          | active_source: target,
+           route: updated_route,
            failover_switched: true,
            consecutive_startup_crashes: 0
        }}
@@ -687,6 +683,7 @@ defmodule Blackgate.RouteHandler do
       enter_reconnecting(%{
         data
         | active_source: target,
+          route: Map.put(data.route, "active_source", target),
           port: nil,
           ffmpeg_port: nil,
           failover_switched: false,
@@ -914,7 +911,7 @@ defmodule Blackgate.RouteHandler do
     if h[:primary] == :invalid and h[:secondary] == :invalid do
       unless data.both_dead_reported do
         Blackgate.EventLog.log(
-          :error,
+          :critical,
           "failover_both_invalid",
           "Both primary and secondary sources are invalid",
           %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}

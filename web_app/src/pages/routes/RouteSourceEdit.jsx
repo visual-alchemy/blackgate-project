@@ -1,5 +1,5 @@
 import { Form, Input, Radio, Card, Space, InputNumber, Switch, Select, Button, Row, Col, message, Typography, Tabs } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, QuestionCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
@@ -291,6 +291,24 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                   <Form.Item
                                     label="Failover Mode"
                                     name="failover_mode"
+                                    tooltip={{
+                                      title: (
+                                        <div style={{ whiteSpace: 'pre-line', padding: '4px' }}>
+                                          <strong>• Automatic - Maintain Primary:</strong><br />
+                                          Automatic switch from primary to secondary source when the primary source is invalid (and secondary is valid when auto-join enabled).<br />
+                                          Automatic switch back when the primary source becomes back valid.<br /><br />
+                                          <strong>• Automatic - Maintain Stability:</strong><br />
+                                          Automatic switch from primary to secondary source when primary source is invalid (and secondary is valid when auto-join enabled).<br />
+                                          Automatic switch back when the secondary source is invalid (and primary is valid when auto-join enabled).<br /><br />
+                                          <strong>• Manual Switchback:</strong><br />
+                                          Automatic switch from primary to secondary source when the primary source is invalid (and secondary is valid when auto-join enabled).<br />
+                                          Manual switch back on user action.<br /><br />
+                                          <strong>• Manual Failover:</strong><br />
+                                          Manually force the switch from primary to secondary source and vice versa.
+                                        </div>
+                                      ),
+                                      icon: <QuestionCircleOutlined />
+                                    }}
                                     rules={[{ required: true, message: 'Please select a failover mode' }]}
                                   >
                                     <Select
@@ -300,7 +318,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                         { label: 'Manual Switchback', value: 'manual-switchback' },
                                         { label: 'Manual Failover', value: 'manual' },
                                       ]}
-                                      style={{ width: '250px' }}
+                                      style={{ width: '280px' }}
                                     />
                                   </Form.Item>
                                 </>

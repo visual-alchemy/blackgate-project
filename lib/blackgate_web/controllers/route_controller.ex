@@ -164,16 +164,19 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def stats(conn, %{"route_id" => route_id}) do
-    case Blackgate.RouteStatsRegistry.get_stats(route_id) do
+    primary = Blackgate.RouteStatsRegistry.get_stats(route_id)
+    secondary = Blackgate.RouteStatsRegistry.get_secondary_stats(route_id)
+
+    case primary do
       nil ->
         conn
         |> put_status(:ok)
-        |> json(%{data: nil, message: "No stats available"})
+        |> json(%{data: nil, secondary_source_stats: secondary, message: "No stats available"})
 
       %{stats: stats, updated_at: updated_at} ->
         conn
         |> put_status(:ok)
-        |> json(%{data: stats, updated_at: updated_at})
+        |> json(%{data: stats, updated_at: updated_at, secondary_source_stats: secondary})
     end
   end
 

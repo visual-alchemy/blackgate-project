@@ -4,20 +4,22 @@ import { routesApi } from '../utils/api';
 
 /**
  * Hybrid stats hook: HTTP fetch on mount for immediate data,
- * WebSocket for live updates. Falls back gracefully if WS fails.
+ * WebSocket for live updates. Handles both primary and secondary source stats.
  *
  * @param {string|null} routeId - The route UUID (pass null to skip)
  * @param {boolean} isRunning   - Only subscribe when the route is running
- * @returns {{ stats: object|null, health: string|null }}
+ * @returns {{ stats: object|null, secondaryStats: object|null, health: string|null }}
  */
 export function useRouteStats(routeId, isRunning) {
   const [stats, setStats] = useState(null);
+  const [secondaryStats, setSecondaryStats] = useState(null);
   const [health, setHealth] = useState(null);
   const pollingRef = useRef(null);
 
   useEffect(() => {
     if (!routeId || !isRunning) {
       setStats(null);
+      setSecondaryStats(null);
       setHealth(null);
       return;
     }
@@ -26,7 +28,8 @@ export function useRouteStats(routeId, isRunning) {
     const fetchOnce = async () => {
       try {
         const result = await routesApi.getStats(routeId);
-        if (result?.data) setStats(result.data);
+        if (result?.data !== undefined) setStats(result.data);
+        if (result?.secondary_source_stats !== undefined) setSecondaryStats(result.secondary_source_stats);
       } catch { /* ignore */ }
     };
     fetchOnce();
@@ -35,10 +38,17 @@ export function useRouteStats(routeId, isRunning) {
     pollingRef.current = setInterval(fetchOnce, 3000);
 
     // 3. WebSocket channel for sub-second push updates
-    //    If WS works it will override the polled value in real-time
-    const channel = joinStatsChannel(routeId, ({ stats: s, health: h }) => {
-      setStats(s);
-      setHealth(h);
+    //    Safely update stats without overwriting primary stats with null on secondary broadcasts
+    const channel = joinStatsChannel(routeId, (msg) => {
+      if (msg.stats !== undefined) {
+        setStats(msg.stats);
+      }
+      if (msg.secondary_source_stats !== undefined) {
+        setSecondaryStats(msg.secondary_source_stats);
+      }
+      if (msg.health !== undefined) {
+        setHealth(msg.health);
+      }
     });
 
     return () => {
@@ -47,5 +57,5 @@ export function useRouteStats(routeId, isRunning) {
     };
   }, [routeId, isRunning]);
 
-  return { stats, health };
+  return { stats, secondaryStats, health };
 }

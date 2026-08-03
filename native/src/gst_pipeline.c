@@ -733,6 +733,17 @@ static void *print_stats(void *src)
 
         if (dual_ingest_active && secondary_source_element) {
             cJSON *secondary = build_source_stats_json(secondary_source_element, "secondary");
+            pthread_mutex_lock(&video_info.mutex);
+            if (video_info.info_valid) {
+                cJSON_AddNumberToObject(secondary, "video-width", video_info.width);
+                cJSON_AddNumberToObject(secondary, "video-height", video_info.height);
+                cJSON_AddNumberToObject(secondary, "video-framerate-num", video_info.fps_num);
+                cJSON_AddNumberToObject(secondary, "video-framerate-den", video_info.fps_den);
+                cJSON_AddBoolToObject(secondary, "video-framerate-inferred", video_info.fps_inferred);
+                cJSON_AddStringToObject(secondary, "video-interlace-mode",
+                                        video_info.interlaced ? "interleaved" : "progressive");
+            }
+            pthread_mutex_unlock(&video_info.mutex);
             send_json_to_socket(secondary);
             cJSON_Delete(secondary);
         }
@@ -1383,14 +1394,9 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
         pic_height -= (top + bottom) * 2;
     }
 
-    // Infer framerate based on resolution
-    // All HEVC framerates are inferred since we don't parse VUI
-    gint fps_num = 25, fps_den = 1; // Default 25fps for non-4K
+    // Infer framerate based on resolution (50fps standard for HD/UHD broadcast)
+    gint fps_num = (pic_height >= 720) ? 50 : 25, fps_den = 1;
     gboolean fps_inferred = TRUE;
-    if (pic_height >= 2160) {
-        fps_num = 50; // 4K typically 50fps in Europe, 60fps in US
-        fps_den = 1;
-    }
 
     pthread_mutex_lock(&video_info.mutex);
     video_info.width = pic_width;

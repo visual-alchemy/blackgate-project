@@ -566,6 +566,13 @@ const RouteItem = () => {
 
           {routeData.schema === 'SRT' ? (
             <>
+              <Descriptions.Item label="Stream ID">
+                {routeData.schema_options?.streamid ? (
+                  <Tag color="geekblue">{routeData.schema_options.streamid}</Tag>
+                ) : (
+                  <Text type="secondary">None</Text>
+                )}
+              </Descriptions.Item>
               <Descriptions.Item label="Latency">{routeData.schema_options?.latency ? `${routeData.schema_options.latency}ms` : 'Default (125ms)'}</Descriptions.Item>
               <Descriptions.Item label="Auto Reconnect">
                 <Tag color={routeData.schema_options?.['auto-reconnect'] ? 'green' : 'red'}>
@@ -604,8 +611,22 @@ const RouteItem = () => {
               </Descriptions.Item>
               <Descriptions.Item label="Active Source">
                 <Tag color={(routeData.active_source || 'primary') === 'primary' ? 'blue' : 'orange'}>
-                  {routeData.active_source || 'primary'}
+                  {(routeData.active_source || 'primary').toUpperCase()}
                 </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Secondary Source">
+                <Tag color="orange">
+                  {routeData.secondary_source?.schema || 'SRT'}
+                </Tag>
+                {' '}
+                {`${routeData.secondary_source?.schema_options?.localaddress || 'N/A'}:${routeData.secondary_source?.schema_options?.localport || 'N/A'}:${routeData.secondary_source?.schema_options?.mode || 'N/A'}`}
+              </Descriptions.Item>
+              <Descriptions.Item label="Secondary Stream ID">
+                {routeData.secondary_source?.schema_options?.streamid ? (
+                  <Tag color="geekblue">{routeData.secondary_source.schema_options.streamid}</Tag>
+                ) : (
+                  <Text type="secondary">None</Text>
+                )}
               </Descriptions.Item>
             </>
           )}
@@ -616,6 +637,8 @@ const RouteItem = () => {
       <RouteStats
         routeId={id}
         isRunning={routeData?.status?.toLowerCase() === 'started'}
+        failoverEnabled={routeData?.failover_enabled}
+        activeSource={routeData?.active_source || 'primary'}
       />
 
       {/* Destination Statistics - Show when route is running and has SRT destinations */}

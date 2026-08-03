@@ -196,6 +196,102 @@ graph TB
     class E streaming
 ```
 
+#### Dual-Ingest SRT Failover Workflow (`feat/srt-failover`)
+
+```mermaid
+graph TB
+    subgraph "External SRT Inputs"
+        P["Primary SRT Source<br/>(Indosiar / Listener or Caller)<br/>StreamID: indosiar"]
+        S["Secondary SRT Source<br/>(SCTV / Listener or Caller)<br/>StreamID: sctv"]
+    end
+
+    subgraph "Blackgate Gateway Appliance"
+        subgraph "Control Plane (Elixir OTP)"
+            RH["RouteHandler (GenStateMachine)<br/>4-Mode Decision Engine"]
+            SR["RouteStatsRegistry (ETS)<br/>Primary & Secondary Live Telemetry"]
+            DB[("Khepri Distributed KV DB")]
+        end
+
+        subgraph "Native Streaming Engine (blackgate_pipeline)"
+            P_SRC["srtsrc (Primary Input)"]
+            S_SRC["srtsrc (Secondary Input / Auto-Join)"]
+            SEL["input-selector<br/>Zero-Glitch In-Process Switch"]
+            TEE["tee (Distribution)"]
+            SNK["srtsink / udpsink / sdisink<br/>Output Destinations"]
+        end
+    end
+
+    subgraph "Clients & Monitoring"
+        UI["React Web Dashboard<br/>Dual Stats Cards & Switch Controls"]
+        VLC["VLC / Decoder / Playout"]
+    end
+
+    P -->|"SRT Primary Stream"| P_SRC
+    S -->|"SRT Secondary Stream"| S_SRC
+
+    P_SRC -->|"sink_0"| SEL
+    S_SRC -->|"sink_1"| SEL
+
+    SEL -->|"Active Source Stream"| TEE
+    TEE --> SNK
+    SNK -->|"SRT Stream"| VLC
+
+    P_SRC -.->|"Primary Stats (JSON)"| SR
+    S_SRC -.->|"Secondary Stats (JSON)"| SR
+
+    SR -->|"Health Signals"| RH
+    RH -->|"stdin: switch-source"| SEL
+    RH <-->|"State Persistence"| DB
+
+    UI <-->|"HTTP / WebSockets"| RH
+    UI <-->|"Stats Subscriptions"| SR
+
+    classDef external fill:#1e3a8a,stroke:#3b82f6,stroke-width:3px,color:#ffffff
+    classDef control fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
+    classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
+    classDef ui fill:#581c87,stroke:#a855f7,stroke-width:3px,color:#ffffff
+
+    class P,S,VLC external
+    class RH,SR,DB control
+    class P_SRC,S_SRC,SEL,TEE,SNK streaming
+    class UI ui
+```
+
+#### Failover Decision Engine & Switch Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Op as Web Dashboard / Operator
+    participant RH as RouteHandler (Elixir OTP)
+    participant C as GStreamer Pipeline (input-selector)
+    participant PS as Primary Source
+    participant SS as Secondary Source
+
+    Note over PS, SS: Dual-Ingest Ingestion Active (Auto-Join Enabled)
+    PS->>C: Push Primary MPEG-TS Stream
+    SS->>C: Push Secondary MPEG-TS Stream
+
+    Note over RH, C: Mode: maintain-primary / maintain-stability
+    PS--xRH: Network Loss / Stream Invalid (0 B/s or stall)
+    RH->>RH: Evaluate Health (Primary: INVALID, Secondary: VALID)
+    RH->>C: Send stdin JSON: {"command": "switch-source", "target": "secondary"}
+    C->>C: Switch input-selector active-pad -> sink_1 (Secondary)
+    C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
+    RH->>Op: Broadcast WebSocket Failover Event & Dual Stats
+
+    Note over RH, C: Primary Stream Recovers
+    PS->>RH: Primary Bytes Resume (Primary: VALID)
+    alt maintain-primary
+        RH->>C: Auto-switch back to Primary (target: primary)
+    else maintain-stability
+        RH->>RH: Hold Secondary active position while Secondary is healthy
+    else manual-switchback / manual
+        Op->>RH: Operator clicks [ Switch to Primary ]
+        RH->>C: Send stdin JSON: {"command": "switch-source", "target": "primary"}
+    end
+```
+
 ### Technology Stack
 
 | Component | Technology | Purpose |

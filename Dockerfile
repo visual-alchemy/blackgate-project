@@ -10,7 +10,7 @@ ENV MIX_ENV="prod"
 
 # Install build dependencies
 RUN apt-get update -y \
-    && apt-get install -y build-essential git curl ca-certificates gnupg \
+    && apt-get install -y build-essential git curl ca-certificates gnupg rebar3 \
     && apt-get clean
 
 # Install Node.js 18.x
@@ -74,13 +74,13 @@ RUN cd /tmp \
 # Prepare build directory
 WORKDIR /app
 
-# Install hex + rebar
-RUN mix local.hex --force && \
-    mix local.rebar --force
+ENV MIX_REBAR3="/usr/bin/rebar3"
 
-# Install mix dependencies
+# Copy mix dependencies
 COPY mix.exs mix.lock ./
-RUN mix deps.get --only $MIX_ENV
+COPY deps deps
+# Install hex from GitHub source (bypasses builds.hex.pm DNS and matches OTP 27)
+RUN mix archive.install github hexpm/hex branch latest --force
 RUN mkdir config
 
 # Copy compile-time config files before we compile dependencies
