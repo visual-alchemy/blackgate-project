@@ -124,12 +124,13 @@ build:
 	cd web_app && yarn build
 	@echo ""
 	@echo "Step 2: Copying Frontend to Phoenix..."
+	rm -rf priv/static
 	mkdir -p priv/static
-	rm -rf priv/static/assets
 	cp -r web_app/dist/* priv/static/
 	@echo ""
 	@echo "Step 3: Building Elixir Release..."
 	MIX_ENV=prod mix phx.digest
+	rm -rf _build/prod/rel/blackgate
 	MIX_ENV=prod mix release --overwrite
 	@echo ""
 	@echo "=============================================="
