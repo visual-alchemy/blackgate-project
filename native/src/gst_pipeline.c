@@ -1827,9 +1827,9 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
             return NULL;
         }
 
-        // sync-mode=1 (SYNC_ACTIVE), cache-buffers + drop-backwards for clean failover.
+        // sync-mode=0 (SYNC_NONE): prevents idle secondary pad from stalling primary SRT listener buffer.
         g_object_set(selector_element,
-                     "sync-mode", 1,
+                     "sync-mode", 0,
                      "cache-buffers", TRUE,
                      "drop-backwards", TRUE,
                      NULL);
