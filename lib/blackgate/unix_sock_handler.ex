@@ -125,47 +125,6 @@ defmodule Blackgate.UnixSockHandler do
     :keep_state_and_data
   end
 
-  def handle_event(:info, {:tcp, _port, "{" <> _ = message}, _, %{route_id: route_id} = _data)
-      when is_binary(route_id) do
-    # Handle potentially concatenated source + sink stats messages
-    {source_json, sink_json} = split_stats_message(message)
-    
-    # Store source stats
-    if source_json do
-      case Jason.decode(source_json) do
-        {:ok, %{"type" => "warning"} = warning} ->
-          RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
-
-        {:ok, stats} ->
-          case stats["source"] do
-            "secondary" ->
-              RouteStatsRegistry.put_secondary_stats(route_id, stats)
-
-            _ ->
-              RouteStatsRegistry.put_stats(route_id, Map.delete(stats, "source"))
-          end
-        _ -> :ok
-      end
-    end
-    
-    # Store sink stats
-    if sink_json do
-      case Jason.decode(sink_json) do
-        {:ok, stats} ->
-          sink_index = stats["sink-index"] || 0
-          RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
-        _ -> :ok
-      end
-    end
-    
-    :keep_state_and_data
-  end
-
-  def handle_event(:info, {:tcp, _port, "{" <> _}, _, _) do
-    # ignore stats when no route_id
-    :keep_state_and_data
-  end
-
   def handle_event(:info, {:tcp, _port, "stats_sink:" <> json}, _state, %{route_id: route_id} = _data)
       when is_binary(route_id) do
     case Jason.decode(json) do
