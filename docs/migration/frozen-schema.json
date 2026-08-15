@@ -1,0 +1,333 @@
+{
+  "version": "1.0.0",
+  "frozen_at": "2026-08-05",
+  "description": "Frozen IPC wire format specification for blackgate_pipeline C engine. The Rust replacement MUST produce byte-identical output for all stdout/stderr/unix-socket formats below.",
+
+  "channels": {
+    "stdin": {
+      "direction": "Elixir → C",
+      "format": "newline-delimited JSON",
+      "encoding": null,
+      "protocol": "First line after spawn is the init route config JSON (blocking read). Subsequent lines are runtime commands (async via GIOChannel watch).",
+      "route_init_json": {
+        "description": "Sent once at startup. Blocking read before pipeline enters PLAYING.",
+        "schema": {
+          "source": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {"type": "string", "enum": ["srtsrc", "udpsrc"]},
+              "localaddress": {"type": "string"},
+              "localport": {"type": "integer"},
+              "auto-reconnect": {"type": "boolean", "default": true},
+              "keep-listening": {"type": "boolean", "default": false},
+              "mode": {"type": "string", "enum": ["listener", "caller", "rendezvous"]},
+              "streamid": {"type": "string"},
+              "passphrase": {"type": "string"},
+              "pbkeylen": {"type": "integer"}
+            }
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": {"type": "string", "enum": ["srtsink", "udpsink", "sdisink"]},
+                "localaddress": {"type": "string"},
+                "localport": {"type": "integer"},
+                "host": {"type": "string"},
+                "port": {"type": "integer"},
+                "mode": {"type": "string"},
+                "sdi_devicenumber": {"type": "integer"},
+                "video_mode": {"type": "string"},
+                "framerate": {"type": "string"}
+              }
+            }
+          },
+          "secondary": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["srtsrc", "udpsrc"]},
+              "localaddress": {"type": "string"},
+              "localport": {"type": "integer"},
+              "auto-reconnect": {"type": "boolean"},
+              "keep-listening": {"type": "boolean"},
+              "mode": {"type": "string"},
+              "streamid": {"type": "string"},
+              "passphrase": {"type": "string"},
+              "pbkeylen": {"type": "integer"}
+            }
+          },
+          "auto_join": {"type": "boolean", "default": false}
+        }
+      },
+      "runtime_commands": {
+        "description": "Sent after pipeline startup for live control.",
+        "commands": {
+          "switch-source": {
+            "json": {"command": "switch-source", "target": "primary|secondary"}
+          },
+          "join-secondary": {
+            "json": {"command": "join-secondary"}
+          },
+          "leave-secondary": {
+            "json": {"command": "leave-secondary"}
+          }
+        }
+      }
+    },
+
+    "stdout": {
+      "direction": "C → Elixir",
+      "format": "prefix-matched text lines, trailing newline, unbuffered (setvbuf _IONBF)",
+      "events": {
+        "startup_bootstrap": [
+          "Argument <count>: <arg1>\n",
+          "Waiting for JSON input...\n",
+          "Received JSON: <full_config>\n",
+          "Connected to the socket.\n"
+        ],
+        "source_lifecycle": [
+          "SOURCE_VALID:primary\n",
+          "SOURCE_VALID:secondary\n",
+          "SOURCE_INVALID:primary <error_message>\n",
+          "SOURCE_INVALID:secondary <error_message>\n",
+          "SOURCE_INVALID:<source_name>\n",
+          "FIRST_BUFFER_RECEIVED\n"
+        ],
+        "failover": [
+          "SOURCE_SWITCHED:primary\n",
+          "SOURCE_SWITCHED:secondary\n",
+          "SECONDARY_JOINED\n",
+          "SECONDARY_LEFT\n"
+        ],
+        "sdi_diagnostics": [
+          "SDI_AUDIO_SILENT: device=<n> no_audio_for=<seconds>s total_buffers=<n>\n",
+          "SDI_AUDIO_RECOVERED: device=<n> audio_buffers_flowing_again\n"
+        ],
+        "pipeline_errors": [
+          "Pipeline Warning from <element>: <message>\n",
+          "Error: <error_message>\n",
+          "Error parsing JSON\n"
+        ],
+        "connection_events": [
+          "New SRT caller connection to <addr> from <addr> (stream_id: <id>)\n"
+        ]
+      }
+    },
+
+    "stderr": {
+      "direction": "C → Elixir (Elixir reads Port stderr as {:stderr, data})",
+      "format": "free-form diagnostics, g_printerr() calls",
+      "note": "Used for: state change diagnostics, parse errors, link failures, SDI fallback warnings, element creation failures, command errors"
+    },
+
+    "unix_socket": {
+      "direction": "C → Elixir",
+      "socket_type": "AF_UNIX SOCK_STREAM",
+      "path": "/tmp/hydra_unix_sock",
+      "format": "concatenated JSON objects with literal separator + newline terminators",
+      "message_types": {
+        "route_id_announcement": {
+          "format": "route_id:<route_id>\n",
+          "sent": "Once at startup (main.c:98-99)",
+          "note": "TWO send() calls: first 'route_id:', then argv[1]. Elixir side reads them concatenated."
+        },
+        "source_stats_stream_id": {
+          "format": "stats_source_stream_id:<stream_id>\n",
+          "sent": "When source stream ID is detected (line 1010-1011)"
+        },
+        "route_stats": {
+          "format": "<source_cjson>stats_sink:<sink_cjson>\n",
+          "sent": "Every 1 second from print_stats thread",
+          "source_json_structure": {
+            "type": "object",
+            "fields": {
+              "source": {"type": "string", "values": ["primary", "secondary"]},
+              "packets-received": {"type": "number"},
+              "packets-received-lost": {"type": "number"},
+              "packets-received-dropped": {"type": "number"},
+              "packets-received-retransmitted": {"type": "number"},
+              "bytes-received": {"type": "number"},
+              "rtt-ms": {"type": "number"},
+              "receive-rate-mbps": {"type": "number"},
+              "bandwidth-mbps": {"type": "number"},
+              "negotiated-latency-ms": {"type": "number"},
+              "connected-callers": {"type": "number"},
+              "total-bytes-received": {"type": "number"},
+              "callers": {"type": "array", "items": "caller_object"},
+              "video-width": {"type": "number"},
+              "video-height": {"type": "number"},
+              "video-framerate-num": {"type": "number"},
+              "video-framerate-den": {"type": "number"},
+              "video-interlace-mode": {"type": "string", "values": ["progressive", "interlaced"]},
+              "sdi_video_stats": {"type": "array", "items": "sdi_stat_object"}
+            }
+          },
+          "sink_json_structure": {
+            "type": "object",
+            "fields": {
+              "sink-index": {"type": "number"},
+              "bytes-sent-total": {"type": "number"},
+              "packets-sent": {"type": "number"},
+              "packets-sent-lost": {"type": "number"},
+              "packets-sent-dropped": {"type": "number"},
+              "packets-sent-retransmitted": {"type": "number"},
+              "rtt-ms": {"type": "number"},
+              "send-rate-mbps": {"type": "number"},
+              "bandwidth-mbps": {"type": "number"},
+              "negotiated-latency-ms": {"type": "number"},
+              "connected-callers": {"type": "number"},
+              "callers": {"type": "array", "items": "caller_object"}
+            }
+          },
+          "caller_object": {
+            "fields": ["localaddress", "remoteaddress", "streamid", "rtt-ms", "receive-rate-mbps", "send-rate-mbps", "bandwidth-mbps", "negotiated-latency-ms"]
+          },
+          "sdi_stat_object": {
+            "fields": ["device_number", "dropped_frames", "duplicated_frames", "video_frames", "audio_buffers", "detected_mode"]
+          }
+        },
+        "route_health": {
+          "format": "<health_cjson>\n",
+          "sent": "On pipeline state changes and errors",
+          "structure": {
+            "type": "object",
+            "fields": {
+              "type": {"type": "string", "enum": ["warning"]},
+              "route_id": {"type": "string"},
+              "element": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "index_of_all_output_patterns": {
+    "_comment": "Every printf/g_print line from gst_pipeline.c captured for exact reproduction in Rust. Byte-identical output is MANDATORY.",
+    "stdout": [
+      {"line": 134, "format": "SDI_AUDIO_RECOVERED: device=%d audio_buffers_flowing_again\n"},
+      {"line": 187, "format": "SDI tsdemux: linked %s → decodebin\n"},
+      {"line": 215, "format": "SDI: decodebin video → output chain linked\n"},
+      {"line": 264, "format": "SDI AUTO-DETECT: decoded video caps → %dx%d @ %d/%d fps, %s\n"},
+      {"line": 276, "format": "SDI AUTO-DETECT: normalized NTSC fractional rate %d/%d → %d/%d\n"},
+      {"line": 285, "format": "SDI AUTO-DETECT: rounded non-standard rate %d/%d → %d/%d\n"},
+      {"line": 313, "format": "SDI AUTO-DETECT: MATCHED → mode=%s (interlace=%s)\n"},
+      {"line": 343, "format": "SDI AUTO-DETECT: set decklinkvideosink mode=%s\n"},
+      {"line": 357, "format": "SDI AUTO-DETECT: capsfilter → %s\n"},
+      {"line": 370, "format": "SDI AUTO-DETECT: added interlace element (field-pattern=2:2, tff=TRUE)\n"},
+      {"line": 418, "format": "SDI AUTO-DETECT: video chain linked successfully\n"},
+      {"line": 430, "format": "SDI AUTO-DETECT: decodebin video → vqueue linked, flow started\n"},
+      {"line": 463, "format": "SDI: decodebin audio → output chain linked\n"},
+      {"line": 708, "format": "SDI_AUDIO_SILENT: device=%d no_audio_for=%.1fs total_buffers=%lld\n"},
+      {"line": 906, "format": "Pipeline Warning from %s: %s\n"},
+      {"line": 932, "format": "SOURCE_INVALID:secondary %s\n"},
+      {"line": 934, "format": "SOURCE_INVALID:primary %s\n"},
+      {"line": 945, "format": "Error: %s\n"},
+      {"line": 955, "format": "Pipeline state changed from %s to %s\n"},
+      {"line": 963, "format": "SRT Event: %s\n"},
+      {"line": 967, "format": "SOURCE_INVALID:%s\n"},
+      {"line": 993, "format": "New SRT caller connection to %s from %s (stream_id: %s)\n"},
+      {"line": 1005, "format": "SOURCE_VALID:secondary\n"},
+      {"line": 1007, "format": "SOURCE_VALID:primary\n"},
+      {"line": 1022, "format": "Set mode=listener (2) for %s\n"},
+      {"line": 1025, "format": "Set mode=caller (1) for %s\n"},
+      {"line": 1028, "format": "Set mode=rendezvous (3) for %s\n"},
+      {"line": 1058, "format": "Set host=%s for %s element\n"},
+      {"line": 1064, "format": "Set %s=%s for %s element\n"},
+      {"line": 1068, "format": "Set %s=%d for %s element\n"},
+      {"line": 1071, "format": "Set %s=%s for %s element\n"},
+      {"line": 1123, "format": "MPEG-TS: Found PMT PID: %d (program %d)\n"},
+      {"line": 1177, "format": "MPEG-TS: Found video stream PID: %d (type: %s)\n"},
+      {"line": 1328, "format": "MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: ~%d (inferred)\n"},
+      {"line": 1357, "format": "MPEG-TS/MPEG-2: Resolution: %dx%d, FPS: %d/%d\n"},
+      {"line": 1433, "format": "MPEG-TS/HEVC: Resolution: %dx%d, FPS: ~%d (inferred)\n"},
+      {"line": 1570, "format": "Thumbnail: Linked video pad to videoconvert\n"},
+      {"line": 1586, "format": "Thumbnail: Worker started, saving to %s\n"},
+      {"line": 1612, "format": "Thumbnail: Saved %zu bytes\n"},
+      {"line": 1629, "format": "Thumbnail: Worker stopped\n"},
+      {"line": 1704, "format": "Thumbnail: Branch ready for route %s\n"},
+      {"line": 1727, "format": "Created source element: %s (type: %s)\n"},
+      {"line": 1746, "format": "Set do-timestamp=TRUE for %s source element (SDI playout detected)\n"},
+      {"line": 1749, "format": "Set do-timestamp=FALSE for %s source element (pure passthrough)\n"},
+      {"line": 1803, "format": "Set allow-not-linked=TRUE for tee element\n"},
+      {"line": 1879, "format": "DUAL-INGEST Pipeline: primary+secondary → input-selector → tee\n"},
+      {"line": 1890, "format": "ULTRA-SIMPLE Pipeline: source -> tee (no intermediate processing)\n"},
+      {"line": 1910, "format": "MPEG-TS: Installed buffer probe on tee sink pad for video metadata extraction\n"},
+      {"line": 1960, "format": "DUAL-INGEST: secondary held at NULL (auto_join=false)\n"},
+      {"line": 2151, "format": "SDI sink %d: AUTO-DETECT mode — video chain deferred until first frame\n"},
+      {"line": 2220, "format": "SDI sink %d: Audio health monitor installed\n"},
+      {"line": 2230, "format": "SDI sink %d: Video health monitor installed\n"},
+      {"line": 2233, "format": "SDI sink %d: pipeline created (AUTO-DETECT) → DeckLink device %d\n"},
+      {"line": 2255, "format": "SDI sink %d: mode=%s -> caps: %s\n"},
+      {"line": 2325, "format": "SDI sink %d: Audio health monitor installed\n"},
+      {"line": 2335, "format": "SDI sink %d: Video health monitor installed\n"},
+      {"line": 2338, "format": "SDI sink %d: pipeline created (decodebin) → DeckLink device %d (mode %s)\n"},
+      {"line": 2368, "format": "Configured UDP sink with sync=FALSE, async=FALSE\n"},
+      {"line": 2375, "format": "Configured SRT sink with async=FALSE, sync=TRUE, wait-for-connection=FALSE\n"},
+      {"line": 2380, "format": "Stored SRT sink element at index %d for stats collection\n"},
+      {"line": 2387, "format": "Configured tsparse before SRT sink for packet alignment and PCR smoothing\n"},
+      {"line": 2493, "format": "SOURCE_SWITCHED:%s\n"},
+      {"line": 2502, "format": "SECONDARY_JOINED\n"},
+      {"line": 2511, "format": "SECONDARY_LEFT\n"}
+    ],
+    "stderr": [
+      {"line": 185, "format": "SDI tsdemux: pad link failed for '%s': %d\n"},
+      {"line": 217, "format": "SDI: decodebin video pad link failed: %d\n"},
+      {"line": 330, "format": "SDI AUTO-DETECT: NO MATCH for %dx%d@%d/%d %s — fallback to %s\n"},
+      {"line": 372, "format": "SDI AUTO-DETECT: WARNING — failed to create interlace element, proceeding without\n"},
+      {"line": 390, "format": "SDI AUTO-DETECT: FAILED to link video output chain for mode=%s\n"},
+      {"line": 393, "format": "SDI AUTO-DETECT: retrying without interlace element...\n"},
+      {"line": 410, "format": "SDI AUTO-DETECT: FATAL — video chain link failed even without interlace\n"},
+      {"line": 432, "format": "SDI AUTO-DETECT: decodebin video → vqueue link FAILED: %d\n"},
+      {"line": 465, "format": "SDI: decodebin audio pad link failed: %d\n"},
+      {"line": 1030, "format": "Unknown SRT mode: %s\n"},
+      {"line": 1572, "format": "Thumbnail: Failed to link video pad: %d\n"},
+      {"line": 1644, "format": "Thumbnail: One or more elements unavailable — skipping thumbnail branch\n"},
+      {"line": 1685, "format": "Thumbnail: Failed to link tee → queue → decodebin\n"},
+      {"line": 1690, "format": "Thumbnail: Failed to link video chain\n"},
+      {"line": 1699, "format": "Thumbnail: Failed to start worker thread\n"},
+      {"line": 1717, "format": "Invalid source config: missing or invalid 'type' in %s\n"},
+      {"line": 1723, "format": "Failed to create %s source element (type: %s)\n"},
+      {"line": 1783, "format": "Invalid JSON format: missing source object or 'sinks' array\n"},
+      {"line": 1798, "format": "Failed to create pipeline or tee element\n"},
+      {"line": 1823, "format": "Failed to create input-selector or secondary source for dual-ingest\n"},
+      {"line": 1845, "format": "Failed to request sink pads on input-selector\n"},
+      {"line": 1858, "format": "DUAL-INGEST: failed to link primary source → selector sink_0\n"},
+      {"line": 1861, "format": "DUAL-INGEST: failed to link secondary source → selector sink_1\n"},
+      {"line": 1867, "format": "DUAL-INGEST: failed to link input-selector → tee\n"},
+      {"line": 1886, "format": "Elements could not be linked.\n"},
+      {"line": 1928, "format": "WARNING: SDI sink %d failed — continuing without SDI output\n"},
+      {"line": 1953, "format": "Failed to create stats thread\n"},
+      {"line": 1971, "format": "Invalid sink format: missing or invalid 'type'\n"},
+      {"line": 1994, "format": "SDI sink %d: DeckLink plugin not available - install BlackMagic drivers\n"},
+      {"line": 2034, "format": "SDI sink %d: Failed to create one or more elements\n"},
+      {"line": 2166, "format": "SDI sink %d: Failed to link audio output chain\n"},
+      {"line": 2172, "format": "SDI sink %d: Failed to link tee → queue → tsdemux\n"},
+      {"line": 2288, "format": "SDI sink %d: Failed to link video output chain\n"},
+      {"line": 2293, "format": "SDI sink %d: Failed to link audio output chain\n"},
+      {"line": 2299, "format": "SDI sink %d: Failed to link tee → queue → tsdemux\n"},
+      {"line": 2354, "format": "Could not create sink elements.\n"},
+      {"line": 2389, "format": "Warning: tsparse plugin not found. Pacing and alignment disabled.\n"},
+      {"line": 2396, "format": "Could not link sink elements with tsparse.\n"},
+      {"line": 2402, "format": "Could not link sink elements.\n"},
+      {"line": 2456, "format": "Bad command JSON: %s\n"},
+      {"line": 2470, "format": "Unknown command: %s\n"},
+      {"line": 2480, "format": "switch_source: not a dual-ingest pipeline\n"},
+      {"line": 2488, "format": "switch_source: target pad unavailable\n"}
+    ],
+    "unix_socket": [
+      {"sent_at": "main.c:98-99", "format": "route_id:<route_id>\n", "note": "Two send() calls, Elixir reads concatenated"},
+      {"sent_at": "line 1010-1011", "format": "stats_source_stream_id:<stream_id>\n"},
+      {"sent_at": "line 545-546", "format": "<source_stats_json>\n", "note": "Route stats — source JSON + newline"},
+      {"sent_at": "line 886-888", "format": "stats_sink:<sink_stats_json>\n", "note": "Sink stats — prefix + JSON + newline"},
+      {"sent_at": "line 922-923", "format": "<health_json>\n", "note": "Route health — JSON + newline"}
+    ]
+  },
+
+  "unix_socket_note": "The source stats and sink stats are sent as SEPARATE send() calls (lines 545-546 and 886-888). They are NOT concatenated into one JSON object. Elixir's unix_sock_handler.ex reads them as separate messages. The Elixir side then reconstructs them into the combined format.",
+  "socket_type_fix": "unix_socket.c uses SOCK_STREAM (TCP-like), NOT SOCK_DGRAM. The Rust replacement must use UnixStream, not UnixDatagram."
+}

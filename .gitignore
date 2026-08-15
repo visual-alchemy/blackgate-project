@@ -49,3 +49,12 @@ yarn-error.log*
 *.log
 logs/.agents/
 docs/superpowers/skills/
+
+# === Rust ===
+/native/rust/target/
+
+# === Agent session state ===
+/.omo/
+
+# === Editor backups ===
+*.bak
