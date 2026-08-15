@@ -1,70 +1,29 @@
-CC := gcc
-CFLAGS := -Wall -Wextra -g `pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0 libcjson cmocka srt`
-LDFLAGS := `pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 libcjson cmocka gio-2.0 srt`
+# Blackgate Native Engine — Rust Build
+# C engine archived to native/archive/. This Makefile builds Rust engine only.
 
-SRC_DIR := src
-BUILD_DIR := build
-INCLUDE_DIR := include
-TEST_DIR := tests
+RUST_SRC_DIR := rust
+RUST_BUILD_DIR := build/rust
+RUST_BINARY := $(RUST_BUILD_DIR)/release/blackgate-engine
 
-SRCS := $(wildcard $(SRC_DIR)/*.c)
-OBJS := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS))
+.PHONY: all clean rust-build rust-clean help
 
-TESTS := $(wildcard $(TEST_DIR)/*.c)
-TEST_OBJS := $(patsubst $(TEST_DIR)/%.c, $(BUILD_DIR)/%.o, $(TESTS))
+all: rust-build
 
-OBJS_NO_MAIN := $(filter-out $(BUILD_DIR)/main.o, $(OBJS))
+rust-build:
+	cd $(RUST_SRC_DIR) && cargo build --release --target-dir ../$(RUST_BUILD_DIR)
+	cp $(RUST_BINARY) build/blackgate-engine
 
-MAIN_EXEC := $(BUILD_DIR)/blackgate_pipeline
-TEST_EXEC := $(BUILD_DIR)/test_runner
-
-all: $(MAIN_EXEC)
-
-$(MAIN_EXEC): $(OBJS)
-	$(CC) -o $@ $^ $(LDFLAGS)
-
-$(TEST_EXEC): $(TEST_OBJS) $(OBJS_NO_MAIN)
-	$(CC) -o $@ $^ $(LDFLAGS)
-
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
-
-$(BUILD_DIR)/%.o: $(TEST_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
-
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+rust-clean:
+	cd $(RUST_SRC_DIR) && cargo clean
+	rm -rf $(RUST_BUILD_DIR)
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf build
 
 help:
 	@echo "Available targets:"
-	@echo "  make              - Build all targets"
+	@echo "  make              - Build Rust engine (cargo build --release)"
 	@echo "  make clean        - Remove compiled files"
+	@echo "  make rust-build   - Build Rust engine only"
+	@echo "  make rust-clean   - Clean Rust build artifacts"
 	@echo "  make help         - Show this help message"
-	@echo "  make test         - Run tests"
-	@echo "  make dummy_signal - Run dymmy_signal"
-
-test: $(TEST_EXEC)
-	./$(TEST_EXEC)
-
-dummy_signal:
-	ffmpeg -re \
-		-f lavfi -i "testsrc=size=1280x720:rate=30" \
-		-f lavfi -i "sine=frequency=440:sample_rate=48000" \
-		-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
-		-c:a aac -b:a 128k \
-		-f mpegts \
-		"srt://127.0.0.1:8000?mode=caller&streamid=test1"
-
-dummy_signal_with_pass:
-	ffmpeg -re \
-		-f lavfi -i "testsrc=size=1280x720:rate=30" \
-		-f lavfi -i "sine=frequency=440:sample_rate=48000" \
-		-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
-		-c:a aac -b:a 128k \
-		-f mpegts \
-		"srt://127.0.0.1:8000?mode=caller&streamid=test1&passphrase=some_pass&pbkeylen=16"
-
-

@@ -1,0 +1,9 @@
+[package]
+name = "engine-sdi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gstreamer = "0.22"
+engine-config = { path = "../engine-config" }
+anyhow = "1"

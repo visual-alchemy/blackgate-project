@@ -1,0 +1,8 @@
+[package]
+name = "engine-metadata"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gstreamer = "0.22"
+anyhow = "1"

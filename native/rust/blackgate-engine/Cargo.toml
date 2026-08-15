@@ -1,0 +1,17 @@
+[package]
+name = "blackgate-engine"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "blackgate-engine"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+gstreamer = "0.22"
+engine-config = { path = "../engine-config" }
+engine-gst = { path = "../engine-gst" }
+engine-failover = { path = "../engine-failover" }
+engine-stats = { path = "../engine-stats" }

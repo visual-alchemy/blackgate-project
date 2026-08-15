@@ -1,0 +1,4 @@
+[workspace]
+members = ["blackgate-engine", "engine-config", "engine-gst", "engine-failover", "engine-shadow", "engine-sdi", "engine-metadata", "engine-stats", "engine-thumbnail", "spike-srt-passthrough", "spike-sdi-sink"]
+default-members = ["blackgate-engine"]
+resolver = "2"

@@ -1,0 +1,15 @@
+[package]
+name = "engine-gst"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gstreamer = "0.22"
+gio = "0.19"
+serde_json = "1"
+engine-config = { path = "../engine-config" }
+engine-sdi = { path = "../engine-sdi" }
+engine-stats = { path = "../engine-stats" }
+engine-metadata = { path = "../engine-metadata" }
+engine-thumbnail = { path = "../engine-thumbnail" }
+anyhow = "1"
