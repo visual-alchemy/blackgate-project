@@ -21,7 +21,7 @@ defmodule Blackgate.MixProject do
     [
       mod: {Blackgate.Application, []},
       extra_applications:
-        [:logger, :os_mon, :ssl, :runtime_tools, :crypto] ++ extra_applications(Mix.env())
+        [:logger, :ssl, :runtime_tools, :crypto] ++ extra_applications(Mix.env())
     ]
   end
 
@@ -79,37 +79,37 @@ defmodule Blackgate.MixProject do
   defp releases do
     [
       blackgate: [
-        steps: [:assemble, &copy_c_app/1, &copy_web_app/1],
+        steps: [:assemble, &copy_native/1, &copy_web_app/1],
+        include_erts: false,
         cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
       ]
     ]
   end
 
-  defp copy_c_app(release) do
-    IO.puts("Copying C application to release...")
+  defp copy_native(release) do
+    IO.puts("Building native Rust engine...")
 
     {result, exit_code} = System.cmd("make", ["-C", "native"])
     IO.puts(result)
 
     if exit_code != 0 do
-      raise "Failed to compile C application"
-    end
-
-    source_path = Path.join(["native", "build", "blackgate_pipeline"])
-
-    unless File.exists?(source_path) do
-      raise "C application binary was not created at #{source_path}"
+      raise "Failed to compile native Rust engine"
     end
 
     app_dir = Path.join([release.path, "lib", "blackgate-#{release.version}"])
     priv_dest_dir = Path.join(app_dir, "priv/native/build")
     File.mkdir_p!(priv_dest_dir)
 
-    priv_dest_path = Path.join(priv_dest_dir, "blackgate_pipeline")
-    File.cp!(source_path, priv_dest_path)
-    File.chmod!(priv_dest_path, 0o755)
+    rust_source = Path.join(["native", "build", "rust", "release", "blackgate-engine"])
 
-    IO.puts("C application copied to priv directory at #{priv_dest_path}")
+    unless File.exists?(rust_source) do
+      raise "Rust engine binary was not created at #{rust_source}"
+    end
+
+    rust_dest = Path.join(priv_dest_dir, "blackgate-engine")
+    File.cp!(rust_source, rust_dest)
+    File.chmod!(rust_dest, 0o755)
+    IO.puts("Rust engine copied to release at #{rust_dest}")
 
     release
   end

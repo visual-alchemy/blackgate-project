@@ -23,7 +23,11 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y nodejs \
     && apt-get clean
 
-# Install GStreamer and related libraries for the C application
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Install GStreamer and related libraries for the Rust engine
 RUN apt-get update -y \
     && apt-get install -y \
     libgstreamer1.0-dev \
@@ -31,9 +35,7 @@ RUN apt-get update -y \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-libav \
-    libcjson-dev \
     libsrt-openssl-dev \
-    libcmocka-dev \
     libglib2.0-dev \
     pkg-config \
     && apt-get clean
@@ -56,7 +58,7 @@ RUN apt-get update -y \
     && apt-get clean
 
 # Copy DeckLink SDK headers into the system include path
-COPY native/decklink-sdk /usr/include/decklink
+COPY native/archive/decklink-sdk /usr/include/decklink
 
 # Clone, configure, and build ONLY the decklink plugin from gst-plugins-bad
 # Version pinned to 1.22.0 to match system GStreamer on Debian Bookworm
@@ -78,9 +80,9 @@ ENV MIX_REBAR3="/usr/bin/rebar3"
 
 # Copy mix dependencies
 COPY mix.exs mix.lock ./
-COPY deps deps
 # Install hex from GitHub source (bypasses builds.hex.pm DNS and matches OTP 27)
 RUN mix archive.install github hexpm/hex branch latest --force
+RUN mix deps.get
 RUN mkdir config
 
 # Copy compile-time config files before we compile dependencies
@@ -96,8 +98,8 @@ COPY native native
 COPY web_app web_app
 COPY rel rel
 
-# Build the C application - ensure we clean first to force a rebuild for Linux
-RUN cd native && make clean && make
+# Build the Rust engine
+RUN cd native && make
 
 # Build the web application
 RUN cd web_app \
