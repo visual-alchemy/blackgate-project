@@ -97,8 +97,9 @@ install:
 	@echo "=============================================="
 	@echo "Step 4: Installing Elixir Dependencies..."
 	@echo "=============================================="
-	mix local.hex --force
-	mix local.rebar --force
+	mix hex.info > /dev/null 2>&1 || mix local.hex --force
+	mix hex.info > /dev/null 2>&1 || mix archive.install github hexpm/hex branch latest
+	mix hex.info > /dev/null 2>&1 || mix local.rebar --force
 	mix deps.get
 	@echo ""
 	@echo "=============================================="
@@ -178,6 +179,7 @@ dev:
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
+	ERL_COMPILER_OPTIONS=nowarn_deprecated_catch \
 	iex --name blackgate@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
 
 .PHONY: dev-all
@@ -194,8 +196,9 @@ clean:
 
 setup:
 	@echo "Installing Backend Dependencies..."
-	mix local.hex --force
-	mix local.rebar --force
+	mix hex.info > /dev/null 2>&1 || mix local.hex --force
+	mix hex.info > /dev/null 2>&1 || mix archive.install github hexpm/hex branch latest
+	mix hex.info > /dev/null 2>&1 || mix local.rebar --force
 	mix deps.get
 	@echo "Installing Frontend Dependencies..."
 	cd web_app && yarn install
