@@ -225,7 +225,7 @@ const RouteStats = ({ routeId, isRunning, failoverEnabled = false, activeSource 
         return null;
     }
 
-    const hasDualStats = failoverEnabled || secondaryStats !== null;
+    const hasDualStats = Boolean(failoverEnabled);
 
     return (
         <Card

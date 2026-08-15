@@ -1144,6 +1144,7 @@ defmodule Blackgate.RouteHandler do
     # Also kill ffmpeg sidecar if running
     if data[:ffmpeg_port] && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
     Blackgate.set_route_status(id, "stopped")
+    Blackgate.RouteStatsRegistry.delete_stats(id)
 
     route_name = get_in(data, [:route, "name"]) || id
 
@@ -1167,6 +1168,7 @@ defmodule Blackgate.RouteHandler do
   def terminate(reason, _state, data) do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
     Blackgate.set_route_status(data.id, "stopped")
+    Blackgate.RouteStatsRegistry.delete_stats(data.id)
 
     route_name = get_in(data, [:route, "name"]) || data.id
 

@@ -176,7 +176,20 @@ defmodule BlackgateWeb.RouteController do
 
   def stats(conn, %{"route_id" => route_id}) do
     primary = Blackgate.RouteStatsRegistry.get_stats(route_id)
-    secondary = Blackgate.RouteStatsRegistry.get_secondary_stats(route_id)
+
+    secondary =
+      case Db.get_route(route_id) do
+        {:ok, route} when is_map(route) ->
+          if failover_enabled?(route) do
+            Blackgate.RouteStatsRegistry.get_secondary_stats(route_id)
+          else
+            Blackgate.RouteStatsRegistry.delete_secondary_stats(route_id)
+            nil
+          end
+
+        _ ->
+          nil
+      end
 
     case primary do
       nil ->

@@ -223,10 +223,20 @@ defmodule Blackgate.RouteStatsRegistry do
   end
 
   @doc """
-  Delete stats for a route. Called when route stops.
+  Delete secondary-source stats for a route.
+  """
+  def delete_secondary_stats(route_id) when is_binary(route_id) do
+    :ets.delete(@table_name, {:secondary, route_id})
+    :ok
+  end
+
+  @doc """
+  Delete stats for a route (primary, secondary, and sinks). Called when route stops.
   """
   def delete_stats(route_id) when is_binary(route_id) do
     :ets.delete(@table_name, route_id)
+    :ets.delete(@table_name, {:secondary, route_id})
+    :ets.match_delete(@table_name, {{route_id, :sink, :_}, :_, :_})
     :ok
   end
 
