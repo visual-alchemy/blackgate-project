@@ -58,25 +58,35 @@ typedef struct {
 
 static const DeckLinkModeEntry decklink_mode_table[] = {
     // HD Progressive
-    {1920, 1080, 24, 1, FALSE, "1080p24", NULL},
-    {1920, 1080, 25, 1, FALSE, "1080p25", NULL},
-    {1920, 1080, 30, 1, FALSE, "1080p30", NULL},
-    {1920, 1080, 50, 1, FALSE, "1080p50", NULL},
-    {1920, 1080, 60, 1, FALSE, "1080p60", NULL},
+    {1920, 1080, 24000, 1001, FALSE, "1080p2398", NULL},
+    {1920, 1080, 24,    1,    FALSE, "1080p24",   NULL},
+    {1920, 1080, 25,    1,    FALSE, "1080p25",   NULL},
+    {1920, 1080, 30000, 1001, FALSE, "1080p2997", NULL},
+    {1920, 1080, 30,    1,    FALSE, "1080p30",   NULL},
+    {1920, 1080, 50,    1,    FALSE, "1080p50",   NULL},
+    {1920, 1080, 60000, 1001, FALSE, "1080p5994", NULL},
+    {1920, 1080, 60,    1,    FALSE, "1080p60",   NULL},
     // HD Interlaced
-    {1920, 1080, 25, 1, TRUE,  "1080i50", "interleaved"},
-    {1920, 1080, 30, 1, TRUE,  "1080i60", "interleaved"},
+    {1920, 1080, 25,    1,    TRUE,  "1080i50",   "interleaved"},
+    {1920, 1080, 30000, 1001, TRUE,  "1080i5994", "interleaved"},
+    {1920, 1080, 30,    1,    TRUE,  "1080i60",   "interleaved"},
     // 720p Progressive
-    {1280,  720, 50, 1, FALSE, "720p50",  NULL},
-    {1280,  720, 60, 1, FALSE, "720p60",  NULL},
+    {1280,  720, 50,    1,    FALSE, "720p50",    NULL},
+    {1280,  720, 60000, 1001, FALSE, "720p5994",  NULL},
+    {1280,  720, 60,    1,    FALSE, "720p60",    NULL},
     // SD Interlaced
-    { 720,  576, 25, 1, TRUE,  "pal",     "interleaved"},
-    { 720,  480, 30, 1, TRUE,  "ntsc",    "interleaved"},
+    { 720,  576, 25,    1,    TRUE,  "pal",       "interleaved"},
+    { 720,  480, 30000, 1001, TRUE,  "ntsc",      "interleaved"},
+    { 720,  480, 30,    1,    TRUE,  "ntsc",      "interleaved"},
     // 4K UHD Progressive
-    {3840, 2160, 25, 1, FALSE, "2160p25", NULL},
-    {3840, 2160, 30, 1, FALSE, "2160p30", NULL},
-    {3840, 2160, 50, 1, FALSE, "2160p50", NULL},
-    {3840, 2160, 60, 1, FALSE, "2160p60", NULL},
+    {3840, 2160, 24000, 1001, FALSE, "2160p2398", NULL},
+    {3840, 2160, 24,    1,    FALSE, "2160p24",   NULL},
+    {3840, 2160, 25,    1,    FALSE, "2160p25",   NULL},
+    {3840, 2160, 30000, 1001, FALSE, "2160p2997", NULL},
+    {3840, 2160, 30,    1,    FALSE, "2160p30",   NULL},
+    {3840, 2160, 50,    1,    FALSE, "2160p50",   NULL},
+    {3840, 2160, 60000, 1001, FALSE, "2160p5994", NULL},
+    {3840, 2160, 60,    1,    FALSE, "2160p60",   NULL},
     // Sentinel (end of table)
     {0, 0, 0, 0, FALSE, NULL, NULL},
 };
@@ -287,9 +297,16 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     }
 
     // --- Step 3: Lookup DeckLink mode ---
+    // First try exact match with raw fps_num / fps_den
     const DeckLinkModeEntry *entry = lookup_decklink_mode(width, height,
-                                                          lookup_fps_num, lookup_fps_den,
+                                                          fps_num, fps_den,
                                                           interlaced);
+    if (!entry && (lookup_fps_num != fps_num || lookup_fps_den != fps_den)) {
+        // Fallback to normalized framerate lookup
+        entry = lookup_decklink_mode(width, height,
+                                     lookup_fps_num, lookup_fps_den,
+                                     interlaced);
+    }
 
     const char *mode_str;
     int out_width, out_height;
@@ -303,14 +320,15 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
         out_width = entry->width;
         out_height = entry->height;
         out_interlace_mode = entry->caps_interlace_mode;
-        need_interlace_element = (entry->caps_interlace_mode != NULL);
+        // Only insert interlace element if input is progressive and output is interlaced
+        need_interlace_element = (!interlaced && entry->caps_interlace_mode != NULL);
 
         // Build framerate string from the table entry
         char fr_buf[16];
         snprintf(fr_buf, sizeof(fr_buf), "%d/%d", entry->fps_num, entry->fps_den);
         out_framerate = g_strdup(fr_buf);
 
-        g_print("SDI AUTO-DETECT: MATCHED → mode=%s (interlace=%s)\n",
+        g_print("SDI AUTO-DETECT: MATCHED → mode=%s (interlace_elem=%s)\n",
                 mode_str, need_interlace_element ? "yes" : "no");
     } else {
         // No match — fall back to user-configured defaults
@@ -323,7 +341,7 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
         if (strstr(mode_str, "i") != NULL ||
             strcmp(mode_str, "pal") == 0 ||
             strcmp(mode_str, "ntsc") == 0) {
-            need_interlace_element = TRUE;
+            need_interlace_element = !interlaced;
             out_interlace_mode = "interleaved";
         }
 
@@ -1425,6 +1443,14 @@ static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, g
     return GST_PAD_PROBE_OK;
 }
 
+static GstPadProbeReturn drop_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    (void)info;
+    (void)user_data;
+    return GST_PAD_PROBE_DROP;
+}
+
 // =============================================================================
 // Thumbnail Capture Branch
 // =============================================================================
@@ -1471,7 +1497,11 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
 
     gst_caps_unref(caps);
 
-    if (!g_str_has_prefix(name, "video/")) return; // Skip audio pads
+    if (!g_str_has_prefix(name, "video/")) {
+        // Drop unlinked non-video (audio/subtitle) buffers so decodebin does not block or return NOT_LINKED
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_buffer_probe, NULL, NULL);
+        return;
+    }
 
     GstPad *sink_pad = gst_element_get_static_pad(videoconvert, "sink");
     if (!gst_pad_is_linked(sink_pad)) {
