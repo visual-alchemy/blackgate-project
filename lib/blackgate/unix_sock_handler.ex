@@ -59,6 +59,7 @@ defmodule Blackgate.UnixSockHandler do
 
   @impl true
   def handle_event(:info, {:tcp, _port, "route_id:" <> route_id}, _state, data) do
+    route_id = String.trim(route_id)
     Logger.info("route_id: #{route_id}")
 
     route_record =
@@ -75,11 +76,14 @@ defmodule Blackgate.UnixSockHandler do
     {:keep_state, %{data | route_id: route_id, route_record: route_record}}
   end
 
+  def handle_event(:info, {:tcp, _port, "\n"}, _state, _data), do: :keep_state_and_data
+  def handle_event(:info, {:tcp, _port, ""}, _state, _data), do: :keep_state_and_data
+
   def handle_event(
         :info,
         {:tcp, _port, "{" <> _ = message},
         _,
-        %{route_record: %{"exportStats" => true}} = data
+        data
       ) do
     # Handle potentially concatenated source + sink stats messages
     {source_json, sink_json} = split_stats_message(message)
@@ -182,6 +186,11 @@ defmodule Blackgate.UnixSockHandler do
   def handle_event(:info, {:tcp, _port, "stats_source_stream_id:" <> stream_id}, _state, data) do
     Logger.info("stats_source_stream_id: #{stream_id}")
     {:keep_state, %{data | source_stream_id: stream_id}}
+  end
+
+  def handle_event(:info, {:tcp_closed, _port}, _state, _data) do
+    Logger.debug("UnixSockHandler: socket closed by client")
+    {:stop, :normal}
   end
 
   def handle_event(type, content, state, data) do

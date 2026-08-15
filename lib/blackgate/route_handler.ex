@@ -1213,9 +1213,9 @@ defmodule Blackgate.RouteHandler do
 
   defp get_binary_path do
     if System.get_env("RELEASE_NAME") do
-      "#{:code.priv_dir(:blackgate)}/native/build/blackgate_pipeline"
+      "#{:code.priv_dir(:blackgate)}/native/build/blackgate-engine"
     else
-      "./native/build/blackgate_pipeline"
+      "./native/build/blackgate-engine"
     end
   end
 
@@ -1239,7 +1239,7 @@ defmodule Blackgate.RouteHandler do
               %{"source" => source, "sinks" => sinks}
           end
         else
-          %{"source" => source, "sinks" => sinks}
+          %{"route_id" => route["id"], "source" => source, "sinks" => sinks}
         end
 
       with {:ok, params} <- Jason.encode(payload),
@@ -1332,7 +1332,7 @@ defmodule Blackgate.RouteHandler do
       scheme: "srt",
       host: localaddress,
       port: localport,
-      query: URI.encode_query(query_params)
+      query: URI.encode_query(query_params) |> URI.decode()
     })
   end
 
@@ -1403,6 +1403,22 @@ defmodule Blackgate.RouteHandler do
     }
 
     {:ok, props}
+  end
+
+  def sink_from_record(%{"type" => type} = opts) when is_binary(type) do
+    schema_options = %{
+      "localaddress" => Map.get(opts, "host") || Map.get(opts, "localaddress", "0.0.0.0"),
+      "localport" => Map.get(opts, "port") || Map.get(opts, "localport"),
+      "mode" => Map.get(opts, "mode", "listener"),
+      "streamid" => Map.get(opts, "streamid"),
+      "passphrase" => Map.get(opts, "passphrase"),
+      "latency" => Map.get(opts, "latency_ms") || Map.get(opts, "latency", 2000)
+    }
+
+    sink_from_record(%{
+      "schema" => String.upcase(type),
+      "schema_options" => schema_options
+    })
   end
 
   def sink_from_record(_), do: {:error, :invalid_destination}
@@ -1567,12 +1583,31 @@ defmodule Blackgate.RouteHandler do
     ])
   end
 
+  def source_from_record(%{"source" => source}) when is_map(source) and not is_nil(source) do
+    source_from_record(source)
+  end
+
+  def source_from_record(%{"protocol" => proto} = opts) when is_binary(proto) do
+    schema_options = %{
+      "localaddress" => Map.get(opts, "host"),
+      "localport" => Map.get(opts, "port"),
+      "mode" => Map.get(opts, "mode", "caller"),
+      "streamid" => Map.get(opts, "streamid"),
+      "passphrase" => Map.get(opts, "passphrase"),
+      "latency" => Map.get(opts, "latency_ms") || Map.get(opts, "latency", 2000)
+    }
+
+    source_from_record(%{
+      "schema" => String.upcase(proto),
+      "schema_options" => schema_options
+    })
+  end
+
   def source_from_record(_), do: {:error, :invalid_source}
 
-  defp secondary_source_from_record(%{
-         "secondary_source" => %{"schema" => "SRT", "schema_options" => opts}
-       }),
-       do: source_from_record(%{"schema" => "SRT", "schema_options" => opts})
+  defp secondary_source_from_record(%{"secondary_source" => sec}) when is_map(sec) and map_size(sec) > 0 do
+    source_from_record(sec)
+  end
 
   defp secondary_source_from_record(_), do: {:error, :no_srt_secondary}
 

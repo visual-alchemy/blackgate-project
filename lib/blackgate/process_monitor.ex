@@ -23,7 +23,7 @@ defmodule Blackgate.ProcessMonitor do
     output
     |> String.split("\n", trim: true)
     |> Enum.drop(1)
-    |> Enum.filter(&String.contains?(&1, "blackgate_pipeline"))
+    |> Enum.filter(&String.contains?(&1, "blackgate-engine"))
     |> Enum.map(&parse_process_darwin/1)
   end
 
@@ -38,7 +38,7 @@ defmodule Blackgate.ProcessMonitor do
     output
     |> String.split("\n", trim: true)
     |> Enum.drop(1)
-    |> Enum.filter(&String.contains?(&1, "blackgate_pipeline"))
+    |> Enum.filter(&String.contains?(&1, "blackgate-engine"))
     |> Enum.map(&parse_process_detailed_darwin/1)
   end
 
@@ -132,7 +132,7 @@ defmodule Blackgate.ProcessMonitor do
     output
     |> String.split("\n", trim: true)
     |> Enum.drop(1)
-    |> Enum.filter(&String.contains?(&1, "blackgate_pipeline"))
+    |> Enum.filter(&String.contains?(&1, "blackgate-engine"))
     |> Enum.map(&parse_process_linux/1)
   end
 
@@ -147,7 +147,7 @@ defmodule Blackgate.ProcessMonitor do
     output
     |> String.split("\n", trim: true)
     |> Enum.drop(1)
-    |> Enum.filter(&String.contains?(&1, "blackgate_pipeline"))
+    |> Enum.filter(&String.contains?(&1, "blackgate-engine"))
     |> Enum.map(&parse_process_detailed_linux/1)
   end
 
