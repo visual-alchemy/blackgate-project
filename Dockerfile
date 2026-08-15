@@ -131,6 +131,7 @@ ENV DATABASE_DATA_DIR="/app/khepri"
 # Install runtime dependencies
 RUN apt-get update -y && \
     apt-get install -y \
+    ffmpeg \
     libstdc++6 \
     openssl \
     libncurses5 \

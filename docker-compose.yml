@@ -4,36 +4,31 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    network_mode: host # Use host networking for direct access to all network interfaces
-    privileged: true # Required for DeckLink kernel module access
-    # Note: With network_mode: host, ports are exposed directly on the host
-    # No port mapping needed - container uses host ports directly
+    # Bridge networking (Mac Docker Desktop cannot do host networking or
+    # bind host device nodes). For the Debian appliance deployment, restore:
+    #   network_mode: host
+    #   privileged: true
+    #   devices: [/dev/blackmagic/io*, /dev/dri]
+    ports:
+      - "4000:4000" # Phoenix API + UI
+      - "9000-9500:9000-9500/udp" # SRT listener range for route sources/sinks
     environment:
-      - NODE_IP=127.0.0.1
-      - RELEASE_COOKIE="Vt8gXnEI2zRH4l3eqUEBrcGQ22mHSj73CgkYm02u"
       - PHX_SERVER=true
       - PORT=4000
       - PHX_HOST=0.0.0.0
+      # Match the Ra store member identity in ./data/khepri (blackgate@127.0.0.1,
+      # long-name node from dev runs) so Khepri accepts writes.
+      - RELEASE_DISTRIBUTION=name
+      - RELEASE_NODE=blackgate@127.0.0.1
       - API_AUTH_USERNAME=admin
       - API_AUTH_PASSWORD=password123
       - DATABASE_DATA_DIR=/app/khepri
       - LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
       - RLIMIT_NOFILE=65536
+      # SRT caller sinks inside the container reach a receiver on the Mac host via:
+      #   host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/khepri:/app/khepri
       - ./data/backup:/app/backup
-    # =========================================================================
-    # Hardware Device Passthrough (uncomment as needed)
-    # =========================================================================
-    # DeckLink Quad 2: 8 SDI I/O channels (requires host driver: desktopvideo)
-    # Intel GPU: VA-API hardware decoding (for SDI output decode pipeline)
-    devices:
-      - /dev/blackmagic/io0:/dev/blackmagic/io0
-      - /dev/blackmagic/io1:/dev/blackmagic/io1
-      - /dev/blackmagic/io2:/dev/blackmagic/io2
-      - /dev/blackmagic/io3:/dev/blackmagic/io3
-      - /dev/blackmagic/io4:/dev/blackmagic/io4
-      - /dev/blackmagic/io5:/dev/blackmagic/io5
-      - /dev/blackmagic/io6:/dev/blackmagic/io6
-      - /dev/blackmagic/io7:/dev/blackmagic/io7
-      - /dev/dri:/dev/dri

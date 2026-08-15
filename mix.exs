@@ -80,7 +80,8 @@ defmodule Blackgate.MixProject do
     [
       blackgate: [
         steps: [:assemble, &copy_native/1, &copy_web_app/1],
-        include_erts: false,
+        # Bundle ERTS from the builder image: the runner stage has no Erlang
+        include_erts: true,
         cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
       ]
     ]

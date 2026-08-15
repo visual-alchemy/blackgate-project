@@ -1,0 +1,16 @@
+# Build context hygiene — keep image builds fast and arch-clean
+native/rust/target
+native/build
+node_modules
+web_app/node_modules
+web_app/dist
+_build
+deps
+priv/static
+data
+.omo
+graphify-out
+.git
+*.md
+docs
+.iso-builder
