@@ -36,12 +36,8 @@ RUN cargo build \
 
 FROM ubuntu:24.04
 
-ARG RUST_VERSION="1.96.0"
-ARG VCS_REF="unknown"
-ENV DEBIAN_FRONTEND="noninteractive" \
-    LANG="C.UTF-8" \
-    BLACKGATE_BENCH_GIT_COMMIT="${VCS_REF}" \
-    BLACKGATE_BENCH_RUST_VERSION="rustc ${RUST_VERSION}"
+ARG DEBIAN_FRONTEND="noninteractive"
+ENV LANG="C.UTF-8"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -59,6 +55,11 @@ RUN apt-get update \
         sysstat \
         tini \
     && rm -rf /var/lib/apt/lists/*
+
+ARG RUST_VERSION="1.96.0"
+ARG VCS_REF="unknown"
+ENV BLACKGATE_BENCH_GIT_COMMIT="${VCS_REF}" \
+    BLACKGATE_BENCH_RUST_VERSION="rustc ${RUST_VERSION}"
 
 COPY --from=builder /src/native/archive/c-engine/build/blackgate_pipeline /opt/blackgate/engines/blackgate_pipeline
 COPY --from=builder /src/native/rust/target/release/blackgate-engine /opt/blackgate/engines/blackgate-engine

@@ -109,6 +109,12 @@ class WorkloadContractTest(unittest.TestCase):
         for forbidden in ("COPY .env", "COPY config/runtime.exs", "COPY /root"):
             self.assertNotIn(forbidden, text)
 
+        runtime_stage = text.split("FROM ubuntu:24.04", 2)[2]
+        self.assertLess(
+            runtime_stage.index("rm -rf /var/lib/apt/lists/*"),
+            runtime_stage.index("BLACKGATE_BENCH_GIT_COMMIT"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
