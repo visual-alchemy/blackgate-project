@@ -17,13 +17,13 @@ install:
 			sudo apt-get update; \
 			sudo apt-get install -y build-essential pkg-config git curl wget \
 				libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-				gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-				libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev; \
+				gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
+				libcjson-dev libsrt-openssl-dev libssl-dev libcmocka-dev libglib2.0-dev; \
 		elif command -v dnf > /dev/null; then \
 			echo "Detected Fedora/RHEL..."; \
-			sudo dnf install -y gcc make pkgconfig git curl wget \
+			sudo dnf install -y gcc make pkgconfig git curl wget openssl-devel \
 				gstreamer1-devel gstreamer1-plugins-base-devel \
-				gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+				gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-libav \
 				cjson-devel srt-devel cmocka-devel glib2-devel; \
 		else \
 			echo "Unsupported Linux distribution. Please install dependencies manually."; \
