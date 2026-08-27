@@ -2,23 +2,29 @@ defmodule Blackgate.Db do
   @moduledoc false
   require Logger
 
+  @sdi_not_supported_message "SDI output not supported on Blackgate Lite"
+
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
-    id = if id, do: id, else: UUID.uuid1()
-
-    update = %{
-      "id" => id,
-      "created_at" => now(),
-      "updated_at" => now()
-    }
-
-    with :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
-         {:ok, result} <- get_route(id) do
-      {:ok, result}
+    if has_sdi_destination?(data) do
+      {:error, @sdi_not_supported_message}
     else
-      other ->
-        Logger.error("Failed to create route: #{inspect(other)}")
-        {:error, other}
+      id = if id, do: id, else: UUID.uuid1()
+
+      update = %{
+        "id" => id,
+        "created_at" => now(),
+        "updated_at" => now()
+      }
+
+      with :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
+           {:ok, result} <- get_route(id) do
+        {:ok, result}
+      else
+        other ->
+          Logger.error("Failed to create route: #{inspect(other)}")
+          {:error, other}
+      end
     end
   end
 
@@ -48,24 +54,28 @@ defmodule Blackgate.Db do
 
   @spec update_route(String.t(), map) :: {:ok, map} | {:error, any}
   def update_route(id, data) do
-    path = ["routes", id]
-    now = now()
+    if has_sdi_destination?(data) do
+      {:error, @sdi_not_supported_message}
+    else
+      path = ["routes", id]
+      now = now()
 
-    :khepri.transaction(fn ->
-      case :khepri_tx.get(path) do
-        {:ok, route} ->
-          new_route = Map.merge(route, Map.put(data, "updated_at", now))
+      :khepri.transaction(fn ->
+        case :khepri_tx.get(path) do
+          {:ok, route} ->
+            new_route = Map.merge(route, Map.put(data, "updated_at", now))
 
-          :ok = :khepri_tx.put(path, new_route)
-          :khepri_tx.get(path)
+            :ok = :khepri_tx.put(path, new_route)
+            :khepri_tx.get(path)
 
-        _ ->
-          {:error, :route_not_found}
+          _ ->
+            {:error, :route_not_found}
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        other -> {:error, inspect(other)}
       end
-    end)
-    |> case do
-      {:ok, result} -> result
-      other -> {:error, inspect(other)}
     end
   end
 
@@ -76,23 +86,27 @@ defmodule Blackgate.Db do
 
   @spec create_destination(String.t(), map, binary | nil) :: {:ok, map} | {:error, any}
   def create_destination(route_id, data, id \\ nil) do
-    id = if id, do: id, else: UUID.uuid1()
-
-    data =
-      Map.merge(data, %{
-        "id" => id,
-        "route_id" => route_id,
-        "created_at" => now(),
-        "updated_at" => now()
-      })
-
-    with :ok <- :khepri.put(["routes", route_id, "destinations", id], data),
-         {:ok, result} <- get_destination(route_id, id) do
-      {:ok, result}
+    if has_sdi_destination?(data) do
+      {:error, @sdi_not_supported_message}
     else
-      other ->
-        Logger.error("Failed to create route: #{inspect(other)}")
-        {:error, other}
+      id = if id, do: id, else: UUID.uuid1()
+
+      data =
+        Map.merge(data, %{
+          "id" => id,
+          "route_id" => route_id,
+          "created_at" => now(),
+          "updated_at" => now()
+        })
+
+      with :ok <- :khepri.put(["routes", route_id, "destinations", id], data),
+           {:ok, result} <- get_destination(route_id, id) do
+        {:ok, result}
+      else
+        other ->
+          Logger.error("Failed to create destination: #{inspect(other)}")
+          {:error, other}
+      end
     end
   end
 
@@ -103,24 +117,27 @@ defmodule Blackgate.Db do
 
   @spec update_destination(String.t(), String.t(), map) :: {:ok, map} | {:error, any}
   def update_destination(route_id, id, data) do
-    path = ["routes", route_id, "destinations", id]
-    now = now()
+    with {:ok, destination} <- get_destination(route_id, id),
+         :ok <- validate_no_sdi(Map.merge(destination, data)) do
+      path = ["routes", route_id, "destinations", id]
+      now = now()
 
-    :khepri.transaction(fn ->
-      case :khepri_tx.get(path) do
-        {:ok, destination} ->
-          new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+      :khepri.transaction(fn ->
+        case :khepri_tx.get(path) do
+          {:ok, destination} ->
+            new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
 
-          :ok = :khepri_tx.put(path, new_destination)
-          :khepri_tx.get(path)
+            :ok = :khepri_tx.put(path, new_destination)
+            :khepri_tx.get(path)
 
-        _ ->
-          {:error, :destination_not_found}
+          _ ->
+            {:error, :destination_not_found}
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        other -> {:error, inspect(other)}
       end
-    end)
-    |> case do
-      {:ok, result} -> result
-      other -> {:error, inspect(other)}
     end
   end
 
@@ -203,6 +220,28 @@ defmodule Blackgate.Db do
         {:error, e}
     end
   end
+
+  defp has_sdi_destination?(data) when is_map(data) do
+    destinations = Map.get(data, "destinations", Map.get(data, :destinations))
+
+    if is_list(destinations) do
+      Enum.any?(destinations, &sdi_destination?/1)
+    else
+      sdi_destination?(data)
+    end
+  end
+
+  defp validate_no_sdi(data) do
+    if has_sdi_destination?(data) do
+      {:error, @sdi_not_supported_message}
+    else
+      :ok
+    end
+  end
+
+  defp sdi_destination?(%{schema: "SDI"}), do: true
+  defp sdi_destination?(%{"schema" => "SDI"}), do: true
+  defp sdi_destination?(_), do: false
 
   defp now, do: DateTime.utc_now()
 end

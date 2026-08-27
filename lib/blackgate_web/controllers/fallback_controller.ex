@@ -21,4 +21,12 @@ defmodule BlackgateWeb.FallbackController do
     |> put_view(html: BlackgateWeb.ErrorHTML, json: BlackgateWeb.ErrorJSON)
     |> render(:"404")
   end
+
+  # Handles domain validation errors carrying a human-readable message,
+  # e.g. SDI destination rejection on Blackgate Lite.
+  def call(conn, {:error, message}) when is_binary(message) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: message})
+  end
 end

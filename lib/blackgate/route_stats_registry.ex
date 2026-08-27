@@ -28,44 +28,14 @@ defmodule Blackgate.RouteStatsRegistry do
 
     {stats, warning_count, prev_health} =
       case :ets.lookup(@table_name, route_id) do
-        [{^route_id, prev_stats, prev_updated_at}] ->
-          prev_sdi_stats = prev_stats["sdi_video_stats"] || []
-          curr_sdi_stats = stats["sdi_video_stats"] || []
-
-          updated_sdi_stats =
-            Enum.map(curr_sdi_stats, fn curr_item ->
-              dev = curr_item["device_number"]
-              prev_item = Enum.find(prev_sdi_stats, &(&1["device_number"] == dev))
-
-              if prev_item && prev_updated_at < updated_at do
-                delta_drops = max(0, curr_item["dropped_frames"] - prev_item["dropped_frames"])
-                delta_dups = max(0, curr_item["duplicated_frames"] - prev_item["duplicated_frames"])
-                delta_time_sec = (updated_at - prev_updated_at) / 1000.0
-
-                {drops_per_sec, dups_per_sec} =
-                  if delta_time_sec > 0.1 do
-                    {delta_drops / delta_time_sec, delta_dups / delta_time_sec}
-                  else
-                    {0.0, 0.0}
-                  end
-
-                curr_item
-                |> Map.put("drops_per_sec", Float.round(drops_per_sec, 2))
-                |> Map.put("duplicates_per_sec", Float.round(dups_per_sec, 2))
-              else
-                curr_item
-                |> Map.put("drops_per_sec", 0.0)
-                |> Map.put("duplicates_per_sec", 0.0)
-              end
-            end)
-
+        [{^route_id, prev_stats, _prev_updated_at}] ->
           warning_count = prev_stats["warning_count"] || 0
           prev_health = prev_stats["health"] || "disconnected"
 
           stats =
             stats
-            |> Map.put("sdi_video_stats", updated_sdi_stats)
-            |> Map.put("warning_count", 0) # Reset to 0 for next window
+            # Reset to 0 for next window
+            |> Map.put("warning_count", 0)
             |> Map.put("last_warning_element", prev_stats["last_warning_element"])
             |> Map.put("last_warning_message", prev_stats["last_warning_message"])
             |> Map.put("last_warning_time", prev_stats["last_warning_time"])
@@ -74,24 +44,12 @@ defmodule Blackgate.RouteStatsRegistry do
           {stats, warning_count, prev_health}
 
         _ ->
-          curr_sdi_stats = stats["sdi_video_stats"] || []
-
-          updated_sdi_stats =
-            Enum.map(curr_sdi_stats, fn curr_item ->
-              curr_item
-              |> Map.put("drops_per_sec", 0.0)
-              |> Map.put("duplicates_per_sec", 0.0)
-            end)
-
-          stats =
-            stats
-            |> Map.put("sdi_video_stats", updated_sdi_stats)
-            |> Map.put("warning_count", 0)
-
+          stats = Map.put(stats, "warning_count", 0)
           {stats, 0, "disconnected"}
       end
 
     sink_stats = get_all_sink_stats(route_id)
+
     eval_stats =
       stats
       |> Map.put("warning_count", warning_count)
@@ -113,6 +71,7 @@ defmodule Blackgate.RouteStatsRegistry do
       "route:stats:#{route_id}",
       {:stats_update, %{stats: eval_stats, health: health, updated_at: updated_at}}
     )
+
     :ok
   end
 
@@ -128,7 +87,7 @@ defmodule Blackgate.RouteStatsRegistry do
         last_log_time = stats["last_warning_log_time"] || 0
 
         # Rate limit logging to EventLog to once per 10 seconds
-        should_log = (now - last_log_time) > 10_000
+        should_log = now - last_log_time > 10_000
 
         if should_log do
           Blackgate.EventLog.log(
@@ -151,6 +110,7 @@ defmodule Blackgate.RouteStatsRegistry do
 
         # Broadcast the warning update immediately
         health = Blackgate.RouteHealth.evaluate(updated_stats)
+
         Phoenix.PubSub.broadcast(
           Blackgate.PubSub,
           "route:stats:#{route_id}",
@@ -165,6 +125,7 @@ defmodule Blackgate.RouteStatsRegistry do
           "last_warning_time" => now,
           "last_warning_log_time" => now
         }
+
         :ets.insert(@table_name, {route_id, stats, now})
 
         Blackgate.EventLog.log(
@@ -174,6 +135,7 @@ defmodule Blackgate.RouteStatsRegistry do
           %{route_id: route_id}
         )
     end
+
     :ok
   end
 
@@ -221,6 +183,7 @@ defmodule Blackgate.RouteStatsRegistry do
   """
   def get_sink_stats(route_id, sink_index) when is_binary(route_id) do
     key = {route_id, :sink, sink_index}
+
     case :ets.lookup(@table_name, key) do
       [{^key, stats, timestamp}] ->
         %{stats: stats, updated_at: timestamp}
@@ -236,6 +199,7 @@ defmodule Blackgate.RouteStatsRegistry do
   def get_all_sink_stats(route_id) when is_binary(route_id) do
     # Match all keys of format {route_id, :sink, _}
     pattern = {{route_id, :sink, :_}, :_, :_}
+
     :ets.match_object(@table_name, pattern)
     |> Enum.map(fn {{^route_id, :sink, sink_index}, stats, timestamp} ->
       %{sink_index: sink_index, stats: stats, updated_at: timestamp}
@@ -257,14 +221,29 @@ defmodule Blackgate.RouteStatsRegistry do
 
     message =
       case current do
-        "healthy" -> "Route health recovered to healthy"
-        "disconnected" -> "Route stream disconnected"
-        "source_corrupted" -> "Source stream video corruption detected (packet delivery clean)"
-        "blackgate_config_issue" -> "Appliance buffer overflow / socket limit detected (local packet loss)"
-        "network_loss_egress" -> "Egress transmission packet loss detected on output client connections"
-        "warning" -> "Route health degraded to warning"
-        "critical" -> "Route health degraded to critical"
-        _ -> "Route health changed to #{current}"
+        "healthy" ->
+          "Route health recovered to healthy"
+
+        "disconnected" ->
+          "Route stream disconnected"
+
+        "source_corrupted" ->
+          "Source stream video corruption detected (packet delivery clean)"
+
+        "blackgate_config_issue" ->
+          "Appliance buffer overflow / socket limit detected (local packet loss)"
+
+        "network_loss_egress" ->
+          "Egress transmission packet loss detected on output client connections"
+
+        "warning" ->
+          "Route health degraded to warning"
+
+        "critical" ->
+          "Route health degraded to critical"
+
+        _ ->
+          "Route health changed to #{current}"
       end
 
     Blackgate.EventLog.log(level, type, message, %{

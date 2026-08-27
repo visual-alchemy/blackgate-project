@@ -1,6 +1,6 @@
 defmodule Blackgate.EventLog do
   @moduledoc """
-  In-memory event log for system events (route start/stop, SDI failures, connection changes).
+  In-memory event log for system events (route start/stop, connection changes).
   Stores the last N events in ETS as a ring buffer. Events are ephemeral — they don't
   survive restarts. For persistent history, use external logging/metrics.
   """
@@ -32,7 +32,7 @@ defmodule Blackgate.EventLog do
   ## Examples
 
       EventLog.log(:info, "route_started", "Route started", %{route_id: "abc", route_name: "EPL"})
-      EventLog.log(:critical, "sdi_failed", "SDI sink failed", %{route_id: "abc", device: 0})
+      EventLog.log(:critical, "route_hardware_error", "Route crashed repeatedly", %{route_id: "abc"})
   """
   def log(severity, type, message, metadata \\ %{})
       when severity in @severities and is_binary(type) and is_binary(message) do

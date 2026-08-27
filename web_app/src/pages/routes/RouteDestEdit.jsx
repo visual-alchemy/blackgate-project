@@ -25,7 +25,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     const [destData, setDestData] = useState(null);
     const [routeLoading, setRouteLoading] = useState(true);
     const [interfaces, setInterfaces] = useState([]);
-    const [sdiPortUsage, setSdiPortUsage] = useState({});
 
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
@@ -98,27 +97,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 console.error('Error fetching network interfaces:', error);
             });
     }, []);
-
-    // Fetch SDI port usage across all routes
-    useEffect(() => {
-        routesApi.getAll()
-            .then(result => {
-                const usage = {};
-                (result.data || []).forEach(route => {
-                    (route.destinations || []).forEach(dest => {
-                        if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
-                            // Skip if this is the current destination being edited
-                            if (dest.id === destId) return;
-                            usage[dest.schema_options.device_number] = route.name;
-                        }
-                    });
-                });
-                setSdiPortUsage(usage);
-            })
-            .catch(error => {
-                console.error('Error fetching SDI port usage:', error);
-            });
-    }, [destId]);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -233,7 +211,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
-                                            <Radio.Button value="SDI">SDI</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -497,72 +474,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                         value: iface.name
                                                                     }))
                                                             ]}
-                                                        />
-                                                    </Form.Item>
-                                                </>
-                                            )
-                                        }
-                                    </Form.Item>
-
-                                    {/* SDI specific options (DeckLink Quad 2) */}
-                                    <Form.Item noStyle dependencies={['schema']}>
-                                        {({ getFieldValue }) =>
-                                            getFieldValue('schema') === 'SDI' && (
-                                                <>
-                                                    <Form.Item
-                                                        label="SDI Output Port"
-                                                        name={['schema_options', 'device_number']}
-                                                        required
-                                                        extra="DeckLink Quad 2 port number. Each card provides 8 SDI channels (0-7)."
-                                                    >
-                                                        <Select
-                                                            placeholder="Select SDI port"
-                                                            options={[
-                                                                { label: 'SDI 1', value: 0 },
-                                                                { label: 'SDI 2', value: 4 },
-                                                                { label: 'SDI 3', value: 1 },
-                                                                { label: 'SDI 4', value: 5 },
-                                                                { label: 'SDI 5', value: 2 },
-                                                                { label: 'SDI 6', value: 6 },
-                                                                { label: 'SDI 7', value: 3 },
-                                                                { label: 'SDI 8', value: 7 },
-                                                            ].map(opt => ({
-                                                                ...opt,
-                                                                label: sdiPortUsage[opt.value]
-                                                                    ? `${opt.label} (used by ${sdiPortUsage[opt.value]})`
-                                                                    : opt.label,
-                                                                disabled: !!sdiPortUsage[opt.value],
-                                                            }))}
-                                                            style={{ width: '280px' }}
-                                                        />
-                                                    </Form.Item>
-
-                                                    <Form.Item
-                                                        label="Video Mode"
-                                                        name={['schema_options', 'video_mode']}
-                                                        required
-                                                        extra="Output video format. Must match source resolution and frame rate."
-                                                    >
-                                                        <Select
-                                                            placeholder="Select video mode"
-                                                            options={[
-                                                                { label: 'Auto (detect from source)', value: 0 },
-                                                                { label: '1080p 25fps (PAL)', value: 9 },
-                                                                { label: '1080p 30fps (NTSC)', value: 11 },
-                                                                { label: '1080p 50fps', value: 12 },
-                                                                { label: '1080p 60fps', value: 13 },
-                                                                { label: '1080i 50fps (PAL)', value: 7 },
-                                                                { label: '1080i 60fps (NTSC)', value: 8 },
-                                                                { label: '720p 50fps', value: 14 },
-                                                                { label: '720p 60fps', value: 15 },
-                                                                { label: '576i 50fps (PAL SD)', value: 17 },
-                                                                { label: '480i 60fps (NTSC SD)', value: 18 },
-                                                                { label: '2160p 25fps (4K)', value: 22 },
-                                                                { label: '2160p 30fps (4K)', value: 23 },
-                                                                { label: '2160p 50fps (4K)', value: 24 },
-                                                                { label: '2160p 60fps (4K)', value: 25 },
-                                                            ]}
-                                                            style={{ width: '250px' }}
                                                         />
                                                     </Form.Item>
                                                 </>

@@ -12,8 +12,7 @@ import {
   Descriptions,
   Collapse,
   message,
-  Input,
-  Alert
+  Input
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -197,13 +196,6 @@ const RouteItem = () => {
             return (`${record.schema_options?.localaddress}:${record.schema_options?.localport}:${record.schema_options?.mode}`)
           case 'UDP':
             return (`${record.schema_options?.host}:${record.schema_options?.port}`)
-          case 'SDI': {
-            const deviceToSdi = { 0: 1, 4: 2, 1: 3, 5: 4, 2: 5, 6: 6, 3: 7, 7: 8 };
-            const port = deviceToSdi[record.schema_options?.device_number] ?? '?';
-            const modeMap = { 0: 'Auto', 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60' };
-            const mode = modeMap[record.schema_options?.video_mode] || '1080p25';
-            return `SDI ${port} · ${mode}`;
-          }
           default:
             return '—'
         }
@@ -214,7 +206,6 @@ const RouteItem = () => {
       title: 'Latency',
       key: 'latency',
       render: (_, record) => {
-        if (record.schema === 'SDI') return '—';
         const latency = record.schema_options?.latency || record.latency;
         return latency ? `${latency}ms` : '—';
       },
@@ -423,16 +414,6 @@ const RouteItem = () => {
     >
       {contextHolder}
       {modalContextHolder}
-
-      {routeData && routeData.status && routeData.status.toLowerCase() === 'error' && (
-        <Alert
-          message="Hardware / Driver Error"
-          description={routeData.error_message || "The DeckLink hardware or kernel driver has stopped responding. Please verify PCIe installation and ensure DesktopVideoHelper is running."}
-          type="error"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
 
       {/* Route Info Card */}
       <Card style={{ marginBottom: 24 }}>

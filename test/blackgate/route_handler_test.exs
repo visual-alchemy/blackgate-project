@@ -6,55 +6,40 @@ defmodule Blackgate.RouteHandlerTest do
     # Clear registry stats for test routes if they exist
     try do
       :ets.delete(:route_stats, "test_route")
-      :ets.delete(:route_stats, "test_route_sdi")
     rescue
       _ -> :ok
     end
 
     # Mock Db, Blackgate.EventLog, and Blackgate
     :meck.new(Blackgate.Db, [:non_strict])
+
     :meck.expect(Blackgate.Db, :get_route, fn
       "test_route", _assoc ->
-        {:ok, %{
-          "id" => "test_route",
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4201,
-            "mode" => "listener"
-          },
-          "destinations" => [
-            %{
-              "schema" => "SRT",
-              "schema_options" => %{
-                "localaddress" => "127.0.0.1",
-                "localport" => 4202,
-                "mode" => "listener"
-              }
-            }
-          ]
-        }}
-      "test_route_sdi", _assoc ->
-        {:ok, %{
-          "id" => "test_route_sdi",
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4201,
-            "mode" => "listener"
-          },
-          "destinations" => [
-            %{
-              "schema" => "SDI",
-              "device-number" => 2,
-              "video-mode" => "1080p25",
-              "interlaced" => false
-            }
-          ]
-        }}
+        {:ok,
+         %{
+           "id" => "test_route",
+           "schema" => "SRT",
+           "schema_options" => %{
+             "localaddress" => "127.0.0.1",
+             "localport" => 4201,
+             "mode" => "listener"
+           },
+           "destinations" => [
+             %{
+               "schema" => "SRT",
+               "schema_options" => %{
+                 "localaddress" => "127.0.0.1",
+                 "localport" => 4202,
+                 "mode" => "listener"
+               }
+             }
+           ]
+         }}
+
       _id, _assoc ->
         {:ok, %{}}
     end)
+
     :meck.expect(Blackgate.Db, :update_route, fn _id, _params -> {:ok, %{}} end)
 
     :meck.new(Blackgate, [:non_strict])
@@ -103,7 +88,7 @@ defmodule Blackgate.RouteHandlerTest do
         "latency" => 200,
         "auto-reconnect" => true,
         "keep-listening" => true,
-        "rcvbuf" => 50000000,
+        "rcvbuf" => 50_000_000,
         "lossmaxttl" => 10,
         "oheadbw" => 50
       }
@@ -116,7 +101,7 @@ defmodule Blackgate.RouteHandlerTest do
     assert source["latency"] == 200
     assert source["auto-reconnect"] == true
     assert source["keep-listening"] == true
-    assert source["rcvbuf"] == 50000000
+    assert source["rcvbuf"] == 50_000_000
     assert source["lossmaxttl"] == 10
     assert source["oheadbw"] == 50
   end
@@ -129,10 +114,10 @@ defmodule Blackgate.RouteHandlerTest do
         "localport" => 4202,
         "mode" => "caller",
         "latency" => 250,
-        "sndbuf" => 12000000,
-        "rcvbuf" => 8000000,
+        "sndbuf" => 12_000_000,
+        "rcvbuf" => 8_000_000,
         "oheadbw" => 30,
-        "maxbw" => 50000000
+        "maxbw" => 50_000_000
       }
     }
 
@@ -141,10 +126,10 @@ defmodule Blackgate.RouteHandlerTest do
     assert sink["uri"] =~ "srt://127.0.0.1:4202"
     assert sink["uri"] =~ "mode=caller"
     assert sink["latency"] == 250
-    assert sink["sndbuf"] == 12000000
-    assert sink["rcvbuf"] == 8000000
+    assert sink["sndbuf"] == 12_000_000
+    assert sink["rcvbuf"] == 8_000_000
     assert sink["oheadbw"] == 30
-    assert sink["maxbw"] == 50000000
+    assert sink["maxbw"] == 50_000_000
   end
 
   test "source_from_record with SRT schema and passphrase" do
@@ -210,6 +195,15 @@ defmodule Blackgate.RouteHandlerTest do
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
   end
 
+  test "sink_from_record with SDI schema is rejected" do
+    record = %{
+      "schema" => "SDI",
+      "schema_options" => %{"device_number" => 0, "video_mode" => 9}
+    }
+
+    assert {:error, :invalid_destination} = RouteHandler.sink_from_record(record)
+  end
+
   test "source_from_record with missing schema_options" do
     record = %{"schema" => "SRT"}
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
@@ -229,31 +223,32 @@ defmodule Blackgate.RouteHandlerTest do
     # Setting up meck to return a route with multiple destinations
     :meck.expect(Blackgate.Db, :get_route, fn
       "test_route_multiple", _assoc ->
-        {:ok, %{
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4201,
-            "mode" => "listener"
-          },
-          "destinations" => [
-            %{
-              "schema" => "SRT",
-              "schema_options" => %{
-                "localaddress" => "127.0.0.1",
-                "localport" => 4202,
-                "mode" => "listener"
-              }
-            },
-            %{
-              "schema" => "UDP",
-              "schema_options" => %{
-                "address" => "127.0.0.1",
-                "port" => 4203
-              }
-            }
-          ]
-        }}
+        {:ok,
+         %{
+           "schema" => "SRT",
+           "schema_options" => %{
+             "localaddress" => "127.0.0.1",
+             "localport" => 4201,
+             "mode" => "listener"
+           },
+           "destinations" => [
+             %{
+               "schema" => "SRT",
+               "schema_options" => %{
+                 "localaddress" => "127.0.0.1",
+                 "localport" => 4202,
+                 "mode" => "listener"
+               }
+             },
+             %{
+               "schema" => "UDP",
+               "schema_options" => %{
+                 "address" => "127.0.0.1",
+                 "port" => 4203
+               }
+             }
+           ]
+         }}
     end)
 
     route_id = "test_route_multiple"
@@ -305,6 +300,7 @@ defmodule Blackgate.RouteHandlerTest do
 
   test "watchdog skips check during grace period" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route",
       route: %{
@@ -318,17 +314,18 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_count: 0,
       last_bytes_received: 0,
       last_bytes_changed_at: now,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now,
-      started_at: now - 10_000, # 10 seconds ago (grace period is 30s)
+      # 10 seconds ago (grace period is 30s)
+      started_at: now - 10_000,
       consecutive_startup_crashes: 0
     }
 
-    assert {:keep_state_and_data, _} = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+    assert {:keep_state_and_data, _} =
+             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
   end
 
   test "watchdog keeps state when network data is flowing" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route",
       route: %{
@@ -342,9 +339,8 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_count: 0,
       last_bytes_received: 100,
       last_bytes_changed_at: now - 20_000,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now - 20_000,
-      started_at: now - 40_000, # past grace period
+      # past grace period
+      started_at: now - 40_000,
       consecutive_startup_crashes: 0
     }
 
@@ -352,13 +348,16 @@ defmodule Blackgate.RouteHandlerTest do
     stats = %{"total-bytes-received" => 200}
     Blackgate.RouteStatsRegistry.put_stats("test_route", stats)
 
-    assert {:keep_state, updated_data, _} = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+    assert {:keep_state, updated_data, _} =
+             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+
     assert updated_data.last_bytes_received == 200
     assert updated_data.last_bytes_changed_at > now - 5000
   end
 
   test "watchdog restarts route when network data is stalled" do
     now = System.monotonic_time(:millisecond)
+
     data = %{
       id: "test_route",
       route: %{
@@ -371,9 +370,8 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_started_at: nil,
       reconnect_count: 0,
       last_bytes_received: 100,
-      last_bytes_changed_at: now - 70_000, # stalled for 70 seconds (> 60s threshold)
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now - 70_000,
+      # stalled for 70 seconds (> 60s threshold)
+      last_bytes_changed_at: now - 70_000,
       started_at: now - 80_000,
       consecutive_startup_crashes: 0
     }
@@ -381,80 +379,6 @@ defmodule Blackgate.RouteHandlerTest do
     # bytes have not changed
     stats = %{"total-bytes-received" => 100}
     Blackgate.RouteStatsRegistry.put_stats("test_route", stats)
-
-    res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
-    assert elem(res, 0) == :next_state
-    assert elem(res, 1) == :reconnecting
-  end
-
-  test "watchdog keeps state when SDI output is flowing" do
-    now = System.monotonic_time(:millisecond)
-    data = %{
-      id: "test_route_sdi",
-      route: %{
-        "id" => "test_route_sdi",
-        "destinations" => [
-          %{"schema" => "SDI", "device-number" => 2}
-        ]
-      },
-      port: nil,
-      ffmpeg_port: nil,
-      reconnect_timer: nil,
-      reconnect_started_at: nil,
-      reconnect_count: 0,
-      last_bytes_received: 100,
-      last_bytes_changed_at: now,
-      last_sdi_frames: %{2 => 500},
-      last_sdi_frames_changed_at: now - 20_000,
-      started_at: now - 40_000,
-      consecutive_startup_crashes: 0
-    }
-
-    # Put new frames in stats registry
-    stats = %{
-      "total-bytes-received" => 100,
-      "sdi_video_stats" => [
-        %{"device_number" => 2, "video_frames" => 510}
-      ]
-    }
-    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
-
-    assert {:keep_state, updated_data, _} = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
-    assert updated_data.last_sdi_frames[2] == 510
-    assert updated_data.last_sdi_frames_changed_at > now - 5000
-  end
-
-  test "watchdog restarts route when SDI playout is frozen" do
-    now = System.monotonic_time(:millisecond)
-    data = %{
-      id: "test_route_sdi",
-      route: %{
-        "id" => "test_route_sdi",
-        "destinations" => [
-          %{"schema" => "SDI", "device-number" => 2}
-        ]
-      },
-      port: nil,
-      ffmpeg_port: nil,
-      reconnect_timer: nil,
-      reconnect_started_at: nil,
-      reconnect_count: 0,
-      last_bytes_received: 100,
-      last_bytes_changed_at: now, # network is fine
-      last_sdi_frames: %{2 => 500},
-      last_sdi_frames_changed_at: now - 70_000, # playout frozen for 70 seconds (> 60s threshold)
-      started_at: now - 80_000,
-      consecutive_startup_crashes: 0
-    }
-
-    # SDI frames have not advanced (still 500)
-    stats = %{
-      "total-bytes-received" => 100,
-      "sdi_video_stats" => [
-        %{"device_number" => 2, "video_frames" => 500}
-      ]
-    }
-    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
 
     res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
     assert elem(res, 0) == :next_state

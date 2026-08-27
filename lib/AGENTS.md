@@ -36,10 +36,7 @@ Welcome! This folder contains the Elixir OTP core, Phoenix REST API, and WebSock
 - The license checker heartbeats to Vercel every 6 hours.
 - If the validation times out or fails due to network issues, the license cache **remains valid** to prevent production outages.
 
-### 4. SDI Audio Desync Auto-Recovery (`route_handler.ex`)
-- RTMP/HTTP/HLS sources go through the `ffmpeg` sidecar, which can cause brief audio gaps. When this happens, the DeckLink SDI audio embedder loses hardware sync and stays silent even after GStreamer recovers.
-- `RouteHandler` automatically restarts the pipeline when `SDI_AUDIO_SILENT` is detected from the C pipeline's stdout, subject to three guards:
-  1. **Schema guard:** `schema == "SRT"` routes are **never** auto-restarted (SRT is self-healing).
-  2. **Source-silence guard:** if `total_buffers < 5000`, the source has no audio — restart would loop indefinitely, so it is skipped.
-  3. **Cooldown guard:** after an auto-restart, a 5-minute cooldown prevents a restart loop if audio remains intermittent.
-- The `data` struct in `RouteHandler` carries `sdi_audio_last_restart_at` (monotonic timestamp). This field is reset to `nil` on every successful start/reconnect so that user-triggered restarts clear the cooldown.
+### 4. No SDI Output (Blackgate Lite)
+- SDI output is not supported on this product line. `Blackgate.Db` rejects any route/destination with `schema == "SDI"` on create and update with `{:error, "SDI output not supported on Blackgate Lite"}`.
+- Valid destination schemas: `SRT` and `UDP` only. Valid source schemas: `SRT`, `UDP`, `RTMP`, `HTTP`, `HLS`.
+- Route health is evaluated from RTT, packet loss, and bytes flow only (no frame-drop counters).

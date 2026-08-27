@@ -40,28 +40,26 @@ defmodule Blackgate.RouteHealth do
       loss = packet_loss_pct(stats, caller)
       rtt = stats["rtt-ms"] || caller["rtt-ms"] || 0.0
 
-      sdi_video_stats = stats["sdi_video_stats"] || []
-      high_drops? = Enum.any?(sdi_video_stats, fn item ->
-        (item["drops_per_sec"] || 0.0) >= 2.0
-      end)
-
       # Extract pipeline warnings and egress loss
       warning_count = stats["warning_count"] || 0
       sink_stats = stats["sink_stats"] || []
 
-      has_egress_loss? = Enum.any?(sink_stats, fn %{stats: s_stats} ->
-        sent = s_stats["packets-sent"] || 0
-        lost = s_stats["packets-sent-lost"] || 0
+      has_egress_loss? =
+        Enum.any?(sink_stats, fn %{stats: s_stats} ->
+          sent = s_stats["packets-sent"] || 0
+          lost = s_stats["packets-sent-lost"] || 0
 
-        callers_list = s_stats["callers"] || []
-        caller_loss? = Enum.any?(callers_list, fn c ->
-          c_sent = c["packets-sent"] || 0
-          c_lost = c["packets-sent-lost"] || 0
-          c_sent + c_lost > 0 and (c_lost / (c_sent + c_lost) * 100.0) >= 2.0
+          callers_list = s_stats["callers"] || []
+
+          caller_loss? =
+            Enum.any?(callers_list, fn c ->
+              c_sent = c["packets-sent"] || 0
+              c_lost = c["packets-sent-lost"] || 0
+              c_sent + c_lost > 0 and c_lost / (c_sent + c_lost) * 100.0 >= 2.0
+            end)
+
+          (sent + lost > 0 and lost / (sent + lost) * 100.0 >= 2.0) or caller_loss?
         end)
-
-        (sent + lost > 0 and (lost / (sent + lost) * 100.0) >= 2.0) or caller_loss?
-      end)
 
       cond do
         # 1. Pipeline warning present
@@ -80,8 +78,8 @@ defmodule Blackgate.RouteHealth do
         has_egress_loss? ->
           "network_loss_egress"
 
-        # 4. Warnings / SDI frame drops
-        loss >= @loss_warning or rtt >= @rtt_warning or high_drops? ->
+        # 4. Warnings
+        loss >= @loss_warning or rtt >= @rtt_warning ->
           "warning"
 
         true ->
@@ -94,7 +92,7 @@ defmodule Blackgate.RouteHealth do
 
   defp packet_loss_pct(stats, caller) do
     received = stats["packets-received"] || caller["packets-received"] || 0
-    lost     = stats["packets-received-lost"] || caller["packets-received-lost"] || 0
+    lost = stats["packets-received-lost"] || caller["packets-received-lost"] || 0
 
     if received + lost == 0 do
       0.0

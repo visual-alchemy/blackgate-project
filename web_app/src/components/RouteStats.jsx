@@ -157,48 +157,6 @@ const RouteStats = ({ routeId, isRunning }) => {
         },
     ];
 
-    // SDI Playout stats table columns
-    const sdiColumns = [
-        {
-            title: 'Device',
-            dataIndex: 'device_number',
-            key: 'device_number',
-            render: (num) => <Tag color="purple">SDI {num}</Tag>,
-        },
-        {
-            title: 'Cumulative Drops',
-            dataIndex: 'dropped_frames',
-            key: 'dropped_frames',
-            render: (val) => `${val || 0}`,
-        },
-        {
-            title: 'Drops / Sec',
-            dataIndex: 'drops_per_sec',
-            key: 'drops_per_sec',
-            render: (val) => (
-                <Tag color={val > 5 ? 'red' : val > 1 ? 'orange' : 'green'}>
-                    {val || 0} fps
-                </Tag>
-            ),
-        },
-        {
-            title: 'Cumulative Dups',
-            dataIndex: 'duplicated_frames',
-            key: 'duplicated_frames',
-            render: (val) => `${val || 0}`,
-        },
-        {
-            title: 'Dups / Sec',
-            dataIndex: 'duplicates_per_sec',
-            key: 'duplicates_per_sec',
-            render: (val) => (
-                <Tag color={val > 5 ? 'red' : val > 1 ? 'orange' : 'green'}>
-                    {val || 0} fps
-                </Tag>
-            ),
-        },
-    ];
-
     const statisticStyle = {
         fontSize: 14,
     };
@@ -343,22 +301,6 @@ const RouteStats = ({ routeId, isRunning }) => {
                                 pagination={false}
                                 size="small"
                                 rowKey={(record, index) => record['caller-address'] || index}
-                            />
-                        </>
-                    )}
-
-                    {/* SDI Playout Stats Table */}
-                    {stats.sdi_video_stats && stats.sdi_video_stats.length > 0 && (
-                        <>
-                            <Typography.Title level={5} style={{ marginTop: 24, marginBottom: 8 }}>
-                                SDI Playout Statistics
-                            </Typography.Title>
-                            <Table
-                                dataSource={stats.sdi_video_stats}
-                                columns={sdiColumns}
-                                pagination={false}
-                                size="small"
-                                rowKey={(record, index) => record.device_number ?? index}
                             />
                         </>
                     )}
