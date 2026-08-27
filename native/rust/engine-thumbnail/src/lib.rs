@@ -142,8 +142,10 @@ impl ThumbnailBranch {
 
         let handle = thread::spawn(move || {
             while running_clone.load(Ordering::Relaxed) {
-                // Sleep ~5s between captures
-                thread::sleep(Duration::from_secs(5));
+                // Wait ~5s between captures, but allow shutdown to wake the
+                // worker immediately so route teardown stays within the IPC
+                // contract's two-second budget.
+                thread::park_timeout(Duration::from_secs(5));
                 if !running_clone.load(Ordering::Relaxed) {
                     break;
                 }
@@ -179,6 +181,7 @@ impl ThumbnailBranch {
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.thread_handle.take() {
+            handle.thread().unpark();
             let _ = handle.join();
         }
     }
@@ -186,5 +189,34 @@ impl ThumbnailBranch {
     /// Path to the preview JPEG file.
     pub fn preview_path(&self) -> &Path {
         &self.preview_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stop_wakes_sleeping_worker_within_shutdown_budget() {
+        gst::init().expect("GStreamer must initialize");
+        let pipeline = gst::Pipeline::new();
+        let tee = gst::ElementFactory::make("tee")
+            .name("test-tee")
+            .build()
+            .expect("tee element");
+        pipeline.add(&tee).expect("add tee");
+
+        let mut thumbnail =
+            ThumbnailBranch::new(&pipeline, &tee, "thumbnail-stop-test").expect("thumbnail");
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        thumbnail.stop();
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "thumbnail stop exceeded shutdown budget: {:?}",
+            started.elapsed()
+        );
     }
 }
