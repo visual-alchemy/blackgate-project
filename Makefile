@@ -8,104 +8,68 @@ help:
 .PHONY: install
 install:
 	@echo "=============================================="
-	@echo "Step 1: Installing System Libraries..."
+	@echo "Step 1: Checking repository toolchain contract..."
+	@echo "=============================================="
+	bash scripts/check_toolchain_contract.sh
+	@echo ""
+	@echo "=============================================="
+	@echo "Step 2: Installing Rust/GStreamer libraries..."
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
 		if command -v apt-get > /dev/null; then \
-			echo "Detected Debian/Ubuntu..."; \
+			echo "Production baseline: Ubuntu 24.04 LTS"; \
 			sudo add-apt-repository -y universe || true; \
 			sudo apt-get update; \
-			sudo apt-get install -y build-essential pkg-config git curl wget \
+			sudo apt-get install -y build-essential pkg-config git curl ffmpeg \
 				libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-				gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-				libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev; \
+				libgstreamer-plugins-bad1.0-dev gstreamer1.0-tools \
+				gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+				gstreamer1.0-plugins-bad gstreamer1.0-libav \
+				gstreamer1.0-vaapi libsrt-gnutls-dev libglib2.0-dev; \
 		elif command -v dnf > /dev/null; then \
-			echo "Detected Fedora/RHEL..."; \
-			sudo dnf install -y gcc make pkgconfig git curl wget \
+			echo "Non-production Fedora/RHEL development host"; \
+			sudo dnf install -y gcc gcc-c++ make pkgconfig git curl ffmpeg \
 				gstreamer1-devel gstreamer1-plugins-base-devel \
 				gstreamer1-plugins-good gstreamer1-plugins-bad-free \
-				cjson-devel srt-devel cmocka-devel glib2-devel; \
+				gstreamer1-plugins-bad-free-devel srt-devel glib2-devel; \
 		else \
 			echo "Unsupported Linux distribution. Please install dependencies manually."; \
 			exit 1; \
 		fi; \
 	elif [ "$$(uname)" = "Darwin" ]; then \
-		echo "Detected macOS..."; \
-		brew install gstreamer cjson srt cmocka glib pkg-config || true; \
+		echo "Non-production macOS development host"; \
+		brew install gstreamer srt glib pkg-config ffmpeg || true; \
 	else \
 		echo "Unsupported OS. Please install dependencies manually."; \
 		exit 1; \
 	fi
 	@echo ""
 	@echo "=============================================="
-	@echo "Step 2: Installing Node.js & Yarn..."
+	@echo "Step 3: Checking pinned language toolchains..."
 	@echo "=============================================="
-	@if [ "$$(uname)" = "Linux" ]; then \
-		NODE_MAJOR=$$(node -v 2>/dev/null | cut -d'v' -f2 | cut -d'.' -f1); \
-		NODE_MAJOR=$${NODE_MAJOR:-0}; \
-		if [ "$$NODE_MAJOR" -lt 20 ]; then \
-			echo "Node.js version ($$NODE_MAJOR) is too old or missing. Installing Node.js 20 (LTS)..."; \
-			if command -v apt-get > /dev/null; then \
-				sudo apt-get purge -y nodejs nodejs-doc libnode-dev "libnode*" || true; \
-			fi; \
-			curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - || true; \
-			sudo apt-get install -y nodejs || sudo dnf install -y nodejs; \
-		else \
-			echo "Node.js version $$NODE_MAJOR is sufficient."; \
-		fi; \
-		if ! command -v yarn > /dev/null; then \
-			echo "Installing Yarn..."; \
-			sudo npm install --global yarn --force; \
-		else \
-			echo "Yarn already installed: $$(yarn --version)"; \
-		fi; \
-	elif [ "$$(uname)" = "Darwin" ]; then \
-		brew install node yarn || true; \
-	fi
-	@echo ""
-	@echo "=============================================="
-	@echo "Step 3: Installing Elixir & Erlang..."
-	@echo "=============================================="
-	@if [ "$$(uname)" = "Linux" ]; then \
-		ELIXIR_VERSION=$$(elixir -v 2>/dev/null | grep Elixir | cut -d' ' -f2 || echo "0.0.0"); \
-		ELIXIR_MINOR=$$(echo $$ELIXIR_VERSION | cut -d'.' -f2 || echo "0"); \
-		if [ "$$ELIXIR_MINOR" -lt 17 ]; then \
-			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading using precompiled binaries..."; \
-			if command -v apt-get > /dev/null; then \
-				sudo apt-get update; \
-				sudo apt-get purge -y elixir || true; \
-				sudo apt-get install -y erlang unzip wget || true; \
-				OTP_VERSION=$$(erl -noshell -eval 'io:format("~s", [erlang:system_info(otp_release)]), halt().' || echo "24"); \
-				ELIXIR_DL="v1.17.3/elixir-otp-$$OTP_VERSION.zip"; \
-				if [ "$$OTP_VERSION" -lt 25 ]; then ELIXIR_DL="v1.16.3/elixir-otp-$$OTP_VERSION.zip"; fi; \
-				echo "Downloading Elixir $$ELIXIR_DL..."; \
-				wget -q "https://github.com/elixir-lang/elixir/releases/download/$$ELIXIR_DL" -O /tmp/elixir.zip; \
-				sudo mkdir -p /opt/elixir; \
-				sudo unzip -q -o /tmp/elixir.zip -d /opt/elixir || true; \
-				sudo ln -sf /opt/elixir/bin/* /usr/local/bin/ || true; \
-				rm -f /tmp/elixir.zip; \
-			elif command -v dnf > /dev/null; then \
-				sudo dnf install -y erlang elixir; \
-			fi; \
-		else \
-			echo "Elixir version $$ELIXIR_VERSION is sufficient."; \
-		fi; \
-	elif [ "$$(uname)" = "Darwin" ]; then \
-		brew install elixir || true; \
-	fi
+	@for command_name in elixir erl mix node npm rustc cargo; do \
+		command -v $$command_name >/dev/null || { \
+			echo "Missing $$command_name. Install versions from .tool-versions and rust-toolchain.toml."; \
+			exit 1; \
+		}; \
+	done
+	@test "$$(node --version)" = "v20.19.0" || { echo "Node must be v20.19.0"; exit 1; }
+	@elixir --version | grep -q 'Elixir 1.18.2' || { echo "Elixir must be 1.18.2"; exit 1; }
+	@erl -noshell -eval 'io:format("~s", [erlang:system_info(system_version)]), halt().' | \
+		grep -q 'Erlang/OTP 27 .*erts-15.0.1' || { echo "Erlang/OTP must be 27.0.1"; exit 1; }
+	@rustc --version | grep -q '^rustc 1.96.0 ' || { echo "Rust must be 1.96.0"; exit 1; }
 	@echo ""
 	@echo "=============================================="
 	@echo "Step 4: Installing Elixir Dependencies..."
 	@echo "=============================================="
-	mix hex.info > /dev/null 2>&1 || mix local.hex --force
-	mix hex.info > /dev/null 2>&1 || mix archive.install github hexpm/hex branch latest
-	mix hex.info > /dev/null 2>&1 || mix local.rebar --force
+	mix local.hex --force
+	mix local.rebar --force
 	mix deps.get
 	@echo ""
 	@echo "=============================================="
 	@echo "Step 5: Installing Frontend Dependencies..."
 	@echo "=============================================="
-	cd web_app && yarn install
+	npm --prefix web_app ci
 	@echo ""
 	@echo "=============================================="
 	@echo "Installation Complete!"
@@ -122,7 +86,7 @@ build:
 	@echo "=============================================="
 	@echo ""
 	@echo "Step 1: Building Frontend..."
-	cd web_app && yarn build
+	npm --prefix web_app run build
 	@echo ""
 	@echo "Step 2: Copying Frontend to Phoenix..."
 	rm -rf priv/static
@@ -189,19 +153,18 @@ dev-all:
 	@echo "Frontend: http://localhost:5173"
 	@npx concurrently -n "backend,frontend" -c "blue,green" \
 		"make dev" \
-		"cd web_app && yarn dev"
+		"cd web_app && npm run dev"
 
 clean:
 	rm -rf _build && rm -rf deps
 
 setup:
 	@echo "Installing Backend Dependencies..."
-	mix hex.info > /dev/null 2>&1 || mix local.hex --force
-	mix hex.info > /dev/null 2>&1 || mix archive.install github hexpm/hex branch latest
-	mix hex.info > /dev/null 2>&1 || mix local.rebar --force
+	mix local.hex --force
+	mix local.rebar --force
 	mix deps.get
 	@echo "Installing Frontend Dependencies..."
-	cd web_app && yarn install
+	npm --prefix web_app ci
 
 # =============================================================================
 # TEST TARGETS
