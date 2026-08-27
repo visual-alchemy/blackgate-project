@@ -146,10 +146,6 @@ defmodule BlackgateWeb.BackupController do
         is_list(Map.get(params, "data")) ->
           Map.get(params, "data")
         
-        # Direct params is a list (shouldn't happen with Phoenix but just in case)
-        is_list(params) ->
-          params
-          
         true ->
           nil
       end

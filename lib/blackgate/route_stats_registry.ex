@@ -5,8 +5,6 @@ defmodule Blackgate.RouteStatsRegistry do
   """
 
   use GenServer
-  require Logger
-
   @table_name :route_stats
 
   def start_link(_opts) do

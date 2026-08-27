@@ -42,28 +42,19 @@ defmodule Blackgate.Application do
     children = [
       Blackgate.RouteStatsRegistry,
       Blackgate.EventLog,
-      Blackgate.ErlSysMon,
+      # Blackgate.ErlSysMon,  # disabled: OTP 29 os_mon incompatibility
       Blackgate.License,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},
       {Registry,
        keys: :unique, name: Blackgate.Registry.MsgHandlers, partitions: runtime_schedulers},
       BlackgateWeb.Telemetry,
-      # Blackgate.Repo,
-      # {Ecto.Migrator,
-      #  repos: Application.fetch_env!(:blackgate, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: Blackgate.PubSub, partitions: runtime_schedulers},
       BlackgateWeb.Endpoint,
       Blackgate.Metrics.Connection
     ]
 
-    # start Cachex only if the node uses names, this is necessary for test setup
-    children =
-      if node() != :nonode@nohost do
-        [{Cachex, name: Blackgate.Cache} | children]
-      else
-        children
-      end
+    children = [{Cachex, name: Blackgate.Cache} | children]
 
     opts = [strategy: :one_for_one, name: Blackgate.Supervisor]
     Supervisor.start_link(children, opts)

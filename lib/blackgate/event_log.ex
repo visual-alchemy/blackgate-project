@@ -6,8 +6,6 @@ defmodule Blackgate.EventLog do
   """
 
   use GenServer
-  require Logger
-
   @table_name :event_log
   @max_events 500
   @counter_key :event_counter

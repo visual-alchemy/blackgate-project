@@ -1,136 +1,79 @@
 defmodule BlackgateWeb.RouteControllerTest do
   use BlackgateWeb.ConnCase
 
-  import Blackgate.ApiFixtures
+  alias Blackgate.Db
 
-  alias Blackgate.Api.Route
-
-  @create_attrs %{
-    alias: "some alias",
-    enabled: true,
-    name: "some name",
-    status: "some status",
-    started_at: ~U[2025-02-18 14:51:00Z],
-    source: %{},
-    destinations: %{},
-    stopped_at: ~U[2025-02-18 14:51:00Z]
-  }
-  @update_attrs %{
-    alias: "some updated alias",
-    enabled: false,
-    name: "some updated name",
-    status: "some updated status",
-    started_at: ~U[2025-02-19 14:51:00Z],
-    source: %{},
-    destinations: %{},
-    stopped_at: ~U[2025-02-19 14:51:00Z]
-  }
-  @invalid_attrs %{
-    alias: nil,
-    enabled: nil,
-    name: nil,
-    status: nil,
-    started_at: nil,
-    source: nil,
-    destinations: nil,
-    stopped_at: nil
+  @route_attrs %{
+    "name" => "Khepri route",
+    "schema" => "SRT",
+    "schema_options" => %{"mode" => "caller", "address" => "127.0.0.1", "port" => 9000},
+    "status" => "stopped"
   }
 
-  setup %{conn: conn} do
-    {:ok, conn: put_req_header(conn, "accept", "application/json")}
+  test "index lists Khepri routes", %{conn: conn} do
+    route_id = UUID.uuid4()
+    cleanup_route(route_id)
+    assert {:ok, _route} = Db.create_route(@route_attrs, route_id)
+
+    conn = get(conn, ~p"/api/routes")
+
+    assert routes = json_response(conn, 200)["data"]
+    assert Enum.any?(routes, &(&1["id"] == route_id and &1["connected"] == false))
   end
 
-  describe "index" do
-    test "lists all routes", %{conn: conn} do
-      conn = get(conn, ~p"/api/routes")
-      assert json_response(conn, 200)["data"] == []
-    end
+  test "create and show persist a map route", %{conn: conn} do
+    conn = post(conn, ~p"/api/routes", route: @route_attrs)
+    assert %{"id" => route_id, "name" => "Khepri route"} = json_response(conn, 201)["data"]
+    cleanup_route(route_id)
+
+    conn = get(recycle(conn), ~p"/api/routes/#{route_id}")
+
+    assert %{
+             "id" => ^route_id,
+             "name" => "Khepri route",
+             "schema" => "SRT",
+             "destinations" => []
+           } = json_response(conn, 200)["data"]
   end
 
-  describe "create route" do
-    test "renders route when data is valid", %{conn: conn} do
-      conn = post(conn, ~p"/api/routes", route: @create_attrs)
-      assert %{"id" => id} = json_response(conn, 201)["data"]
+  test "update persists route and reports no restart for stopped route", %{conn: conn} do
+    route_id = UUID.uuid4()
+    cleanup_route(route_id)
+    assert {:ok, _route} = Db.create_route(@route_attrs, route_id)
 
-      conn = get(conn, ~p"/api/routes/#{id}")
+    conn = put(conn, ~p"/api/routes/#{route_id}", route: %{"name" => "Updated route"})
 
-      assert %{
-               "id" => ^id,
-               "alias" => "some alias",
-               "destinations" => %{},
-               "enabled" => true,
-               "name" => "some name",
-               "source" => %{},
-               "started_at" => "2025-02-18T14:51:00Z",
-               "status" => "some status",
-               "stopped_at" => "2025-02-18T14:51:00Z"
-             } = json_response(conn, 200)["data"]
-    end
+    assert %{"id" => ^route_id, "name" => "Updated route", "restarted" => false} =
+             json_response(conn, 200)["data"]
 
-    test "renders errors when data is invalid", %{conn: conn} do
-      conn = post(conn, ~p"/api/routes", route: @invalid_attrs)
-      assert json_response(conn, 422)["errors"] != %{}
-    end
+    assert {:ok, %{"name" => "Updated route"}} = Db.get_route(route_id)
   end
 
-  describe "update route" do
-    setup [:create_route]
+  test "delete removes route and destinations", %{conn: conn} do
+    route_id = UUID.uuid4()
+    cleanup_route(route_id)
 
-    test "renders route when data is valid", %{conn: conn, route: %Route{id: id} = route} do
-      conn = put(conn, ~p"/api/routes/#{route}", route: @update_attrs)
-      assert %{"id" => ^id} = json_response(conn, 200)["data"]
+    assert {:ok, _route} =
+             Db.create_route(
+               Map.put(@route_attrs, "destinations", [%{"schema" => "UDP"}]),
+               route_id
+             )
 
-      conn = get(conn, ~p"/api/routes/#{id}")
+    conn = delete(conn, ~p"/api/routes/#{route_id}")
 
-      assert %{
-               "id" => ^id,
-               "alias" => "some updated alias",
-               "destinations" => %{},
-               "enabled" => false,
-               "name" => "some updated name",
-               "source" => %{},
-               "started_at" => "2025-02-19T14:51:00Z",
-               "status" => "some updated status",
-               "stopped_at" => "2025-02-19T14:51:00Z"
-             } = json_response(conn, 200)["data"]
-    end
-
-    test "renders errors when data is invalid", %{conn: conn, route: route} do
-      conn = put(conn, ~p"/api/routes/#{route}", route: @invalid_attrs)
-      assert json_response(conn, 422)["errors"] != %{}
-    end
+    assert response(conn, 204)
+    assert {:error, :not_found} = Db.get_route(route_id)
+    assert {:ok, %{}} = Db.get_all_destinations(route_id)
   end
 
-  describe "delete route" do
-    setup [:create_route]
-
-    test "deletes chosen route", %{conn: conn, route: route} do
-      conn = delete(conn, ~p"/api/routes/#{route}")
-      assert response(conn, 204)
-
-      assert_error_sent 404, fn ->
-        get(conn, ~p"/api/routes/#{route}")
-      end
-    end
-  end
-
-  defp create_route(_) do
-    route = route_fixture()
-    %{route: route}
+  defp cleanup_route(route_id) do
+    on_exit(fn -> Db.delete_route(route_id) end)
   end
 end
 
 defmodule BlackgateWeb.RouteControllerSwitchSourceTest do
   @moduledoc """
-  Manual source-switch endpoint tests.
-
-  The legacy CRUD tests above rely on the stale Ecto sandbox scaffold which is
-  disabled in this Khepri-based project. These switch-source tests are fully
-  Meck-isolated and dispatch through the real Phoenix endpoint via Plug.Conn.
-
-  Blackgate.Cache is only started on distributed nodes (see
-  Blackgate.Application), so the :auth pipeline's Cachex lookup is mecked here
-  with :passthrough to admit the bearer token without a running cache.
+  Meck-isolated source-switch behavior through real Phoenix routing.
   """
 
   use ExUnit.Case, async: false

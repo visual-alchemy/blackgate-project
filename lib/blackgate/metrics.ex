@@ -3,8 +3,6 @@ defmodule Blackgate.Metrics do
   Helper functions for working with metrics.
   """
 
-  require Logger
-
   alias Blackgate.Metrics.Connection
 
   def event(k, v, tags \\ %{}, ts \\ System.system_time()) do

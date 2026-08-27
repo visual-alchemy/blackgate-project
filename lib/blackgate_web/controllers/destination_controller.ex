@@ -9,8 +9,12 @@ defmodule BlackgateWeb.DestinationController do
     {:ok, destinations} = Db.get_all_destinations(route_id)
 
     destinations =
-      Enum.reduce(destinations, [], fn {["destinations", id], route}, acc ->
-        [Map.put(route, "id", id) | acc]
+      Enum.reduce(destinations, [], fn
+        {["routes", ^route_id, "destinations", id], destination}, acc ->
+          [Map.put(destination, "id", id) | acc]
+
+        _unexpected, acc ->
+          acc
       end)
 
     data(conn, destinations)
@@ -70,4 +74,3 @@ defmodule BlackgateWeb.DestinationController do
 
   defp data(conn, data), do: json(conn, %{data: data})
 end
-

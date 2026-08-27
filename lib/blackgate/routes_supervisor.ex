@@ -2,7 +2,6 @@ defmodule Blackgate.RoutesSupervisor do
   @moduledoc false
   use Supervisor
 
-  require Logger
   alias Blackgate.RouteHandler
 
   def start_link(args) do

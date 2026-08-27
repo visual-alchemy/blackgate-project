@@ -199,7 +199,7 @@ defmodule Blackgate.UnixSockHandler do
 
   def norm_names(name) do
     name
-    |> String.replace("-", "_")
+    |> String.replace(~r/[^[:alnum:]_]/u, "_")
     |> String.downcase()
   end
 

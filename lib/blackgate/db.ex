@@ -5,6 +5,7 @@ defmodule Blackgate.Db do
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
     id = if id, do: id, else: UUID.uuid1()
+    {destinations, route_data} = Map.pop(data, "destinations", [])
 
     update = %{
       "id" => id,
@@ -12,38 +13,43 @@ defmodule Blackgate.Db do
       "updated_at" => now()
     }
 
-    with :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
-         {:ok, result} <- get_route(id) do
-      {:ok, result}
+    with :ok <- :khepri.put(["routes", id], Map.merge(route_data, update)),
+         :ok <- create_destinations(id, destinations) do
+      get_route(id, true)
     else
       other ->
+        delete_route(id)
         Logger.error("Failed to create route: #{inspect(other)}")
-        {:error, other}
+        normalize_error(other)
     end
   end
 
   @spec get_route(String.t(), boolean) :: {:ok, map} | {:error, any}
   def get_route(id, include_dest? \\ false) when is_binary(id) do
-    route = :khepri.get!(["routes", id])
+    case :khepri.get(["routes", id]) do
+      {:ok, route} ->
+        route =
+          if include_dest? do
+            destinations_list =
+              :khepri.get_many!("routes/#{id}/destinations/*")
+              |> Enum.reduce([], fn
+                {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
+                  [dest | acc]
 
-    route =
-      if include_dest? do
-        destinations_list =
-          :khepri.get_many!("routes/#{id}/destinations/*")
-          |> Enum.reduce([], fn
-            {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
-              [dest | acc]
+                _, acc ->
+                  acc
+              end)
 
-            _, acc ->
-              acc
-          end)
+            Map.put(route, "destinations", destinations_list)
+          else
+            route
+          end
 
-        Map.put(route, "destinations", destinations_list)
-      else
-        route
-      end
+        {:ok, route}
 
-    {:ok, route}
+      other ->
+        normalize_get_error(other)
+    end
   end
 
   @spec update_route(String.t(), map) :: {:ok, map} | {:error, any}
@@ -51,21 +57,14 @@ defmodule Blackgate.Db do
     path = ["routes", id]
     now = now()
 
-    :khepri.transaction(fn ->
-      case :khepri_tx.get(path) do
-        {:ok, route} ->
-          new_route = Map.merge(route, Map.put(data, "updated_at", now))
+    case :khepri.get(path) do
+      {:ok, route} ->
+        new_route = Map.merge(route, Map.put(data, "updated_at", now))
+        :ok = :khepri.put(path, new_route)
+        :khepri.get(path)
 
-          :ok = :khepri_tx.put(path, new_route)
-          :khepri_tx.get(path)
-
-        _ ->
-          {:error, :route_not_found}
-      end
-    end)
-    |> case do
-      {:ok, result} -> result
-      other -> {:error, inspect(other)}
+      _ ->
+        {:error, :route_not_found}
     end
   end
 
@@ -98,7 +97,9 @@ defmodule Blackgate.Db do
 
   @spec get_destination(String.t(), String.t()) :: {:ok, map} | {:error, any}
   def get_destination(route_id, id) when is_binary(route_id) and is_binary(id) do
-    :khepri.get(["routes", route_id, "destinations", id])
+    ["routes", route_id, "destinations", id]
+    |> :khepri.get()
+    |> normalize_get_error()
   end
 
   @spec update_destination(String.t(), String.t(), map) :: {:ok, map} | {:error, any}
@@ -106,21 +107,14 @@ defmodule Blackgate.Db do
     path = ["routes", route_id, "destinations", id]
     now = now()
 
-    :khepri.transaction(fn ->
-      case :khepri_tx.get(path) do
-        {:ok, destination} ->
-          new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+    case :khepri.get(path) do
+      {:ok, destination} ->
+        new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+        :ok = :khepri.put(path, new_destination)
+        :khepri.get(path)
 
-          :ok = :khepri_tx.put(path, new_destination)
-          :khepri_tx.get(path)
-
-        _ ->
-          {:error, :destination_not_found}
-      end
-    end)
-    |> case do
-      {:ok, result} -> result
-      other -> {:error, inspect(other)}
+      _ ->
+        {:error, :destination_not_found}
     end
   end
 
@@ -203,6 +197,30 @@ defmodule Blackgate.Db do
         {:error, e}
     end
   end
+
+  defp create_destinations(_route_id, destinations) when not is_list(destinations), do: :ok
+
+  defp create_destinations(route_id, destinations) do
+    Enum.reduce_while(destinations, :ok, fn
+      destination, :ok when is_map(destination) ->
+        case create_destination(route_id, destination) do
+          {:ok, _destination} -> {:cont, :ok}
+          {:error, _reason} = error -> {:halt, error}
+        end
+
+      destination, :ok ->
+        {:halt, {:error, {:invalid_destination, destination}}}
+    end)
+  end
+
+  defp normalize_error({:error, _reason} = error), do: error
+  defp normalize_error(reason), do: {:error, reason}
+
+  defp normalize_get_error({:error, {:khepri, :node_not_found, _details}}),
+    do: {:error, :not_found}
+
+  defp normalize_get_error({:ok, _value} = result), do: result
+  defp normalize_get_error(result), do: normalize_error(result)
 
   defp now, do: DateTime.utc_now()
 end

@@ -1,104 +1,88 @@
 defmodule BlackgateWeb.DestinationControllerTest do
   use BlackgateWeb.ConnCase
 
-  import Blackgate.ApiFixtures
+  alias Blackgate.Db
 
-  alias Blackgate.Api.Destination
-
-  @create_attrs %{
-    alias: "some alias",
-    enabled: true,
-    name: "some name",
-    status: "some status",
-    started_at: ~U[2025-02-19 16:24:00Z],
-    stopped_at: ~U[2025-02-19 16:24:00Z]
+  @destination_attrs %{
+    "name" => "UDP destination",
+    "schema" => "UDP",
+    "schema_options" => %{"address" => "127.0.0.1", "port" => 9001}
   }
-  @update_attrs %{
-    alias: "some updated alias",
-    enabled: false,
-    name: "some updated name",
-    status: "some updated status",
-    started_at: ~U[2025-02-20 16:24:00Z],
-    stopped_at: ~U[2025-02-20 16:24:00Z]
-  }
-  @invalid_attrs %{alias: nil, enabled: nil, name: nil, status: nil, started_at: nil, stopped_at: nil}
 
-  setup %{conn: conn} do
-    {:ok, conn: put_req_header(conn, "accept", "application/json")}
+  setup do
+    route_id = UUID.uuid4()
+    assert {:ok, _route} = Db.create_route(%{"name" => "Destination parent"}, route_id)
+    on_exit(fn -> Db.delete_route(route_id) end)
+
+    %{route_id: route_id}
   end
 
-  describe "index" do
-    test "lists all destinations", %{conn: conn} do
-      conn = get(conn, ~p"/api/destinations")
-      assert json_response(conn, 200)["data"] == []
-    end
+  test "create and show use nested route path", %{conn: conn, route_id: route_id} do
+    conn =
+      post(conn, ~p"/api/routes/#{route_id}/destinations", destination: @destination_attrs)
+
+    assert %{
+             "id" => destination_id,
+             "route_id" => ^route_id,
+             "name" => "UDP destination",
+             "restarted" => false
+           } = json_response(conn, 201)["data"]
+
+    conn =
+      get(recycle(conn), ~p"/api/routes/#{route_id}/destinations/#{destination_id}")
+
+    assert %{"id" => ^destination_id, "route_id" => ^route_id} =
+             json_response(conn, 200)["data"]
   end
 
-  describe "create destination" do
-    test "renders destination when data is valid", %{conn: conn} do
-      conn = post(conn, ~p"/api/destinations", destination: @create_attrs)
-      assert %{"id" => id} = json_response(conn, 201)["data"]
+  test "index lists destinations below route", %{conn: conn, route_id: route_id} do
+    destination_id = UUID.uuid4()
 
-      conn = get(conn, ~p"/api/destinations/#{id}")
+    assert {:ok, _destination} =
+             Db.create_destination(route_id, @destination_attrs, destination_id)
 
-      assert %{
-               "id" => ^id,
-               "alias" => "some alias",
-               "enabled" => true,
-               "name" => "some name",
-               "started_at" => "2025-02-19T16:24:00Z",
-               "status" => "some status",
-               "stopped_at" => "2025-02-19T16:24:00Z"
-             } = json_response(conn, 200)["data"]
-    end
+    conn = get(conn, ~p"/api/routes/#{route_id}/destinations")
 
-    test "renders errors when data is invalid", %{conn: conn} do
-      conn = post(conn, ~p"/api/destinations", destination: @invalid_attrs)
-      assert json_response(conn, 422)["errors"] != %{}
-    end
+    assert [%{"id" => ^destination_id, "route_id" => ^route_id}] =
+             json_response(conn, 200)["data"]
   end
 
-  describe "update destination" do
-    setup [:create_destination]
+  test "update persists destination and reports no restart for stopped route", %{
+    conn: conn,
+    route_id: route_id
+  } do
+    destination_id = UUID.uuid4()
 
-    test "renders destination when data is valid", %{conn: conn, destination: %Destination{id: id} = destination} do
-      conn = put(conn, ~p"/api/destinations/#{destination}", destination: @update_attrs)
-      assert %{"id" => ^id} = json_response(conn, 200)["data"]
+    assert {:ok, _destination} =
+             Db.create_destination(route_id, @destination_attrs, destination_id)
 
-      conn = get(conn, ~p"/api/destinations/#{id}")
+    conn =
+      put(conn, ~p"/api/routes/#{route_id}/destinations/#{destination_id}",
+        destination: %{"name" => "Updated destination"}
+      )
 
-      assert %{
-               "id" => ^id,
-               "alias" => "some updated alias",
-               "enabled" => false,
-               "name" => "some updated name",
-               "started_at" => "2025-02-20T16:24:00Z",
-               "status" => "some updated status",
-               "stopped_at" => "2025-02-20T16:24:00Z"
-             } = json_response(conn, 200)["data"]
-    end
+    assert %{
+             "id" => ^destination_id,
+             "name" => "Updated destination",
+             "restarted" => false
+           } = json_response(conn, 200)["data"]
 
-    test "renders errors when data is invalid", %{conn: conn, destination: destination} do
-      conn = put(conn, ~p"/api/destinations/#{destination}", destination: @invalid_attrs)
-      assert json_response(conn, 422)["errors"] != %{}
-    end
+    assert {:ok, %{"name" => "Updated destination"}} =
+             Db.get_destination(route_id, destination_id)
   end
 
-  describe "delete destination" do
-    setup [:create_destination]
+  test "delete reports restart metadata and removes destination", %{
+    conn: conn,
+    route_id: route_id
+  } do
+    destination_id = UUID.uuid4()
 
-    test "deletes chosen destination", %{conn: conn, destination: destination} do
-      conn = delete(conn, ~p"/api/destinations/#{destination}")
-      assert response(conn, 204)
+    assert {:ok, _destination} =
+             Db.create_destination(route_id, @destination_attrs, destination_id)
 
-      assert_error_sent 404, fn ->
-        get(conn, ~p"/api/destinations/#{destination}")
-      end
-    end
-  end
+    conn = delete(conn, ~p"/api/routes/#{route_id}/destinations/#{destination_id}")
 
-  defp create_destination(_) do
-    destination = destination_fixture()
-    %{destination: destination}
+    assert %{"deleted" => true, "restarted" => false} = json_response(conn, 200)["data"]
+    assert {:error, :not_found} = Db.get_destination(route_id, destination_id)
   end
 end

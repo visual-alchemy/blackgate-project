@@ -31,8 +31,18 @@ defmodule BlackgateWeb.ConnCase do
     end
   end
 
-  setup tags do
-    Blackgate.DataCase.setup_sandbox(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+  setup _tags do
+    token = UUID.uuid4()
+    session_key = "auth_session:#{token}"
+    {:ok, true} = Cachex.put(Blackgate.Cache, session_key, %{user: "test"})
+
+    on_exit(fn -> Cachex.del(Blackgate.Cache, session_key) end)
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header("accept", "application/json")
+      |> Plug.Conn.put_req_header("authorization", "Bearer #{token}")
+
+    {:ok, conn: conn}
   end
 end
