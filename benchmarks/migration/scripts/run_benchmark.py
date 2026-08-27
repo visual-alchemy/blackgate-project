@@ -615,14 +615,20 @@ def run_engine_lifecycle(
         collector.close()
 
 
-def _timing(workload: dict, quick: bool) -> tuple[float, float, int]:
+def _timing(
+    workload: dict,
+    quick: bool,
+    repetitions_override: int | None = None,
+) -> tuple[float, float, int]:
     if quick:
         return 0.5, 3.0, 1
     timing = workload["timing"]
     return (
         float(timing["warmup_seconds"]),
         float(timing["measurement_seconds"]),
-        int(timing["repetitions"]),
+        repetitions_override
+        if repetitions_override is not None
+        else int(timing["repetitions"]),
     )
 
 
@@ -632,8 +638,9 @@ def _run_workload(
     workload: dict,
     output: Path,
     quick: bool,
+    repetitions_override: int | None,
 ) -> dict:
-    warmup, measurement, repetitions = _timing(workload, quick)
+    warmup, measurement, repetitions = _timing(workload, quick, repetitions_override)
     workload_output = output / workload["id"]
     workload_output.mkdir(parents=True, exist_ok=True)
     runs: dict[str, list[dict]] = {"c": [], "rust": []}
@@ -662,6 +669,7 @@ def _run_workload(
     comparison = {
         "workload": workload["id"],
         "quick": quick,
+        "repetitions": repetitions,
         "c_runs": runs["c"],
         "rust_runs": runs["rust"],
         "decision": decision,
@@ -704,6 +712,12 @@ def _load_workloads(path: Path | None, all_workloads: bool) -> list[dict]:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    def positive_int(value: str) -> int:
+        parsed = int(value)
+        if parsed < 1:
+            raise argparse.ArgumentTypeError("must be at least 1")
+        return parsed
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--c-engine", required=True, type=Path)
     parser.add_argument("--rust-engine", required=True, type=Path)
@@ -713,7 +727,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--quick", action="store_true")
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--repetitions",
+        type=positive_int,
+        help="override workload repetitions for a statistically stable rerun",
+    )
+    args = parser.parse_args(argv)
+    if args.quick and args.repetitions is not None:
+        parser.error("--quick cannot be combined with --repetitions")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -747,7 +769,14 @@ def main(argv: list[str] | None = None) -> int:
             output = args.output
         output.mkdir(parents=True, exist_ok=True)
         comparisons = [
-            _run_workload(args.c_engine, args.rust_engine, workload, output, args.quick)
+            _run_workload(
+                args.c_engine,
+                args.rust_engine,
+                workload,
+                output,
+                args.quick,
+                args.repetitions,
+            )
             for workload in workloads
         ]
         finished_at = datetime.now(timezone.utc).isoformat()

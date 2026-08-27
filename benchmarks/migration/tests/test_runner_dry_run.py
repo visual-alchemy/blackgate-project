@@ -17,7 +17,9 @@ from run_benchmark import (
     RunnerError,
     _metadata,
     _metrics_from_evidence,
+    _timing,
     build_plan,
+    parse_args,
     run_engine_lifecycle,
 )
 from render_report import render_report
@@ -29,6 +31,29 @@ WORKLOAD_PATH = (
 
 
 class RunnerDryRunTest(unittest.TestCase):
+    def test_repetitions_override_supports_inconclusive_reruns(self):
+        workload = json.loads(WORKLOAD_PATH.read_text())
+
+        self.assertEqual(_timing(workload, False, 7), (30.0, 120.0, 7))
+
+    def test_quick_rejects_repetitions_override(self):
+        with self.assertRaises(SystemExit):
+            parse_args(
+                [
+                    "--c-engine",
+                    "c-engine",
+                    "--rust-engine",
+                    "rust-engine",
+                    "--workload",
+                    str(WORKLOAD_PATH),
+                    "--output",
+                    "results",
+                    "--quick",
+                    "--repetitions",
+                    "7",
+                ]
+            )
+
     def test_metadata_accepts_baked_build_identity(self):
         with patch.dict(
             os.environ,

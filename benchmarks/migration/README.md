@@ -50,3 +50,14 @@ separately for one-hour-per-engine stability evidence.
 Each run directory contains raw engine JSON, socket/stdout/stderr evidence,
 per-workload comparisons, `summary.json`, and `REPORT.md`. Runner exits nonzero
 for failed or inconclusive comparisons.
+
+When a full result is inconclusive because variance exceeds 5%, rerun that
+workload with additional samples instead of overriding the decision:
+
+```bash
+python3 benchmarks/migration/scripts/run_benchmark.py \
+  --c-engine /opt/blackgate/engines/blackgate_pipeline \
+  --rust-engine /opt/blackgate/engines/blackgate-engine \
+  --workload benchmarks/migration/workloads/dual-ingest-failover.json \
+  --repetitions 7 --output /results/dual-ingest-rerun
+```
