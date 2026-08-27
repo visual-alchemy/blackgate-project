@@ -5,10 +5,13 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    DynamicSupervisor.start_child(
-      {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
-      {Blackgate.RoutesSupervisor, %{id: id}}
-    )
+    case DynamicSupervisor.start_child(
+           {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
+           {Blackgate.RoutesSupervisor, %{id: id}}
+         ) do
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      other -> other
+    end
   end
 
   @spec get_route(String.t()) :: {:ok, pid()} | {:error, term()}

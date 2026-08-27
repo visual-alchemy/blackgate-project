@@ -1536,6 +1536,14 @@ static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, g
     return GST_PAD_PROBE_OK;
 }
 
+static GstPadProbeReturn drop_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    (void)info;
+    (void)user_data;
+    return GST_PAD_PROBE_DROP;
+}
+
 // =============================================================================
 // Thumbnail Capture Branch
 // =============================================================================
