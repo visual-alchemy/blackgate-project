@@ -3,22 +3,22 @@ name: Build Blackgate ISO
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g., 1.0.0)'
+        description: "Version number (e.g., 1.0.0)"
         required: true
-        default: '1.0.0'
+        default: "1.0.0"
 
 permissions:
   contents: write
 
 jobs:
   build-iso:
-    name: Build Blackgate ISO
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    name: Build Ubuntu 24.04 LTS ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -26,29 +26,70 @@ jobs:
 
       - name: Determine version
         id: version
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            version="${{ github.event.inputs.version }}"
           else
-            echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+            version="${GITHUB_REF_NAME#v}"
           fi
-          echo "Version: $(cat $GITHUB_OUTPUT | grep version | cut -d= -f2)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Set up BEAM toolchain
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: 27.0.1
+          elixir-version: 1.18.2
 
-      - name: Build Ubuntu Docker ISO
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+          cache: npm
+          cache-dependency-path: web_app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.96.0"
+
+      - name: Install ISO and runtime build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            dosfstools \
+            fdisk \
+            git \
+            libcjson-dev \
+            libglib2.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer1.0-dev \
+            libsrt-gnutls-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            xorriso
+
+      - name: Download Ubuntu 24.04.4 LTS source ISO
+        run: |
+          curl --fail --location --retry 5 \
+            --output iso-builder/ubuntu-24.04.4-live-server-amd64.iso \
+            https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-live-server-amd64.iso
+
+      - name: Build bare-metal Blackgate ISO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           chmod +x iso-builder/build.sh
-          # Run inside an Ubuntu Jammy container to prevent host environment pollution
-          # and ensure live-build mirrors align with the container OS.
-          # Mount Docker socket so the script can still run 'docker build' for Blackgate.
-          docker run --rm --privileged \
-            -v ${{ github.workspace }}:/workspace \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -w /workspace \
-            -e VERSION=${{ steps.version.outputs.version }} \
-            ubuntu:jammy bash -c "apt-get update && apt-get install -y sudo docker.io syslinux-utils isolinux syslinux syslinux-common grub-pc-bin grub-efi-amd64-bin grub-efi-amd64-signed shim-signed mtools dosfstools xorriso ca-certificates ubuntu-keyring && ./iso-builder/build.sh"
+          ./iso-builder/build.sh
+
+      - name: Name versioned ISO
+        run: |
+          mv iso-builder/output/blackgate-installer-amd64.iso \
+            "iso-builder/output/blackgate-${{ steps.version.outputs.version }}-amd64.iso"
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
@@ -59,10 +100,10 @@ jobs:
 
   release-iso:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-iso]
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -75,22 +116,22 @@ jobs:
           files: artifacts/**/*.iso
           generate_release_notes: true
           body: |
-            ## Blackgate Server ISO Appliance v${{ github.ref_name }}
-            
-            This release provides a fully self-contained, bootable **Ubuntu 22.04 (Jammy) Server** ISO appliance.
-            
-            Blackgate is pre-packaged as a Docker container within the ISO, guaranteeing 100% environmental consistency and making future updates effortless. It auto-starts on boot using host networking for optimal UDP streaming performance.
-            
-            ---
-            
-            ### Installation
-            1. Download `blackgate-*-amd64.iso`
-            2. Flash to USB (`dd if=blackgate-*.iso of=/dev/sdX bs=4M`) or mount in VM
-            3. Boot and follow the automated Ubuntu installer
-            4. Access dashboard at `http://<server-ip>:4000`
+            ## Blackgate Server ISO Appliance ${{ github.ref_name }}
 
-            ### Default Credentials
-            - **Dashboard**: `admin` / `password123`
-            - **SSH**: `blackgate` / `blackgate123`
-            
-            > ⚠️ Change default passwords after first login!
+            Bare-metal **Ubuntu 24.04 LTS (Noble)** appliance. Blackgate ships as
+            an OTP release with bundled ERTS and Rust-only media engine. Docker is
+            not required on installed gateways.
+
+            ### Installation
+
+            1. Download `blackgate-*-amd64.iso`.
+            2. Flash to USB or mount in a VM.
+            3. Boot and follow automated Ubuntu installer.
+            4. Open `http://<server-ip>:4000`.
+
+            ### Default credentials
+
+            - Dashboard: `admin` / `password123`
+            - SSH: `blackgate` / `blackgate123`
+
+            Change default passwords after first login.

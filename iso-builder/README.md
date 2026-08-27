@@ -1,52 +1,54 @@
-# Blackgate Server (Docker Appliance)
+# Blackgate Ubuntu 24.04 LTS Appliance
 
-Builds a bootable **Ubuntu 22.04 (Jammy) Server** ISO appliance that natively auto-starts Blackgate securely inside a Docker container using host networking.
+Builds a bootable Ubuntu 24.04 LTS (Noble) amd64 installer. Installed gateways
+run Blackgate directly as a systemd-managed OTP release with bundled ERTS and
+the Rust media engine. Docker is not installed or required at runtime.
 
-## How to Build
+## Build contract
 
-### Option 1: GitHub Actions (Recommended)
+- Ubuntu source ISO: `ubuntu-24.04.4-live-server-amd64.iso`
+- Erlang/OTP: 27.0.1
+- Elixir: 1.18.2
+- Node.js: 20.19.0
+- Rust: 1.96.0
+- GStreamer: Ubuntu Noble 1.24 runtime plus bundled DeckLink plugin
 
-Push a version tag to trigger an automatic build:
+GitHub Actions installs these exact toolchains and downloads source ISO. For a
+local build, place source ISO beside `build.sh`, install dependencies listed in
+`.github/workflows/build-iso.yml`, then run:
+
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+VERSION=1.0.0 ./iso-builder/build.sh
 ```
 
-### Option 2: Build Locally (requires Linux with Docker)
-```bash
-chmod +x build.sh
-VERSION=1.0.0 ./build.sh
-```
+Output: `iso-builder/output/blackgate-installer-amd64.iso`.
 
-Output: `output/blackgate-1.0.0-amd64.iso`
+## Installed layout
 
-## What's Inside the ISO
 | Component | Details |
-|-----------|---------|
-| **OS** | Ubuntu 22.04 (Jammy) CLI |
-| **Engine** | `docker` + `docker compose` running `blackgate/app:latest` |
-| **SSH** | Enabled, root login disabled |
-| **Boot** | `docker load` & `docker compose up` run automatically |
+| --- | --- |
+| OS | Ubuntu 24.04 LTS amd64, bare metal |
+| Application | `/opt/blackgate`, systemd service `blackgate` |
+| Media engine | Rust `blackgate-engine` bundled inside OTP release |
+| Database | Khepri data under `/var/lib/blackgate/khepri` |
+| DeckLink | Bundled GStreamer 1.24 DeckLink plugin |
+| Network | DHCP, 16 MiB UDP send/receive buffer ceiling |
 
-## Default Credentials
+## Default credentials
+
 | Service | User | Password |
-|---------|------|----------|
+| --- | --- | --- |
 | Dashboard | admin | password123 |
-| SSH       | blackgate | blackgate123 |
+| SSH | blackgate | blackgate123 |
 
-> ⚠️ **Change these after first login!**
+Change both passwords after installation.
 
-## Managing Blackgate on the Appliance
-Blackgate runs via Docker Compose in `/opt/blackgate`.
+## Operations
+
 ```bash
-cd /opt/blackgate
-
-# View live logs
-docker compose logs -f
-
-# Restart Blackgate
-docker compose restart
-
-# Stop Blackgate
-docker compose down
+sudo systemctl status blackgate
+sudo journalctl -u blackgate -f
+sudo systemctl restart blackgate
 ```
+
+Physical DeckLink/SDI validation remains manual release sign-off step.

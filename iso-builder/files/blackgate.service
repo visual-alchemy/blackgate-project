@@ -16,6 +16,9 @@ Environment=API_AUTH_USERNAME=admin
 Environment=API_AUTH_PASSWORD=password123
 Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
 Environment=HOME=/opt/blackgate
+Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
+Environment=ERL_AFLAGS=-proto_dist inet_tcp
+Environment=RELEASE_DISTRIBUTION=none
 
 ExecStart=/opt/blackgate/bin/blackgate start
 ExecStop=/opt/blackgate/bin/blackgate stop

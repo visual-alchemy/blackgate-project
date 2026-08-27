@@ -30,16 +30,20 @@ autoinstall:
     - net-tools
     - htop
     - ca-certificates
-    - libssl3
+    - libssl3t64
     - libncurses6
+    - libstdc++6
+    - ffmpeg
     - libgstreamer1.0-0
+    - libgstreamer-plugins-base1.0-0
+    - gstreamer1.0-tools
+    - gstreamer1.0-plugins-base
     - gstreamer1.0-plugins-good
     - gstreamer1.0-plugins-bad
-    - libsrt-openssl-dev
-    - libcjson-dev
-    - libglib2.0-dev
-    - build-essential
-    - pkg-config
+    - gstreamer1.0-libav
+    - gstreamer1.0-vaapi
+    - libsrt1.5-gnutls
+    - libcjson1
     - iproute2
 
   # ─── Disable snaps ──────────────────────────────────────────────────
@@ -59,6 +63,7 @@ autoinstall:
     - mkdir -p /target/opt/blackgate
     - mkdir -p /target/var/lib/blackgate/khepri
     - mkdir -p /target/etc/update-motd.d
+    - mkdir -p /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0
 
     # Copy Blackgate files from ISO to installed system
     - cp /cdrom/blackgate/blackgate-release.tar.gz /target/opt/blackgate/
@@ -66,10 +71,12 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate-firstboot.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.sh /target/opt/blackgate/
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
+    - cp /cdrom/blackgate/libgstdecklink.so /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
     # Set permissions
     - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
     - chmod +x /target/etc/update-motd.d/99-blackgate
+    - chmod 644 /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdecklink.so
     - chown -R 1000:1000 /target/opt/blackgate
     - chown -R 1000:1000 /target/var/lib/blackgate
 

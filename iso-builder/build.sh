@@ -1,12 +1,17 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UBUNTU_ISO="$SCRIPT_DIR/ubuntu-22.04.5-live-server-amd64.iso"
+UBUNTU_ISO="$SCRIPT_DIR/ubuntu-24.04.4-live-server-amd64.iso"
 OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-installer-amd64.iso"
 WORK_DIR="$(mktemp -d)"
 EXTRACT_DIR="$WORK_DIR/iso-extract"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+cleanup() {
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
 
 echo "═══════════════════════════════════════════════════════════"
 echo "  Blackgate Installer ISO Builder (Bare-metal)"
@@ -24,15 +29,12 @@ if [ ! -f "$UBUNTU_ISO" ]; then
     exit 1
 fi
 
-if ! command -v xorriso &>/dev/null; then
-    echo "❌ xorriso not found: sudo apt-get install -y xorriso"
-    exit 1
-fi
-
-if ! command -v mkfs.vfat &>/dev/null; then
-    echo "❌ mkfs.vfat not found: sudo apt-get install -y dosfstools"
-    exit 1
-fi
+for command_name in xorriso mkfs.vfat fdisk git meson ninja mix npm; do
+    if ! command -v "$command_name" &>/dev/null; then
+        echo "❌ $command_name not found; install ISO and Blackgate build dependencies"
+        exit 1
+    fi
+done
 
 # Verify all required files exist
 REQUIRED=(
@@ -57,8 +59,11 @@ echo "✅ Pre-flight checks passed"
 echo ""
 echo "🔨 Step 1: Building Blackgate Elixir release..."
 cd "$PROJECT_ROOT"
-make install
-make build
+mix local.hex --force
+mix local.rebar --force
+MIX_ENV=prod mix deps.get
+npm --prefix web_app ci
+MIX_ENV=prod mix release --overwrite
 
 RELEASE_DIR="$PROJECT_ROOT/_build/prod/rel/blackgate"
 if [ ! -d "$RELEASE_DIR" ]; then
@@ -66,9 +71,33 @@ if [ ! -d "$RELEASE_DIR" ]; then
     exit 1
 fi
 
+if ! compgen -G "$RELEASE_DIR/erts-*" >/dev/null; then
+    echo "❌ Bundled ERTS missing from release"
+    exit 1
+fi
+
+if ! compgen -G "$RELEASE_DIR/lib/blackgate-*/priv/native/build/blackgate-engine" >/dev/null; then
+    echo "❌ Rust engine missing from release"
+    exit 1
+fi
+
 echo "   Packaging release tarball..."
 tar czf "$SCRIPT_DIR/files/blackgate-release.tar.gz" -C "$PROJECT_ROOT/_build/prod/rel" blackgate
 echo "   Release size: $(du -h "$SCRIPT_DIR/files/blackgate-release.tar.gz" | cut -f1)"
+
+echo "   Building GStreamer 1.24.2 DeckLink plugin..."
+git clone --depth 1 --branch 1.24.2 \
+    https://gitlab.freedesktop.org/gstreamer/gstreamer.git \
+    "$WORK_DIR/gstreamer"
+meson setup "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir" \
+    "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad" \
+    -Ddecklink=enabled \
+    -Dcpp_args="-I$PROJECT_ROOT/native/vendor/decklink-sdk" \
+    --prefix=/usr
+ninja -C "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir" \
+    sys/decklink/libgstdecklink.so
+cp "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir/sys/decklink/libgstdecklink.so" \
+    "$SCRIPT_DIR/files/libgstdecklink.so"
 
 # ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────
 
@@ -98,7 +127,8 @@ for f in \
     blackgate.service \
     blackgate-firstboot.sh \
     blackgate-firstboot.service \
-    99-blackgate-motd.sh; do
+    99-blackgate-motd.sh \
+    libgstdecklink.so; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
 done
@@ -150,7 +180,6 @@ EFI_INFO=$(fdisk -l "$UBUNTU_ISO" 2>/dev/null | grep "EFI System")
 
 if [ -z "$EFI_INFO" ]; then
     echo "❌ EFI partition not found in ISO partition table"
-    rm -rf "$WORK_DIR"
     exit 1
 fi
 
@@ -184,8 +213,6 @@ xorriso -as mkisofs \
     -o "$OUTPUT_ISO" \
     "$EXTRACT_DIR/"
 
-rm -rf "$WORK_DIR"
-
 # ─── Done ───────────────────────────────────────────────────────────────
 
 if [ -f "$OUTPUT_ISO" ]; then
@@ -200,6 +227,5 @@ if [ -f "$OUTPUT_ISO" ]; then
     echo "═══════════════════════════════════════════════════════════"
 else
     echo "❌ ISO creation failed"
-    rm -rf "$WORK_DIR"
     exit 1
 fi

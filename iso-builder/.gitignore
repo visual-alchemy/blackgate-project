@@ -1,5 +1,6 @@
 build/
 output/
 files/blackgate-release.tar.gz
+files/libgstdecklink.so
 files/blackgate-image.tar.gz
 *.iso
