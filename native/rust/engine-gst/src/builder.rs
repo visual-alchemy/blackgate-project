@@ -5,16 +5,15 @@
 // SDI sinks      : full decode → convert/rate/scale → caps → identity(sync) → decklink
 // Metadata probe : tee sink pad (engine-metadata) → meta_* stdout + shared VideoInfo
 
-
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use std::str::FromStr;
 
-use gstreamer as gst;
+use gio;
 use gst::glib;
 use gst::prelude::*;
-use gio;
+use gstreamer as gst;
 
 use engine_config::{PropValue, RouteConfig, SinkConfig, SinkProtocol, SourceConfig};
 use engine_metadata::TsProbeState;
@@ -40,10 +39,7 @@ struct Ctx {
     video_info: SharedVideoInfo,
 }
 
-pub fn build_pipeline(
-    config: &RouteConfig,
-    socket: SharedSocket,
-) -> Result<BuiltPipeline, String> {
+pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<BuiltPipeline, String> {
     let ctx = Ctx {
         socket,
         sdi_state: SdiState::new_shared(),
@@ -91,13 +87,15 @@ pub fn build_pipeline(
             secondary_pad.set_property("always-ok", true);
 
             let p_src = source.static_pad("src").ok_or("source has no src pad")?;
-            let s_src = secondary.static_pad("src").ok_or("secondary has no src pad")?;
-            p_src
-                .link(&primary_pad)
-                .map_err(|_| "DUAL-INGEST: failed to link primary source → selector sink_0".to_string())?;
-            s_src
-                .link(&secondary_pad)
-                .map_err(|_| "DUAL-INGEST: failed to link secondary source → selector sink_1".to_string())?;
+            let s_src = secondary
+                .static_pad("src")
+                .ok_or("secondary has no src pad")?;
+            p_src.link(&primary_pad).map_err(|_| {
+                "DUAL-INGEST: failed to link primary source → selector sink_0".to_string()
+            })?;
+            s_src.link(&secondary_pad).map_err(|_| {
+                "DUAL-INGEST: failed to link secondary source → selector sink_1".to_string()
+            })?;
 
             gst::Element::link(&selector, &tee)
                 .map_err(|_| "DUAL-INGEST: failed to link input-selector → tee".to_string())?;
@@ -129,13 +127,19 @@ pub fn build_pipeline(
     for (idx, sink_cfg) in config.sinks.iter().enumerate() {
         match add_sink(&pipeline, &tee, sink_cfg, idx, &ctx, &vrate_elements) {
             Ok(Some(srt_sink)) => {
-                println!("Stored SRT sink element at index {} for stats collection", idx);
+                println!(
+                    "Stored SRT sink element at index {} for stats collection",
+                    idx
+                );
                 srt_sinks.push(srt_sink);
             }
             Ok(None) => {}
             Err(err) => {
                 if sink_cfg.protocol == SinkProtocol::Sdi {
-                    eprintln!("WARNING: SDI sink {} failed — continuing without SDI output", idx);
+                    eprintln!(
+                        "WARNING: SDI sink {} failed — continuing without SDI output",
+                        idx
+                    );
                 } else {
                     return Err(err);
                 }
@@ -207,10 +211,16 @@ fn make_source(
 
     if has_sdi_sink {
         src.set_property("do-timestamp", true);
-        println!("Set do-timestamp=TRUE for {} source element (SDI playout detected)", name);
+        println!(
+            "Set do-timestamp=TRUE for {} source element (SDI playout detected)",
+            name
+        );
     } else {
         src.set_property("do-timestamp", false);
-        println!("Set do-timestamp=FALSE for {} source element (pure passthrough)", name);
+        println!(
+            "Set do-timestamp=FALSE for {} source element (pure passthrough)",
+            name
+        );
     }
 
     if cfg.element_type == "srtsrc" {
@@ -250,9 +260,7 @@ fn source_uri(cfg: &SourceConfig) -> Option<String> {
             }
             Some(uri)
         }
-        engine_config::SourceProtocol::Udp => {
-            Some(format!("udp://{}:{}", cfg.host, cfg.port))
-        }
+        engine_config::SourceProtocol::Udp => Some(format!("udp://{}:{}", cfg.host, cfg.port)),
     }
 }
 
@@ -274,7 +282,7 @@ pub fn apply_extra_props(el: &gst::Element, props: &std::collections::BTreeMap<S
                 }
             }
             PropValue::Int(i) => {
-                set_numeric_property(el, name, *i as i64, &pspec);
+                set_numeric_property(el, name, *i, &pspec);
                 true
             }
             PropValue::Double(d) => {
@@ -307,7 +315,7 @@ fn set_numeric_property(el: &gst::Element, name: &str, v: i64, pspec: &glib::Par
     } else if t == f32::static_type() {
         el.set_property(name, v as f32);
     } else {
-        el.set_property(name, v as i64);
+        el.set_property(name, v);
     }
 }
 
@@ -331,12 +339,12 @@ unsafe extern "C" fn on_caller_connecting_cb(
     let name = data.name.to_str().unwrap_or("source");
 
     let addr_str = if !addr.is_null() {
-        use glib::translate::FromGlibPtrNone;
         use gio::prelude::*;
+        use glib::translate::FromGlibPtrNone;
         let inet = gio::SocketAddress::from_glib_none(addr)
             .downcast::<gio::InetSocketAddress>()
             .ok();
-        inet.map(|a| format!("{}:{}", a.address().to_string(), a.port()))
+        inet.map(|a| format!("{}:{}", a.address(), a.port()))
     } else {
         None
     };
@@ -432,7 +440,11 @@ fn install_ts_probe(tee: &gst::Element, ctx: &Ctx) {
         if let Some(info) = st.probe(buffer) {
             println!("meta_width:{}", info.width);
             println!("meta_height:{}", info.height);
-            println!("meta_frame_rate:{}/{}", info.fps_num, if info.fps_den == 0 { 1 } else { info.fps_den });
+            println!(
+                "meta_frame_rate:{}/{}",
+                info.fps_num,
+                if info.fps_den == 0 { 1 } else { info.fps_den }
+            );
             println!("meta_interlaced:{}", if info.interlaced { 1 } else { 0 });
             println!("VIDEO_STREAM_TYPE:{}", info.codec.as_str());
             drop(st);
@@ -591,11 +603,7 @@ fn add_sdi_sink(
     ctx: &Ctx,
     vrate_elements: &Arc<Mutex<[Option<gst::Element>; 8]>>,
 ) -> Result<(), String> {
-    let sdi = cfg
-        .sdi
-        .as_ref()
-        .cloned()
-        .unwrap_or_default();
+    let sdi = cfg.sdi.as_ref().cloned().unwrap_or_default();
 
     // Validate DeckLink availability first (C: factory probe)
     let probe = gst::ElementFactory::make("decklinkvideosink")
@@ -679,9 +687,24 @@ fn add_sdi_sink(
     engine_sdi::setup_audio_upmix(&amix)?;
 
     let elements: Vec<&gst::Element> = vec![
-        &queue, &tsdemux, &vdecodebin, &vqueue, &vconvert, &vrate, &vscale, &vcaps,
-        &vid_identity, &videosink, &adecodebin, &aqueue, &aconvert, &amix, &aresample,
-        &arate, &acaps, &audiosink,
+        &queue,
+        &tsdemux,
+        &vdecodebin,
+        &vqueue,
+        &vconvert,
+        &vrate,
+        &vscale,
+        &vcaps,
+        &vid_identity,
+        &videosink,
+        &adecodebin,
+        &aqueue,
+        &aconvert,
+        &amix,
+        &aresample,
+        &arate,
+        &acaps,
+        &audiosink,
     ];
     pipeline
         .add_many(&elements)
@@ -695,19 +718,27 @@ fn add_sdi_sink(
     }
 
     // Static audio chain: aqueue → aconvert → amix → aresample → arate → acaps → audiosink
-    gst::Element::link_many([&aqueue, &aconvert, &amix, &aresample, &arate, &acaps, &audiosink])
-        .map_err(|_| format!("SDI sink {}: Failed to link audio output chain", sink_index))?;
+    gst::Element::link_many([
+        &aqueue, &aconvert, &amix, &aresample, &arate, &acaps, &audiosink,
+    ])
+    .map_err(|_| format!("SDI sink {}: Failed to link audio output chain", sink_index))?;
 
     // Static tee → queue → tsdemux
-    gst::Element::link_many([tee, &queue, &tsdemux])
-        .map_err(|_| format!("SDI sink {}: Failed to link tee → queue → tsdemux", sink_index))?;
+    gst::Element::link_many([tee, &queue, &tsdemux]).map_err(|_| {
+        format!(
+            "SDI sink {}: Failed to link tee → queue → tsdemux",
+            sink_index
+        )
+    })?;
 
     // tsdemux pad-added → route video/audio to decodebins
     {
         let vdb = vdecodebin.clone();
         let adb = adecodebin.clone();
         tsdemux.connect_pad_added(move |_src, new_pad| {
-            let Some(caps) = new_pad.current_caps().or_else(|| Some(new_pad.query_caps(None)))
+            let Some(caps) = new_pad
+                .current_caps()
+                .or_else(|| Some(new_pad.query_caps(None)))
             else {
                 return;
             };
@@ -725,7 +756,9 @@ fn add_sdi_sink(
                     if !sink_pad.is_linked() {
                         match new_pad.link(&sink_pad) {
                             Ok(_) => println!("SDI tsdemux: linked {} → decodebin", name),
-                            Err(e) => eprintln!("SDI tsdemux: pad link failed for '{}': {:?}", name, e),
+                            Err(e) => {
+                                eprintln!("SDI tsdemux: pad link failed for '{}': {:?}", name, e)
+                            }
                         }
                     }
                 }
@@ -781,7 +814,10 @@ fn add_sdi_sink(
                 sdi.width, sdi.height, sdi.framerate
             )
         };
-        println!("SDI sink {}: mode={} -> caps: {}", sink_index, sdi.video_mode, caps_str);
+        println!(
+            "SDI sink {}: mode={} -> caps: {}",
+            sink_index, sdi.video_mode, caps_str
+        );
 
         let caps = gst::Caps::from_str(&caps_str)
             .map_err(|_| format!("SDI sink {}: bad caps string", sink_index))?;
@@ -800,17 +836,35 @@ fn add_sdi_sink(
                 .add(&vinterlace)
                 .map_err(|e| format!("SDI sink {}: add interlace: {}", sink_index, e))?;
             gst::Element::link_many([
-                &vqueue, &vconvert, &vrate, &vscale, &vinterlace, &vcaps, &vid_identity, &videosink,
+                &vqueue,
+                &vconvert,
+                &vrate,
+                &vscale,
+                &vinterlace,
+                &vcaps,
+                &vid_identity,
+                &videosink,
             ])
         } else {
-            gst::Element::link_many([&vqueue, &vconvert, &vrate, &vscale, &vcaps, &vid_identity, &videosink])
+            gst::Element::link_many([
+                &vqueue,
+                &vconvert,
+                &vrate,
+                &vscale,
+                &vcaps,
+                &vid_identity,
+                &videosink,
+            ])
         };
-        link_result.map_err(|_| {
-            format!("SDI sink {}: Failed to link video output chain", sink_index)
-        })?;
+        link_result
+            .map_err(|_| format!("SDI sink {}: Failed to link video output chain", sink_index))?;
 
         // decodebin video pad → vqueue
-        connect_raw_pad_added(&vdecodebin, &vqueue, "SDI: decodebin video → output chain linked");
+        connect_raw_pad_added(
+            &vdecodebin,
+            &vqueue,
+            "SDI: decodebin video → output chain linked",
+        );
 
         println!(
             "SDI sink {}: pipeline created (decodebin) → DeckLink device {} (mode {})",
@@ -819,7 +873,11 @@ fn add_sdi_sink(
     }
 
     // decodebin audio pads → aqueue (both modes)
-    connect_raw_pad_added(&adecodebin, &aqueue, "SDI: decodebin audio → output chain linked");
+    connect_raw_pad_added(
+        &adecodebin,
+        &aqueue,
+        "SDI: decodebin audio → output chain linked",
+    );
 
     println!("SDI sink {}: Audio health monitor installed", sink_index);
     println!("SDI sink {}: Video health monitor installed", sink_index);
@@ -845,11 +903,12 @@ fn connect_raw_pad_added(decodebin: &gst::Element, target: &gst::Element, ok_msg
             return;
         };
         let Some(s) = caps.structure(0) else { return };
-        let raw_prefix = if s.name().starts_with("video/x-raw") || s.name().starts_with("audio/x-raw") {
-            true
-        } else {
-            s.name().starts_with("video/x-raw")
-        };
+        let raw_prefix =
+            if s.name().starts_with("video/x-raw") || s.name().starts_with("audio/x-raw") {
+                true
+            } else {
+                s.name().starts_with("video/x-raw")
+            };
         if !raw_prefix && !s.name().starts_with("audio/x-raw") {
             return;
         }
@@ -1032,20 +1091,21 @@ fn install_sdi_health_probes(
 
     if let Some(pad) = audiosink.static_pad("sink") {
         let sdi = sdi.clone();
-        let idx = idx;
         pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
             let now = now_monotonic_us();
             sdi.audio_last_buffer_us[idx].store(now, Ordering::Relaxed);
             sdi.audio_buffer_count[idx].fetch_add(1, Ordering::Relaxed);
             if sdi.audio_silence_reported[idx].swap(false, Ordering::Relaxed) {
-                println!("SDI_AUDIO_RECOVERED: device={} audio_buffers_flowing_again", idx);
+                println!(
+                    "SDI_AUDIO_RECOVERED: device={} audio_buffers_flowing_again",
+                    idx
+                );
             }
             gst::PadProbeReturn::Ok
         });
     }
 
     if let Some(pad) = videosink.static_pad("sink") {
-        let idx = idx;
         pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
             sdi.video_buffer_count[idx].fetch_add(1, Ordering::Relaxed);
             gst::PadProbeReturn::Ok

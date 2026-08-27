@@ -7,10 +7,9 @@
 /// 4. Handle UYVY caps negotiation
 /// 5. Test auto-detect mode property
 /// 6. Test SDI audio (decklinkaudiosink)
-
 use anyhow::{Context, Result};
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 
 fn main() -> Result<()> {
     gst::init().context("gstreamer init failed")?;
@@ -36,10 +35,7 @@ fn main() -> Result<()> {
             Some(audio)
         }
         Err(e) => {
-            println!(
-                "[sdi-spike] ⚠ decklinkaudiosink not available: {}",
-                e
-            );
+            println!("[sdi-spike] ⚠ decklinkaudiosink not available: {}", e);
             None
         }
     };
@@ -69,13 +65,13 @@ fn main() -> Result<()> {
     let capsfilter = gst::ElementFactory::make("capsfilter")
         .property(
             "caps",
-            &gst::Caps::builder("video/x-raw")
+            gst::Caps::builder("video/x-raw")
                 .field("format", "UYVY")
                 .build(),
         )
         .build()?;
 
-    pipeline.add_many(&[
+    pipeline.add_many([
         &fakesrc,
         &tsdemux,
         &decodebin,
@@ -86,13 +82,16 @@ fn main() -> Result<()> {
         &sdi_video,
     ])?;
 
-    gst::Element::link_many(&[&fakesrc, &tsdemux])?;
+    gst::Element::link_many([&fakesrc, &tsdemux])?;
 
     // Dynamic pad linking for decodebin
     let videorate_clone = videorate.downgrade();
     decodebin.connect_pad_added(move |_db, src_pad| {
-        let caps = src_pad.current_caps().unwrap_or_else(|| gst::Caps::new_any());
-        let s = caps.structure(0).map(|s| s.name().to_string()).unwrap_or_default();
+        let caps = src_pad.current_caps().unwrap_or_else(gst::Caps::new_any);
+        let s = caps
+            .structure(0)
+            .map(|s| s.name().to_string())
+            .unwrap_or_default();
         if s.starts_with("video/") {
             println!("[sdi-spike]   decodebin video pad detected: {}", caps);
             if let Some(vr) = videorate_clone.upgrade() {
@@ -104,7 +103,7 @@ fn main() -> Result<()> {
         // audio pads ignored for this spike
     });
 
-    gst::Element::link_many(&[&videorate, &videoscale, &videoconvert, &capsfilter])?;
+    gst::Element::link_many([&videorate, &videoscale, &videoconvert, &capsfilter])?;
     capsfilter.link(&sdi_video)?;
 
     println!("[sdi-spike] ✓ Full SDI chain assembled:");

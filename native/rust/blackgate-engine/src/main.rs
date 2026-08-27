@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut shadow_mode = false;
     let route_id = std::env::args()
         .skip(1)
-        .filter(|a| {
+        .find(|a| {
             if a == "--shadow" {
                 shadow_mode = true;
                 false
@@ -52,7 +52,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 true
             }
         })
-        .next()
         .unwrap_or_else(|| "unknown".into());
 
     let socket = connect_unix_socket(&route_id, shadow_mode);
@@ -73,6 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Failed to read init JSON from stdin");
         return Ok(());
     }
+    // Release stdin before command thread takes its own lock. Keeping reader
+    // alive here blocks stop-route and every other runtime command forever.
+    drop(reader);
     println!("Received JSON: {}", init_line.trim());
     stdout.flush()?;
 
@@ -95,9 +97,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let pipeline = built.pipeline;
-    if let Err(_) = pipeline.set_state(gstreamer::State::Playing) {
+    if pipeline.set_state(gstreamer::State::Playing).is_err() {
         eprintln!("Unable to set the pipeline to the playing state.");
-        for el in pipeline.iterate_elements().into_iter().filter_map(Result::ok) {
+        for el in pipeline
+            .iterate_elements()
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             let (_, state, pending) = el.state(gstreamer::ClockTime::NONE);
             if state != gstreamer::State::Playing {
                 let name = |s: gstreamer::State| match s {
@@ -134,12 +140,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let stop = Arc::new(AtomicBool::new(false));
 
-    let selector_state: Arc<Mutex<Option<SelectorState>>> = Arc::new(Mutex::new(
-        match (&built.selector, &built.secondary) {
+    let selector_state: Arc<Mutex<Option<SelectorState>>> =
+        Arc::new(Mutex::new(match (&built.selector, &built.secondary) {
             (Some(sel), Some(sec)) => Some(SelectorState::new(sel.clone(), sec.clone())),
             _ => None,
-        },
-    ));
+        }));
 
     // stdin command thread (C stdin_watch_cb + handle_command_line)
     let stop_for_stdin = stop.clone();

@@ -7,10 +7,9 @@
 /// 4. Handle bus messages (EOS, Error, Warning)
 /// 5. Set pipeline to PLAYING state
 /// 6. Access DeckLink elements (if available)
-
 use anyhow::{Context, Result};
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -44,8 +43,8 @@ fn main() -> Result<()> {
     // --- Test 2: Pipeline assembly ---
     println!("[spike] Test 2: Pipeline assembly");
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many(&[&src, &queue, &sink])?;
-    gst::Element::link_many(&[&src, &queue, &sink])?;
+    pipeline.add_many([&src, &queue, &sink])?;
+    gst::Element::link_many([&src, &queue, &sink])?;
 
     println!("[spike] ✓ Pipeline assembled: srtsrc → queue → srtsink");
 
@@ -88,8 +87,8 @@ fn main() -> Result<()> {
     let bus_thread = thread::spawn(move || {
         while r.load(Ordering::Relaxed) {
             let msg = bus.timed_pop(gst::ClockTime::from_seconds(1));
-            match msg {
-                Some(msg) => match msg.view() {
+            if let Some(msg) = msg {
+                match msg.view() {
                     gst::MessageView::Eos(_) => {
                         println!("[spike]   EOS received");
                         r.store(false, Ordering::Relaxed);
@@ -103,14 +102,10 @@ fn main() -> Result<()> {
                         r.store(false, Ordering::Relaxed);
                     }
                     gst::MessageView::Warning(warn) => {
-                        eprintln!(
-                            "[spike]   WARNING: {}",
-                            warn.debug().unwrap_or_default()
-                        );
+                        eprintln!("[spike]   WARNING: {}", warn.debug().unwrap_or_default());
                     }
                     _ => {}
-                },
-                None => {} // timeout, continue
+                }
             }
         }
     });
@@ -184,11 +179,11 @@ fn main() -> Result<()> {
     let decodebin = gst::ElementFactory::make("decodebin").build()?;
     let fakesink = gst::ElementFactory::make("fakesink").build()?;
 
-    test_pipeline.add_many(&[&filesrc, &decodebin, &fakesink])?;
-    gst::Element::link_many(&[&filesrc, &decodebin])?;
+    test_pipeline.add_many([&filesrc, &decodebin, &fakesink])?;
+    gst::Element::link_many([&filesrc, &decodebin])?;
 
     decodebin.connect_pad_added(move |db, src_pad| {
-        let caps = src_pad.current_caps().unwrap_or_else(|| gst::Caps::new_any());
+        let caps = src_pad.current_caps().unwrap_or_else(gst::Caps::new_any);
         println!("[spike]   decodebin pad-added: caps={}", caps);
         db.link(&fakesink).ok();
     });

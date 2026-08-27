@@ -14,7 +14,7 @@ impl SourceTarget {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_wire_name(s: &str) -> Option<Self> {
         match s {
             "primary" => Some(SourceTarget::Primary),
             "secondary" => Some(SourceTarget::Secondary),
@@ -53,7 +53,10 @@ impl SelectorState {
             self.active = target;
             println!("SOURCE_SWITCHED:{}", target.as_str());
         } else {
-            eprintln!("[failover] ERROR: pad {} not found on input-selector", pad_name);
+            eprintln!(
+                "[failover] ERROR: pad {} not found on input-selector",
+                pad_name
+            );
         }
     }
 
@@ -92,8 +95,14 @@ mod tests {
     fn target_strings_match_elixir_wire_names() {
         assert_eq!(SourceTarget::Primary.as_str(), "primary");
         assert_eq!(SourceTarget::Secondary.as_str(), "secondary");
-        assert_eq!(SourceTarget::from_str("primary"), Some(SourceTarget::Primary));
-        assert_eq!(SourceTarget::from_str("secondary"), Some(SourceTarget::Secondary));
-        assert_eq!(SourceTarget::from_str("bogus"), None);
+        assert_eq!(
+            SourceTarget::from_wire_name("primary"),
+            Some(SourceTarget::Primary)
+        );
+        assert_eq!(
+            SourceTarget::from_wire_name("secondary"),
+            Some(SourceTarget::Secondary)
+        );
+        assert_eq!(SourceTarget::from_wire_name("bogus"), None);
     }
 }

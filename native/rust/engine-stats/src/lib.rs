@@ -6,9 +6,9 @@
 //            → per SRT sink: "stats_sink:"+JSON+"\n"
 // Keys MUST match C exactly: total-bytes-received, packets-received-lost, ...
 
-use gstreamer as gst;
 use gst::glib;
 use gst::prelude::*;
+use gstreamer as gst;
 use serde::Serialize;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -151,10 +151,7 @@ fn struct_get_f64(s: &gst::Structure, name: &str) -> f64 {
 
 /// Convert one caller GstStructure field to JSON (C: int64/int/uint64/double
 /// passthrough + caller-address GInetSocketAddress → "ip:port").
-fn caller_field_to_json(
-    field_name: &str,
-    value: &glib::Value,
-) -> Option<serde_json::Value> {
+fn caller_field_to_json(field_name: &str, value: &glib::Value) -> Option<serde_json::Value> {
     let t = value.type_();
     if t == i64::static_type() {
         value.get::<i64>().ok().map(serde_json::Value::from)
@@ -343,16 +340,19 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
 
 /// Attach video metadata fields to a serialized source-stats JSON object
 /// (C print_stats: video-width/height/framerate/inferred/interlace-mode).
-pub fn attach_video_info(
-    value: &mut serde_json::Value,
-    info: &VideoInfo,
-) {
+pub fn attach_video_info(value: &mut serde_json::Value, info: &VideoInfo) {
     let obj = match value.as_object_mut() {
         Some(o) => o,
         None => return,
     };
-    obj.insert("video-width".into(), serde_json::Value::from(info.width as i64));
-    obj.insert("video-height".into(), serde_json::Value::from(info.height as i64));
+    obj.insert(
+        "video-width".into(),
+        serde_json::Value::from(info.width as i64),
+    );
+    obj.insert(
+        "video-height".into(),
+        serde_json::Value::from(info.height as i64),
+    );
     obj.insert(
         "video-framerate-num".into(),
         serde_json::Value::from(info.fps_num as i64),
@@ -367,13 +367,24 @@ pub fn attach_video_info(
     );
     obj.insert(
         "video-interlace-mode".into(),
-        serde_json::Value::from(if info.interlaced { "interleaved" } else { "progressive" }),
+        serde_json::Value::from(if info.interlaced {
+            "interleaved"
+        } else {
+            "progressive"
+        }),
     );
 }
 
 /// C print_stats sdi_video_stats array (primary only).
-pub fn build_sdi_video_stats(sdi: &SdiState, vrate_elements: &[Option<gst::Element>; 8]) -> Vec<SdiVideoStatsItem> {
-    let modes = sdi.detected_mode.lock().map(|m| m.clone()).unwrap_or_default();
+pub fn build_sdi_video_stats(
+    sdi: &SdiState,
+    vrate_elements: &[Option<gst::Element>; 8],
+) -> Vec<SdiVideoStatsItem> {
+    let modes = sdi
+        .detected_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default();
     let mut out = Vec::new();
     for i in 0..8 {
         if let Some(vrate) = &vrate_elements[i] {
@@ -403,15 +414,15 @@ pub fn check_sdi_audio_silence(sdi: &SdiState, now_us: i64) -> Vec<(i32, f64, i6
             continue; // never received audio on this device
         }
         let silence_us = now_us - last;
-        if silence_us > (SDI_AUDIO_HEALTH_INTERVAL_SEC * 1_000_000.0) as i64 {
-            if !sdi.audio_silence_reported[i].load(Ordering::Relaxed) {
-                sdi.audio_silence_reported[i].store(true, Ordering::Relaxed);
-                silent.push((
-                    i as i32,
-                    silence_us as f64 / 1_000_000.0,
-                    sdi.audio_buffer_count[i].load(Ordering::Relaxed),
-                ));
-            }
+        if silence_us > (SDI_AUDIO_HEALTH_INTERVAL_SEC * 1_000_000.0) as i64
+            && !sdi.audio_silence_reported[i].load(Ordering::Relaxed)
+        {
+            sdi.audio_silence_reported[i].store(true, Ordering::Relaxed);
+            silent.push((
+                i as i32,
+                silence_us as f64 / 1_000_000.0,
+                sdi.audio_buffer_count[i].load(Ordering::Relaxed),
+            ));
         }
     }
     silent
@@ -523,7 +534,10 @@ mod tests {
             serde_json::Value::from("192.168.1.50:5555"),
         );
         caller.insert("rtt-ms".to_string(), serde_json::Value::from(42.5));
-        caller.insert("receive-rate-mbps".to_string(), serde_json::Value::from(8.0));
+        caller.insert(
+            "receive-rate-mbps".to_string(),
+            serde_json::Value::from(8.0),
+        );
         SourceStats {
             source: "primary".into(),
             total_bytes_received: 123456789,
@@ -561,15 +575,10 @@ mod tests {
         let mut last_pos = 0usize;
         for key in expected_keys {
             let pat = format!("\"{}\":", key);
-            let pos = json.find(&pat).unwrap_or_else(|| {
-                panic!("key {} missing in {}", key, json)
-            });
-            assert!(
-                pos > last_pos,
-                "key {} out of order in {}",
-                key,
-                json
-            );
+            let pos = json
+                .find(&pat)
+                .unwrap_or_else(|| panic!("key {} missing in {}", key, json));
+            assert!(pos > last_pos, "key {} out of order in {}", key, json);
             last_pos = pos;
         }
     }
@@ -577,8 +586,7 @@ mod tests {
     /// The two keys Elixir route_health.ex depends on for loss math.
     #[test]
     fn elixir_loss_keys_present() {
-        let v: serde_json::Value =
-            serde_json::to_value(source_stats_fixture()).unwrap();
+        let v: serde_json::Value = serde_json::to_value(source_stats_fixture()).unwrap();
         assert!(v.get("packets-received").is_some());
         assert!(v.get("packets-received-lost").is_some());
         assert!(v.get("receive-rate-mbps").is_some());
@@ -608,15 +616,13 @@ mod tests {
             callers: vec![],
         };
         let json = serde_json::to_string(&s).unwrap();
-        assert!(json.starts_with(
-            concat!(
-                r#"{"sink-index":2,"bytes-sent-total":999,"packets-sent":100,"#,
-                r#""packets-sent-lost":1,"packets-sent-dropped":0,"#,
-                r#""packets-sent-retransmitted":2,"rtt-ms":5.0,"send-rate-mbps":6.0,"#,
-                r#""bandwidth-mbps":7.0,"negotiated-latency-ms":90,"connected-callers":1,"#,
-                r#""callers":[]}"#
-            )
-        ));
+        assert!(json.starts_with(concat!(
+            r#"{"sink-index":2,"bytes-sent-total":999,"packets-sent":100,"#,
+            r#""packets-sent-lost":1,"packets-sent-dropped":0,"#,
+            r#""packets-sent-retransmitted":2,"rtt-ms":5.0,"send-rate-mbps":6.0,"#,
+            r#""bandwidth-mbps":7.0,"negotiated-latency-ms":90,"connected-callers":1,"#,
+            r#""callers":[]}"#
+        )));
     }
 
     #[test]
@@ -642,7 +648,7 @@ mod tests {
     fn silence_check_reports_once_then_latches() {
         let sdi = SdiState::new_shared();
         let now = 20_000_000i64; // 20s monotonic
-        // device 0 saw audio at t=0 → silent after 10s
+                                 // device 0 saw audio at t=0 → silent after 10s
         sdi.audio_last_buffer_us[0].store(1, Ordering::Relaxed);
         sdi.audio_buffer_count[0].store(500, Ordering::Relaxed);
 

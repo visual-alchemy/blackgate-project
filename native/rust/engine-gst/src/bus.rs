@@ -8,8 +8,8 @@
 // ELEMENT  → GstSRTObject → "SRT Event: <structure>"
 //            connection-removed → SOURCE_INVALID:<primary|secondary>
 
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -62,10 +62,7 @@ pub fn run_bus_watch(
                 return;
             }
             gst::MessageView::Warning(warn) => {
-                let src_name = msg
-                    .src()
-                    .map(|s| s.name().to_string())
-                    .unwrap_or_default();
+                let src_name = msg.src().map(|s| s.name().to_string()).unwrap_or_default();
                 let message = warn.error().message().to_string();
                 println!("Pipeline Warning from {}: {}", src_name, message);
 
@@ -105,12 +102,9 @@ pub fn run_bus_watch(
             gst::MessageView::Element(el) => {
                 if let Some(s) = el.structure() {
                     if s.name() == "GstSRTObject" {
-                        println!("SRT Event: {}", s.to_string());
+                        println!("SRT Event: {}", s);
                     } else if s.name() == "connection-removed" {
-                        let src_name = msg
-                            .src()
-                            .map(|s| s.name().to_string())
-                            .unwrap_or_default();
+                        let src_name = msg.src().map(|s| s.name().to_string()).unwrap_or_default();
                         let tag = if src_name == "secondary_source" {
                             "secondary"
                         } else {

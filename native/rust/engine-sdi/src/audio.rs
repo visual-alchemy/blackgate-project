@@ -1,6 +1,6 @@
-use gstreamer as gst;
 use gst::glib;
 use gst::prelude::*;
+use gstreamer as gst;
 
 /// Fallback SDI config when auto-detect can't match a broadcast standard.
 #[derive(Debug, Clone)]
@@ -27,7 +27,11 @@ pub fn build_upmix_matrix() -> glib::Value {
                 .map(|j| {
                     static ZERO: f64 = 0.0;
                     static ONE: f64 = 1.0;
-                    if i % 2 == j { &ONE } else { &ZERO }
+                    if i % 2 == j {
+                        &ONE
+                    } else {
+                        &ZERO
+                    }
                 })
                 .collect();
             gst::Array::new(&coefs)

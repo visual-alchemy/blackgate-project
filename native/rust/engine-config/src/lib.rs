@@ -103,12 +103,12 @@ pub enum SinkProtocol {
 /// SDI sink config — mirrors the C JSON keys in add_sink_to_pipeline(sdisink).
 #[derive(Debug, Clone)]
 pub struct SdiConfig {
-    pub device_number: i32,     // "device-number", default 0
-    pub video_mode: String,     // "video-mode", default "1080p25"
-    pub interlaced: bool,       // "interlaced", default false
-    pub width: i32,             // default 1920
-    pub height: i32,            // default 1080
-    pub framerate: String,      // default "25/1"
+    pub device_number: i32, // "device-number", default 0
+    pub video_mode: String, // "video-mode", default "1080p25"
+    pub interlaced: bool,   // "interlaced", default false
+    pub width: i32,         // default 1920
+    pub height: i32,        // default 1080
+    pub framerate: String,  // default "25/1"
 }
 
 impl Default for SdiConfig {
@@ -196,14 +196,19 @@ fn parse_uri_host_port(uri: &str) -> Result<(String, u16), String> {
             .find(']')
             .ok_or_else(|| format!("bad ipv6 uri: {}", uri))?;
         let h = &rest[..close];
-        let p = rest[close + 1..].strip_prefix(':').ok_or_else(|| format!("no port in uri: {}", uri))?;
+        let p = rest[close + 1..]
+            .strip_prefix(':')
+            .ok_or_else(|| format!("no port in uri: {}", uri))?;
         (h.to_string(), p.to_string())
     } else {
         let mut parts = host_port.rsplitn(2, ':');
         let port_str = parts
             .next()
             .ok_or_else(|| format!("no port in uri: {}", uri))?;
-        (parts.next().unwrap_or("0.0.0.0").to_string(), port_str.to_string())
+        (
+            parts.next().unwrap_or("0.0.0.0").to_string(),
+            port_str.to_string(),
+        )
     };
     let port: u16 = port_str
         .parse()
@@ -253,8 +258,21 @@ fn extract_query_param(uri: &str, key: &str) -> Option<String> {
 
 const SOURCE_SKIP_KEYS: &[&str] = &["type", "uri", "mode", "passphrase", "streamid", "latency"];
 const SINK_SKIP_KEYS: &[&str] = &[
-    "type", "uri", "mode", "passphrase", "streamid", "latency", "host", "port", "address",
-    "device-number", "video-mode", "interlaced", "width", "height", "framerate",
+    "type",
+    "uri",
+    "mode",
+    "passphrase",
+    "streamid",
+    "latency",
+    "host",
+    "port",
+    "address",
+    "device-number",
+    "video-mode",
+    "interlaced",
+    "width",
+    "height",
+    "framerate",
 ];
 
 fn extra_props(obj: &serde_json::Value, skip: &[&str]) -> BTreeMap<String, PropValue> {
@@ -354,7 +372,10 @@ fn parse_elixir_sink(el: &serde_json::Value) -> Result<SinkConfig, String> {
         .ok_or("Invalid sink format: missing or invalid 'type'")?
         .to_string();
 
-    let uri = obj.get("uri").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let uri = obj
+        .get("uri")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let protocol = if element_type.contains("sdi") {
         SinkProtocol::Sdi
@@ -437,12 +458,18 @@ fn parse_elixir_sink(el: &serde_json::Value) -> Result<SinkConfig, String> {
         .get("passphrase")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .or_else(|| uri.as_deref().and_then(|u| extract_query_param(u, "passphrase")));
+        .or_else(|| {
+            uri.as_deref()
+                .and_then(|u| extract_query_param(u, "passphrase"))
+        });
     let streamid = obj
         .get("streamid")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .or_else(|| uri.as_deref().and_then(|u| extract_query_param(u, "streamid")));
+        .or_else(|| {
+            uri.as_deref()
+                .and_then(|u| extract_query_param(u, "streamid"))
+        });
 
     Ok(SinkConfig {
         element_type,
@@ -564,7 +591,10 @@ impl RouteConfig {
 
     /// Auto-detect format and parse.
     pub fn from_json(json: &str) -> Result<Self, String> {
-        if json.contains("primary_source") || json.contains("secondary_source") || json.contains("\"sinks\"") {
+        if json.contains("primary_source")
+            || json.contains("secondary_source")
+            || json.contains("\"sinks\"")
+        {
             Self::from_elixir_json(json)
         } else {
             Self::from_simple_json(json)
@@ -622,7 +652,7 @@ mod tests {
             r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"secondary_source":{"type":"srtsrc","uri":"srt://0.0.0.0:7002"},"sinks":[{"type":"srtsink","uri":"srt://10.0.0.5:7005"}]}"#,
         )
         .unwrap();
-        assert_eq!(cfg.auto_join, true);
+        assert!(cfg.auto_join);
         let sec = cfg.secondary.unwrap();
         assert!(sec.auto_join);
 
@@ -630,7 +660,7 @@ mod tests {
             r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"secondary_source":{"type":"srtsrc","uri":"srt://0.0.0.0:7002"},"auto_join":false,"sinks":[]}"#,
         )
         .unwrap();
-        assert_eq!(off.auto_join, false);
+        assert!(!off.auto_join);
     }
 
     #[test]
@@ -662,9 +692,9 @@ mod tests {
             Some(&PropValue::Int(3))
         );
         // parsed keys must NOT leak into extra_props
-        assert!(s0.extra_props.get("type").is_none());
-        assert!(s0.extra_props.get("uri").is_none());
-        assert!(s0.extra_props.get("latency").is_none());
+        assert!(!s0.extra_props.contains_key("type"));
+        assert!(!s0.extra_props.contains_key("uri"));
+        assert!(!s0.extra_props.contains_key("latency"));
     }
 
     #[test]
@@ -673,7 +703,10 @@ mod tests {
             r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001?mode=listener","oheadbw":50,"auto-reconnect":true,"keep-listening":false},"sinks":[]}"#,
         )
         .unwrap();
-        assert_eq!(cfg.source.extra_props.get("oheadbw"), Some(&PropValue::Int(50)));
+        assert_eq!(
+            cfg.source.extra_props.get("oheadbw"),
+            Some(&PropValue::Int(50))
+        );
         assert_eq!(
             cfg.source.extra_props.get("auto-reconnect"),
             Some(&PropValue::Bool(true))

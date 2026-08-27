@@ -6,11 +6,8 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Deserialize)]
 struct SourceStatsRaw {
-    source: Option<String>,
     #[serde(rename = "bandwidth-mbps")]
     bandwidth_mbps: Option<f64>,
-    #[serde(rename = "packets-received")]
-    packets_received: Option<f64>,
     #[serde(rename = "rtt-ms")]
     rtt_ms: Option<f64>,
     #[serde(rename = "receive-rate-mbps")]
@@ -23,8 +20,6 @@ struct SinkStatsRaw {
     bandwidth_mbps: Option<f64>,
     #[serde(rename = "packets-sent")]
     packets_sent: Option<f64>,
-    #[serde(rename = "rtt-ms")]
-    rtt_ms: Option<f64>,
     #[serde(rename = "send-rate-mbps")]
     send_rate_mbps: Option<f64>,
 }
@@ -60,7 +55,11 @@ fn parse_line(line: &str) -> Option<(Option<SourceStatsRaw>, Option<SinkStatsRaw
     None
 }
 
-fn apply_snapshot_update(snapshot: &mut EngineSnapshot, source: Option<SourceStatsRaw>, sink: Option<SinkStatsRaw>) {
+fn apply_snapshot_update(
+    snapshot: &mut EngineSnapshot,
+    source: Option<SourceStatsRaw>,
+    sink: Option<SinkStatsRaw>,
+) {
     if let Some(source) = source {
         if let Some(bw) = source.bandwidth_mbps.or(source.receive_rate_mbps) {
             snapshot.source_bw = Some(bw);
@@ -80,44 +79,43 @@ fn apply_snapshot_update(snapshot: &mut EngineSnapshot, source: Option<SourceSta
     snapshot.last_update = Some(Instant::now());
 }
 
-fn read_stats(socket_path: &str, snapshot: &mut EngineSnapshot) -> Result<()> {
-    let stream = UnixStream::connect(socket_path)?;
-    let reader = BufReader::new(stream);
-
-    for line in reader.lines() {
-        let line = line?;
-        if let Some((source, sink)) = parse_line(&line) {
-            apply_snapshot_update(snapshot, source, sink);
-        }
-    }
-    Ok(())
-}
-
 fn compare(c: &EngineSnapshot, rust: &EngineSnapshot) -> Vec<String> {
     let mut alerts = vec![];
 
     if let (Some(c_bw), Some(r_bw)) = (c.source_bw, rust.source_bw) {
         let diff = ((c_bw - r_bw).abs() / c_bw.max(0.001)) * 100.0;
         if diff > 5.0 {
-            alerts.push(format!("source_throughput: {:.1}% dev (C={:.2} Mbps, Rust={:.2} Mbps)", diff, c_bw, r_bw));
+            alerts.push(format!(
+                "source_throughput: {:.1}% dev (C={:.2} Mbps, Rust={:.2} Mbps)",
+                diff, c_bw, r_bw
+            ));
         }
     }
     if let (Some(c_bw), Some(r_bw)) = (c.sink_bw, rust.sink_bw) {
         let diff = ((c_bw - r_bw).abs() / c_bw.max(0.001)) * 100.0;
         if diff > 5.0 {
-            alerts.push(format!("sink_throughput: {:.1}% dev (C={:.2} Mbps, Rust={:.2} Mbps)", diff, c_bw, r_bw));
+            alerts.push(format!(
+                "sink_throughput: {:.1}% dev (C={:.2} Mbps, Rust={:.2} Mbps)",
+                diff, c_bw, r_bw
+            ));
         }
     }
     if let (Some(c_rtt), Some(r_rtt)) = (c.source_rtt, rust.source_rtt) {
         let diff = (c_rtt - r_rtt).abs();
         if diff > 10.0 {
-            alerts.push(format!("source_latency: {:.1}ms dev (C={:.1}ms, Rust={:.1}ms)", diff, c_rtt, r_rtt));
+            alerts.push(format!(
+                "source_latency: {:.1}ms dev (C={:.1}ms, Rust={:.1}ms)",
+                diff, c_rtt, r_rtt
+            ));
         }
     }
     if let (Some(c_pkts), Some(r_pkts)) = (c.sink_packets, rust.sink_packets) {
         let diff = ((c_pkts - r_pkts).abs() / c_pkts.max(1.0)) * 100.0;
         if diff > 1.0 {
-            alerts.push(format!("sink_packets: {:.1}% dev (C={:.0}, Rust={:.0})", diff, c_pkts, r_pkts));
+            alerts.push(format!(
+                "sink_packets: {:.1}% dev (C={:.0}, Rust={:.0})",
+                diff, c_pkts, r_pkts
+            ));
         }
     }
     alerts
@@ -131,7 +129,10 @@ fn main() -> Result<()> {
     println!("[shadow-daemon] starting comparison daemon");
     println!("[shadow-daemon] C engine socket: {}", c_socket);
     println!("[shadow-daemon] Rust engine socket: {}", rust_socket);
-    println!("[shadow-daemon] comparison interval: {}s", compare_interval.as_secs());
+    println!(
+        "[shadow-daemon] comparison interval: {}s",
+        compare_interval.as_secs()
+    );
 
     let mut c_snapshot = EngineSnapshot::default();
     let mut rust_snapshot = EngineSnapshot::default();
@@ -172,9 +173,11 @@ fn main() -> Result<()> {
         let alerts = compare(&c_snapshot, &rust_snapshot);
         if alerts.is_empty() {
             if c_snapshot.source_bw.is_some() && rust_snapshot.source_bw.is_some() {
-                println!("[shadow] OK — throughput: C={:.2}Mbps Rust={:.2}Mbps",
+                println!(
+                    "[shadow] OK — throughput: C={:.2}Mbps Rust={:.2}Mbps",
                     c_snapshot.source_bw.unwrap_or(0.0),
-                    rust_snapshot.source_bw.unwrap_or(0.0));
+                    rust_snapshot.source_bw.unwrap_or(0.0)
+                );
             } else {
                 println!("[shadow] waiting for stats from both engines...");
             }

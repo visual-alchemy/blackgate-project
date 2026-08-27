@@ -21,7 +21,15 @@ const fn entry(
     mode_str: &'static str,
     caps_interlace_mode: Option<&'static str>,
 ) -> DeckLinkModeEntry {
-    DeckLinkModeEntry { width, height, fps_num, fps_den, interlaced, mode_str, caps_interlace_mode }
+    DeckLinkModeEntry {
+        width,
+        height,
+        fps_num,
+        fps_den,
+        interlaced,
+        mode_str,
+        caps_interlace_mode,
+    }
 }
 
 pub const DECKLINK_MODE_TABLE: [DeckLinkModeEntry; 15] = [
@@ -99,7 +107,7 @@ pub fn decide_from_caps(
     let height = s.get::<i32>("height").unwrap_or(0);
     let (fps_num, fps_den) = s
         .get::<gst::Fraction>("framerate")
-        .map(|f| (f.numer() as i32, f.denom() as i32))
+        .map(|f| (f.numer(), f.denom()))
         .unwrap_or((0, 1));
     let interlaced = s
         .get::<&str>("interlace-mode")
@@ -120,8 +128,7 @@ pub fn decide_from_caps(
         }),
         None => {
             let mode_str = fallback.mode.clone();
-            let need_interlace =
-                mode_str.contains('i') || mode_str == "pal" || mode_str == "ntsc";
+            let need_interlace = mode_str.contains('i') || mode_str == "pal" || mode_str == "ntsc";
             Some(AutoDetectDecision {
                 matched: false,
                 mode_str,
@@ -129,7 +136,11 @@ pub fn decide_from_caps(
                 height: fallback.height,
                 framerate: fallback.framerate.clone(),
                 need_interlace_element: need_interlace,
-                interlace_mode: if need_interlace { Some("interleaved") } else { None },
+                interlace_mode: if need_interlace {
+                    Some("interleaved")
+                } else {
+                    None
+                },
             })
         }
     }

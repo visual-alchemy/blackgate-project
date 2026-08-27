@@ -61,7 +61,7 @@ impl ThumbnailBranch {
             .name("thumb-caps")
             .property(
                 "caps",
-                &gst::Caps::builder("video/x-raw")
+                gst::Caps::builder("video/x-raw")
                     .field("width", 320i32)
                     .field("height", 180i32)
                     .build(),
@@ -85,21 +85,34 @@ impl ThumbnailBranch {
 
         // ─── Pipeline assembly ─────────────────────────────────────────
         pipeline
-            .add_many(&[&tqueue, &decodebin, &videoconvert, &videoscale, &capsfilter, &jpegenc, &appsink])
+            .add_many([
+                &tqueue,
+                &decodebin,
+                &videoconvert,
+                &videoscale,
+                &capsfilter,
+                &jpegenc,
+                &appsink,
+            ])
             .map_err(|e| format!("thumb add: {}", e))?;
 
         gst::Element::link(&tqueue, &decodebin)
             .map_err(|e| format!("thumb link queue→decodebin: {}", e))?;
 
-        gst::Element::link_many(&[&videoconvert, &videoscale, &capsfilter, &jpegenc, &appsink])
+        gst::Element::link_many([&videoconvert, &videoscale, &capsfilter, &jpegenc, &appsink])
             .map_err(|e| format!("thumb link downstream: {}", e))?;
 
         // decodebin pad-added → link to videoconvert
         let pipeline_clone = pipeline.clone();
         decodebin.connect_pad_added(move |_db, src_pad| {
-            let caps = src_pad.current_caps().or_else(|| Some(src_pad.query_caps(None)));
+            let caps = src_pad
+                .current_caps()
+                .or_else(|| Some(src_pad.query_caps(None)));
             if let Some(caps) = caps {
-                let name = caps.structure(0).map(|s| s.name().to_string()).unwrap_or_default();
+                let name = caps
+                    .structure(0)
+                    .map(|s| s.name().to_string())
+                    .unwrap_or_default();
                 if name.starts_with("video/") {
                     if let Some(convert) = pipeline_clone.by_name("thumb-convert") {
                         let sink_pad = convert.static_pad("sink").unwrap();
@@ -116,7 +129,9 @@ impl ThumbnailBranch {
             .request_pad_simple("src_%u")
             .ok_or("thumb: tee request pad failed")?;
         let queue_sink = tqueue.static_pad("sink").ok_or("thumb: queue sink pad")?;
-        tee_pad.link(&queue_sink).map_err(|e| format!("thumb tee→queue: {}", e))?;
+        tee_pad
+            .link(&queue_sink)
+            .map_err(|e| format!("thumb tee→queue: {}", e))?;
 
         // ─── Background writer thread ───────────────────────────────────
         let appsink_weak = appsink.downgrade(); // non-owning: avoid ref cycle
@@ -138,8 +153,7 @@ impl ThumbnailBranch {
                     if let Ok(sample) = appsink_app.pull_sample() {
                         if let Some(buffer) = sample.buffer() {
                             if let Ok(map) = buffer.map_readable() {
-                                let tmp_path =
-                                    format!("/tmp/blackgate_preview_{}.tmp", route_id);
+                                let tmp_path = format!("/tmp/blackgate_preview_{}.tmp", route_id);
                                 if fs::write(&tmp_path, &*map).is_ok() {
                                     // Atomic rename: avoids partial reads
                                     let _ = fs::rename(&tmp_path, &preview_path_clone);
@@ -154,7 +168,11 @@ impl ThumbnailBranch {
             let _ = fs::remove_file(&preview_path_clone);
         });
 
-        Ok(Self { thread_handle: Some(handle), running, preview_path })
+        Ok(Self {
+            thread_handle: Some(handle),
+            running,
+            preview_path,
+        })
     }
 
     /// Stop the thumbnail worker and remove the preview file.
