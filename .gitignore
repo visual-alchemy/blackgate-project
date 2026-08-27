@@ -22,6 +22,7 @@ yarn-error.log*
 
 # === Native C Build ===
 /native/build/
+/native/archive/c-engine/build/
 
 # === Database / Data ===
 *.db

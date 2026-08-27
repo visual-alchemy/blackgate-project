@@ -58,7 +58,7 @@ RUN apt-get update -y \
     && apt-get clean
 
 # Copy DeckLink SDK headers into the system include path
-COPY native/archive/decklink-sdk /usr/include/decklink
+COPY native/vendor/decklink-sdk /usr/include/decklink
 
 # Clone, configure, and build ONLY the decklink plugin from gst-plugins-bad
 # Version pinned to 1.22.0 to match system GStreamer on Debian Bookworm
@@ -179,4 +179,4 @@ RUN sed -i 's/\r$//' run.sh && chmod +x run.sh && \
 
 # Set the entrypoint
 ENTRYPOINT ["/usr/bin/tini", "-s", "-g", "--", "/app/run.sh"]
-CMD ["/app/bin/server"] 
+CMD ["/app/bin/server"]
