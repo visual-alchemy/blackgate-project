@@ -1,52 +1,51 @@
-# Blackgate Native Pipeline
+# Blackgate Rust Media Engine
 
-The `native/` directory contains the C codebase for Blackgate's high-performance video streaming pipeline. This component handles the actual SRT/UDP packet processing using GStreamer, and communicates with the Elixir backend via Unix Domain Sockets.
+`native/` contains Blackgate production media runtime. Production entry point is
+`native/build/blackgate-engine`, built from Rust workspace in `native/rust/`.
+It reads one route configuration from stdin, emits lifecycle messages on
+stdout, accepts control commands on stdin, and sends telemetry JSON through
+Blackgate Unix socket.
 
-## Architecture
+## Workspace
 
-```
-Elixir (RouteHandler)
-    │
-    ├── stdin  →  JSON config (pipeline definition)
-    ├── stdout ←  status messages
-    └── Unix Socket (/tmp/hydra_unix_sock)
-            ↕
-        blackgate_pipeline (C process)
-            │
-            ├── GStreamer srtsrc/udpsrc  (source)
-            ├── tee                     (splitter)
-            └── srtsink/udpsink × N     (destinations)
-```
+| Crate | Responsibility |
+| --- | --- |
+| `blackgate-engine` | Production process, IPC, lifecycle |
+| `engine-config` | Route configuration and wire contract |
+| `engine-gst` | GStreamer pipeline construction and bus handling |
+| `engine-stats` | Source/destination SRT statistics |
+| `engine-metadata` | MPEG-TS metadata parsing |
+| `engine-thumbnail` | JPEG preview extraction |
+| `engine-failover` | Dual-ingest switching state |
+| `engine-sdi` | DeckLink mode and audio handling |
 
-## Key Files
+## Build and verify
 
-| File | Purpose |
-|------|---------|
-| `src/main.c` | Entry point — reads JSON config from stdin, builds GStreamer pipeline |
-| `src/pipeline.c` | GStreamer pipeline construction and lifecycle |
-| `src/unix_socket.c` | Unix Domain Socket client for stats reporting |
-| `src/stats.c` | SRT statistics collection and JSON serialization |
-| `Makefile` | Build configuration |
-
-## Building
-
-The native binary is compiled automatically during `make build` or `mix compile`. It requires:
-- GStreamer 1.0 development libraries
-- libsrt (with OpenSSL)
-- libcjson
-- libcmocka (for tests)
-- pkg-config
-
-## Debug Input Examples
-
-Paste these JSON payloads into stdin when running `blackgate_pipeline` manually:
-
-**SRT Listener → SRT Listener + UDP:**
-```json
-{"source":{"type":"srtsrc","localaddress":"127.0.0.1","localport":8000,"auto-reconnect":true,"keep-listening":false,"mode":"listener"},"sinks":[{"type":"srtsink","localaddress":"127.0.0.1","localport":8002,"mode":"listener"},{"type":"udpsink","host":"127.0.0.1","port":8003}]}
+```bash
+make -C native
+cargo fmt --manifest-path native/rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path native/rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path native/rust/Cargo.toml --workspace
+python3 native/rust/scripts/ipc_smoke.py
 ```
 
-**With authentication (passphrase + key length):**
-```json
-{"source":{"type":"srtsrc","localaddress":"127.0.0.1","localport":8000,"auto-reconnect":true,"keep-listening":false,"mode":"listener","streamid":"test1","passphrase":"secure_pass_123","pbkeylen":16},"sinks":[{"type":"srtsink","localaddress":"127.0.0.1","localport":8002,"mode":"listener"},{"type":"udpsink","host":"127.0.0.1","port":8003}]}
-```
+Pinned compiler comes from `rust-toolchain.toml`. Ubuntu 24.04 LTS with
+GStreamer 1.24 is required production baseline.
+
+## Runtime boundary
+
+- `native/Makefile` builds Rust only.
+- `mix.exs` packages only `blackgate-engine` in OTP release.
+- `scripts/check_rust_only_runtime.sh` rejects legacy executables/references.
+- `native/vendor/decklink-sdk/` supplies DeckLink headers for plugin build.
+
+## Historical benchmark oracle
+
+Legacy C implementation is checksum-frozen under `native/archive/c-engine/`.
+It exists only for migration performance comparison and must never be imported,
+packaged, or used as production fallback. See archive README and
+`benchmarks/migration/README.md`.
+
+Physical DeckLink/SDI behavior requires
+`docs/migration/SDI_MANUAL_SIGNOFF.md`; automated checks cannot claim hardware
+completion.

@@ -123,7 +123,7 @@ A quick reference guide when something goes wrong. No technical jargon — just 
 **Symptoms**: Server is slow, other services affected, or Blackgate is using too many resources.
 
 **What to do:**
-1. Check how many routes are running — each active route uses one native process
+1. Check how many routes are running — each active route uses one Rust engine process
 2. Go to the **Dashboard** page to see system CPU and memory
 3. Stop any routes you don't need right now
 4. If a single route is using excessive resources:
@@ -139,13 +139,14 @@ A quick reference guide when something goes wrong. No technical jargon — just 
 **Symptoms**: After rebooting the server, Blackgate doesn't come back online.
 
 **What to do:**
-1. For Docker — make sure Docker itself is running:
+1. On Ubuntu appliance, inspect systemd status and logs:
    ```
-   sudo systemctl start docker
+   sudo systemctl status blackgate
+   sudo journalctl -u blackgate -n 100
    ```
 2. Start Blackgate:
    ```
-   docker compose up -d
+   sudo systemctl start blackgate
    ```
 3. If the database seems corrupted (error messages about Khepri):
    - Restore from backup: go to the dashboard → Settings → Import backup
@@ -163,8 +164,8 @@ A quick reference guide when something goes wrong. No technical jargon — just 
 # Docker
 docker compose restart
 
-# Baremetal
-make restart
+# Ubuntu appliance
+sudo systemctl restart blackgate
 ```
 
 ### Creating a Backup
@@ -174,12 +175,8 @@ make restart
 
 ### Updating Blackgate
 ```
-# 1. Pull latest code
-git pull origin main
-
-# 2. Rebuild and restart
-docker compose build --no-cache
-docker compose up -d
+# Gateway updates are operator-managed. Pull/build/restart only on local or
+# approved deployment hosts; remote gateway diagnostics remain read-only.
 ```
 
 ### Checking Logs

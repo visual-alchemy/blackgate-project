@@ -6,7 +6,7 @@ The `web_app/` directory contains the React frontend for Blackgate's management 
 
 | Technology | Purpose |
 |------------|---------|
-| **React 18** | UI framework |
+| **React 19** | UI framework |
 | **Vite** | Build tool & dev server |
 | **Ant Design** | Component library |
 | **React Router** | Client-side routing |

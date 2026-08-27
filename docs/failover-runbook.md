@@ -3,6 +3,9 @@
 End-to-end procedure for verifying Blackgate's primary/secondary SRT failover
 using the `docker-compose.failover.yml` harness.
 
+Harness image contains production Rust-only engine. GitHub migration CI runs
+same functional contract on Ubuntu 24.04 LTS.
+
 The harness runs **two ffmpeg emitters** (`emitter-a`, `emitter-b`) that push
 MPEG-TS test patterns as SRT callers into two Blackgate SRT listeners
 (ports `12100` and `12101`). You then create a single failover route whose

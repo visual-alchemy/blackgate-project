@@ -6,6 +6,10 @@
 
 > **v1.0.1**: Real-time health diagnostics, timestamp correction, clock-pacing, tsparse packet alignment, SDI output, RTMP/ffmpeg sidecar. Actively improving based on real-world usage.
 
+> **Platform contract:** Ubuntu 24.04 LTS, Rust-only media runtime, Elixir
+> 1.18.2 / OTP 27.0.1, Node 20.19.0, and React 19. See
+> [migration status](./docs/migration/RUST_MIGRATION_STATUS.md).
+
 ---
 
 ## Features
@@ -29,7 +33,7 @@
 | **Search & Filter** | Filter routes by name, status, or schema type |
 | **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, SDI failures, reconnects) |
 | **Credential Management** | Change admin username and password from the Settings UI |
-| **Systemd Service** | Auto-start on boot for baremetal production deployments |
+| **Ubuntu Appliance** | Ubuntu 24.04 LTS bare-metal OTP release managed by systemd |
 | **REST API** | Full programmatic control for automation |
 | **Docker Ready** | One-command deployment with backup/restore |
 | **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
@@ -114,7 +118,7 @@ graph TB
         end
         
         subgraph "Streaming Layer"
-            F["GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+            F["Rust Media Engine<br/>(GStreamer + SRT)<br/>Unix Socket IPC"]
         end
     end
     
@@ -162,7 +166,7 @@ graph TB
         end
         
         subgraph "Streaming Layer"
-            E["GStreamer Pipeline<br/>(C + SRT)<br/>Unix Socket IPC"]
+            E["Rust Media Engine<br/>(GStreamer + SRT)<br/>Unix Socket IPC"]
         end
     end
     
@@ -212,7 +216,7 @@ graph TB
             DB[("Khepri Distributed KV DB")]
         end
 
-        subgraph "Native Streaming Engine (blackgate_pipeline)"
+        subgraph "Rust Streaming Engine (blackgate-engine)"
             P_SRC["srtsrc (Primary Input)"]
             S_SRC["srtsrc (Secondary Input / Auto-Join)"]
             SEL["input-selector<br/>Zero-Glitch In-Process Switch"]
@@ -296,11 +300,11 @@ sequenceDiagram
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Frontend** | React 18 + Vite + Ant Design | Real-time dashboard & route management |
+| **Frontend** | React 19 + Vite + Ant Design | Real-time dashboard & route management |
 | **Backend** | Elixir / Phoenix | REST API, WebSocket, route orchestration |
 | **Database** | Khepri (Raft consensus) | Persistent configuration storage |
 | **Stats** | ETS + Registry | In-memory real-time statistics |
-| **Streaming** | C + GStreamer | High-performance video processing |
+| **Streaming** | Rust + GStreamer 1.24 | Memory-safe, high-performance video processing |
 | **Transport** | Haivision SRT | Secure, reliable UDP-based streaming |
 | **SDI Output** | Blackmagic DeckLink + GStreamer | Hardware video output via decodebin |
 | **IPC** | Unix Socket | Low-latency backend ↔ pipeline communication |
@@ -328,40 +332,44 @@ Default credentials: `admin` / `password123`
 
 ### Manual Installation
 
-#### Ubuntu/Debian
+#### Ubuntu 24.04 LTS
 
 ```bash
 # 1. Enable Universe Repo & Update
 sudo add-apt-repository universe
 sudo apt-get update
 
-# 2. Install System Libraries
-sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav \
-  libcjson-dev libsrt-openssl-dev libcmocka-dev libglib2.0-dev pkg-config build-essential git curl wget
+# 2. Install Rust/GStreamer build and runtime libraries
+sudo apt-get install -y build-essential pkg-config git curl ffmpeg \
+  libglib2.0-dev libgstreamer1.0-dev \
+  libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
+  gstreamer1.0-tools gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-libav gstreamer1.0-vaapi libsrt-gnutls-dev
 
-# 3. Install Node.js 20+ and Yarn
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install --global yarn --force
+# 3. Install exact versions declared by repository
+# Use mise/asdf for .tool-versions and rustup for rust-toolchain.toml.
+mise install
+rustup toolchain install 1.96.0 --component clippy,rustfmt
 
-# 4. Install Elixir 1.17+ & Erlang 25+
-wget https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb && sudo dpkg -i erlang-solutions_2.0_all.deb
-sudo apt-get update
-sudo apt-get install -y esl-erlang elixir
+# 4. Install project dependencies
+make install
 ```
 
 #### macOS
 
 ```bash
-brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
+brew install gstreamer srt pkg-config ffmpeg mise rustup-init
+mise install
+rustup toolchain install 1.96.0 --component clippy,rustfmt
+make install
 ```
 
 ---
 
 ## Production Deployment
 
-### Option 1: Baremetal (Recommended for SDI)
+### Option 1: Ubuntu 24.04 LTS bare metal (required for production/SDI)
 
 ```bash
 # 1. Install dependencies
@@ -411,6 +419,9 @@ docker compose down
 Access: http://localhost:4000
 
 > **Note:** For SDI output via Docker, the host must have Blackmagic Desktop Video drivers installed and device passthrough configured in `docker-compose.yml`.
+
+Docker remains development/CI support. Installed appliances run directly as an
+OTP release; Docker is not a gateway runtime dependency.
 
 ### Commands Reference
 
@@ -520,6 +531,8 @@ For SDI output via Blackmagic DeckLink:
 4. **Test**: `gst-launch-1.0 videotestsrc ! videoconvert ! "video/x-raw,format=UYVY,width=1920,height=1080,framerate=25/1" ! decklinkvideosink device-number=0 mode=1080p25`
 
 See [SDI_FIXES.md](./SDI_FIXES.md) for detailed hardware setup, device mapping, and troubleshooting.
+Physical release acceptance uses the
+[SDI manual sign-off checklist](./docs/migration/SDI_MANUAL_SIGNOFF.md).
 
 ---
 
@@ -534,6 +547,8 @@ Blackgate is proprietary software developed by [Visual Alchemy](https://github.c
 - [ROADMAP](./ROADMAP.md) — Development roadmap & feature backlog
 - [CHANGELOG](./CHANGELOG.md) — Version history
 - [SDI_FIXES](./SDI_FIXES.md) — SDI output setup, device mapping, troubleshooting
+- [Rust migration status](./docs/migration/RUST_MIGRATION_STATUS.md) — automated evidence and completion state
+- [Migration benchmark](./benchmarks/migration/README.md) — frozen-C comparison harness and thresholds
 
 ---
 

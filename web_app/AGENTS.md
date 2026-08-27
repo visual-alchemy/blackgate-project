@@ -4,7 +4,7 @@ Welcome! This folder contains the React frontend application for managing the Bl
 
 ## 🛠️ Technology Stack & Environment
 
-- **Core Framework:** React 18
+- **Core Framework:** React 19
 - **Build Tool:** Vite
 - **UI Component Library:** Ant Design 5
 - **Styling:** Vanilla CSS (located in `src/index.css`)

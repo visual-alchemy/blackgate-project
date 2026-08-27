@@ -12,7 +12,7 @@ Welcome! This folder contains the Elixir OTP core, Phoenix REST API, and WebSock
 
 - `lib/blackgate/`:
   - `application.ex`: OTP supervision tree starting Khepri, Ranch Unix socket acceptor, and registries.
-  - `route_handler.ex`: `gen_statem` managing the lifecycle of C pipeline processes (Ports).
+  - `route_handler.ex`: `gen_statem` managing Rust engine processes through Erlang Ports.
   - `unix_sock_handler.ex`: `gen_statem` Ranch protocol listener handling telemetry JSON streams.
   - `db.ex`: Khepri CRUD operations and binary database backup/restore.
 - `lib/blackgate_web/`:
@@ -38,7 +38,7 @@ Welcome! This folder contains the Elixir OTP core, Phoenix REST API, and WebSock
 
 ### 4. SDI Audio Desync Auto-Recovery (`route_handler.ex`)
 - RTMP/HTTP/HLS sources go through the `ffmpeg` sidecar, which can cause brief audio gaps. When this happens, the DeckLink SDI audio embedder loses hardware sync and stays silent even after GStreamer recovers.
-- `RouteHandler` automatically restarts the pipeline when `SDI_AUDIO_SILENT` is detected from the C pipeline's stdout, subject to three guards:
+- `RouteHandler` automatically restarts the pipeline when `SDI_AUDIO_SILENT` is detected from Rust engine stdout, subject to three guards:
   1. **Schema guard:** `schema == "SRT"` routes are **never** auto-restarted (SRT is self-healing).
   2. **Source-silence guard:** if `total_buffers < 5000`, the source has no audio — restart would loop indefinitely, so it is skipped.
   3. **Cooldown guard:** after an auto-restart, a 5-minute cooldown prevents a restart loop if audio remains intermittent.

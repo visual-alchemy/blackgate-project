@@ -8,10 +8,10 @@ Welcome, AI Agent! This file provides the global context, setup steps, global ru
 
 When working inside specific folders, you MUST read and adhere to their respective local `AGENTS.md` files for deeper rules, constraints, and technologies:
 
-- **Native C GStreamer Engine:** See [native/AGENTS.md](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/native/AGENTS.md)
-- **Elixir OTP Core & API:** See [lib/AGENTS.md](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/lib/AGENTS.md)
-- **React Frontend Application:** See [web_app/AGENTS.md](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/web_app/AGENTS.md)
-- **Debian Appliance ISO Builder:** See [iso-builder/AGENTS.md](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/iso-builder/AGENTS.md)
+- **Rust GStreamer Engine:** See [native/AGENTS.md](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/native/AGENTS.md)
+- **Elixir OTP Core & API:** See [lib/AGENTS.md](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/lib/AGENTS.md)
+- **React Frontend Application:** See [web_app/AGENTS.md](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/web_app/AGENTS.md)
+- **Ubuntu Appliance ISO Builder:** See [iso-builder/AGENTS.md](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/iso-builder/AGENTS.md)
 
 ---
 
@@ -64,9 +64,9 @@ Yes: "Bug in auth. Token check use `<` not `<=`. Fix:"
 - **Backend:** Elixir 1.18.x / Erlang OTP 27 (configured in `.tool-versions`)
 - **Web Layer:** Phoenix 1.7.x (REST API + Phoenix Channels WebSockets)
 - **Database:** Khepri 0.16.x (embedded distributed Raft KV store; Ecto is disabled)
-- **Native Engine:** C + GStreamer 1.0 (compiled to `./native/build/blackgate_pipeline`)
-- **Frontend:** React 18 + Vite + Ant Design 5 (located in `web_app/`)
-- **OS Appliance Packaging:** Debian Bookworm + custom preseeded ISO installer (located in `iso-builder/`)
+- **Native Engine:** Rust 1.96.0 + GStreamer 1.24 (compiled to `./native/build/blackgate-engine`)
+- **Frontend:** React 19 + Vite 6 + Ant Design 5 (located in `web_app/`)
+- **OS Appliance Packaging:** Ubuntu 24.04 LTS bare-metal autoinstall ISO (located in `iso-builder/`)
 
 ---
 
@@ -114,13 +114,13 @@ To prevent SRT packet drops at high bitrates (9-50 Mbps), the operating system's
 sudo sysctl -w net.core.rmem_max=16777216
 sudo sysctl -w net.core.wmem_max=16777216
 ```
-These are pre-configured persistently in the Debian appliance installer (`iso-builder/files/blackgate-firstboot.sh`), but must be manually configured on any new gateway deployments.
+These are pre-configured persistently in Ubuntu appliance installer (`iso-builder/files/blackgate-firstboot.sh`), but must be manually configured on any new gateway deployments.
 
 ---
 
 ## 🧠 Memory & Context Logs
 
-- **Memory Folder:** [docs/memory/](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/docs/memory/)
-- **Session Logs:** [docs/memory/01-LOGS/](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/docs/memory/01-LOGS/)
-- **Custom Skill:** [docs/skills/project-memory/SKILL.md](file:///Users/eldyreynanda/Developer/Antigravity/blackgate-project/docs/skills/project-memory/SKILL.md)
+- **Memory Folder:** [docs/memory/](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/docs/memory/)
+- **Session Logs:** [docs/memory/01-LOGS/](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/docs/memory/01-LOGS/)
+- **Custom Skill:** [docs/skills/project-memory/SKILL.md](file:///Users/eldyreynanda/Developer/Playground/blackgate-project/docs/skills/project-memory/SKILL.md)
 - **Startup Rule:** You MUST invoke the `project-memory` skill at the start of the session to retrieve recent context, and append a new session summary to the logs at the end of the session.

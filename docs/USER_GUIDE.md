@@ -1,5 +1,9 @@
 # Blackgate User Guide
 
+Production baseline: Ubuntu 24.04 LTS bare-metal appliance with Rust-only media
+engine and Khepri persistence. Docker remains supported for local development
+and test harnesses, not installed-appliance runtime.
+
 This guide will help you get started with Blackgate SRT Gateway. Follow these steps to manage your SRT video streams.
 
 ---
