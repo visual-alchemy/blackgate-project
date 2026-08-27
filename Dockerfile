@@ -45,16 +45,12 @@ ENV PATH="/root/.cargo/bin:$PATH"
 
 # Install GStreamer and related libraries for the Rust engine
 RUN apt-get update -y \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-libav \
-    libsrt-gnutls-dev \
     libglib2.0-dev \
     pkg-config \
-    && apt-get clean
+    && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
 # Build gst-plugins-bad from source with DeckLink plugin enabled
@@ -66,12 +62,11 @@ RUN apt-get update -y \
 
 # Install build deps for gst-plugins-bad (meson, ninja, etc.)
 RUN apt-get update -y \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
     meson \
     ninja-build \
-    python3-pip \
-    libgstreamer-plugins-bad1.0-dev \
-    && apt-get clean
+    libgudev-1.0-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy DeckLink SDK headers into the system include path
 COPY native/vendor/decklink-sdk /usr/include/decklink
@@ -116,21 +111,24 @@ RUN mkdir config
 COPY config/config.exs config/${MIX_ENV}.exs config/
 RUN mix deps.compile
 
-# Copy the rest of the application code
-COPY priv priv
-COPY lib lib
+# Build the Rust engine independently from Elixir and frontend source changes.
 COPY native/Makefile native/Makefile
 COPY native/rust native/rust
-COPY web_app web_app
-COPY rel rel
-
-# Build the Rust engine
 RUN cd native && make
 
 # Build the web application
+COPY web_app web_app
 RUN cd web_app \
-    && npm install \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 10000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm ci \
     && npm run build
+
+# Copy application and release files after independent native/web builds.
+COPY priv priv
+COPY lib lib
+COPY rel rel
 
 # Changes to config/runtime.exs don't require recompiling the code
 COPY config/runtime.exs config/

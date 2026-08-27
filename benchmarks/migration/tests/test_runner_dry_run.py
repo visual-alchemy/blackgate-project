@@ -6,13 +6,20 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = ROOT / "benchmarks" / "migration" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from run_benchmark import RunnerError, build_plan, run_engine_lifecycle
+from run_benchmark import (
+    RunnerError,
+    _metadata,
+    _metrics_from_evidence,
+    build_plan,
+    run_engine_lifecycle,
+)
 from render_report import render_report
 
 
@@ -22,6 +29,54 @@ WORKLOAD_PATH = (
 
 
 class RunnerDryRunTest(unittest.TestCase):
+    def test_metadata_accepts_baked_build_identity(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BLACKGATE_BENCH_GIT_COMMIT": "abc123",
+                "BLACKGATE_BENCH_RUST_VERSION": "rustc 1.96.0",
+            },
+        ):
+            metadata = _metadata("start", "finish")
+
+        self.assertEqual(metadata["git_commit"], "abc123")
+        self.assertEqual(metadata["rust"], "rustc 1.96.0")
+
+    def test_throughput_uses_media_rate_not_srt_capacity(self):
+        stats = [
+            {
+                "source": "primary",
+                "receive-rate-mbps": 10.0,
+                "bandwidth-mbps": 900.0,
+            },
+            {
+                "sink-index": 0,
+                "send-rate-mbps": 9.8,
+                "bandwidth-mbps": 1_200.0,
+            },
+            {
+                "source": "primary",
+                "receive-rate-mbps": 0.0,
+                "bandwidth-mbps": 0.0,
+            },
+        ]
+
+        metrics = _metrics_from_evidence(stats, 0.0, 0.0, 1.0, 1, 1.0, [])
+
+        self.assertEqual(metrics["throughput_mbps"], 10.0)
+
+    def test_udp_throughput_falls_back_to_positive_sink_send_rate(self):
+        stats = [
+            {"source": "primary", "receive-rate-mbps": 0.0},
+            {"sink-index": 0, "send-rate-mbps": 9.5},
+            {"sink-index": 0, "send-rate-mbps": 9.7},
+            {"sink-index": 0, "send-rate-mbps": 0.0},
+        ]
+
+        metrics = _metrics_from_evidence(stats, 0.0, 0.0, 1.0, 1, 1.0, [])
+
+        self.assertEqual(metrics["throughput_mbps"], 9.6)
+
     def make_engine(self, directory: Path, *, fail=False) -> Path:
         engine = directory / ("fail-engine.py" if fail else "fake-engine.py")
         source = """

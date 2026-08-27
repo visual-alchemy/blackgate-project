@@ -149,6 +149,11 @@ fn struct_get_f64(s: &gst::Structure, name: &str) -> f64 {
     s.get::<f64>(name).unwrap_or(0.0)
 }
 
+fn stats_structure(element: &gst::Element) -> Option<gst::Structure> {
+    element.find_property("stats")?;
+    element.property_value("stats").get::<gst::Structure>().ok()
+}
+
 /// Convert one caller GstStructure field to JSON (C: int64/int/uint64/double
 /// passthrough + caller-address GInetSocketAddress → "ip:port").
 fn caller_field_to_json(field_name: &str, value: &glib::Value) -> Option<serde_json::Value> {
@@ -245,8 +250,7 @@ pub fn build_source_stats(element: &gst::Element, tag: &str) -> SourceStats {
         callers: Vec::new(),
     };
 
-    let s = element.property_value("stats");
-    let Ok(s) = s.get::<gst::Structure>() else {
+    let Some(s) = stats_structure(element) else {
         return stats;
     };
 
@@ -316,8 +320,7 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
         callers: Vec::new(),
     };
 
-    let s = element.property_value("stats");
-    let Ok(s) = s.get::<gst::Structure>() else {
+    let Some(s) = stats_structure(element) else {
         return out;
     };
 
@@ -526,6 +529,18 @@ fn monotonic_us() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_without_stats_property_returns_zero_stats() {
+        gst::init().unwrap();
+        let source = gst::ElementFactory::make("fakesrc").build().unwrap();
+
+        let stats = build_source_stats(&source, "primary");
+
+        assert_eq!(stats.source, "primary");
+        assert_eq!(stats.receive_rate_mbps, 0.0);
+        assert_eq!(stats.packets_received, 0);
+    }
 
     fn source_stats_fixture() -> SourceStats {
         let mut caller = serde_json::Map::new();

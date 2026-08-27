@@ -391,6 +391,27 @@ def _metric_values(stats: list[dict], *names: str) -> list[float]:
     return values
 
 
+def _throughput_values(stats: list[dict]) -> list[float]:
+    source_rates = [
+        float(item["receive-rate-mbps"])
+        for item in stats
+        if "source" in item
+        and isinstance(item.get("receive-rate-mbps"), (int, float))
+        and math.isfinite(float(item["receive-rate-mbps"]))
+        and float(item["receive-rate-mbps"]) > 0.0
+    ]
+    if source_rates:
+        return source_rates
+    return [
+        float(item["send-rate-mbps"])
+        for item in stats
+        if "sink-index" in item
+        and isinstance(item.get("send-rate-mbps"), (int, float))
+        and math.isfinite(float(item["send-rate-mbps"]))
+        and float(item["send-rate-mbps"]) > 0.0
+    ]
+
+
 def _metrics_from_evidence(
     stats: list[dict],
     cpu_start: float | None,
@@ -400,7 +421,7 @@ def _metrics_from_evidence(
     startup_ms: float,
     failover_gaps: list[float],
 ) -> dict:
-    throughput = _metric_values(stats, "receive-rate-mbps", "bandwidth-mbps")
+    throughput = _throughput_values(stats)
     losses = _metric_values(stats, "packets-received-lost", "packets-sent-lost")
     latencies = _metric_values(stats, "rtt-ms")
     cpu_percent = 0.0
@@ -661,10 +682,12 @@ def _metadata(started_at: str, finished_at: str) -> dict:
     return {
         "started_at": started_at,
         "finished_at": finished_at,
-        "git_commit": command_output(["git", "rev-parse", "HEAD"]),
+        "git_commit": os.environ.get("BLACKGATE_BENCH_GIT_COMMIT")
+        or command_output(["git", "rev-parse", "HEAD"]),
         "kernel": command_output(["uname", "-a"]),
         "cpu": command_output(["sh", "-c", "lscpu 2>/dev/null | head -20 || sysctl -n machdep.cpu.brand_string"]),
-        "rust": command_output(["rustc", "--version"]),
+        "rust": os.environ.get("BLACKGATE_BENCH_RUST_VERSION")
+        or command_output(["rustc", "--version"]),
         "ffmpeg": command_output(["ffmpeg", "-version"]).splitlines()[0],
         "ubuntu_image_digest": os.environ.get("BLACKGATE_BENCH_IMAGE_DIGEST", "local"),
     }

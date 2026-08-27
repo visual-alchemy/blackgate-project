@@ -26,7 +26,7 @@ make -C native
 cargo fmt --manifest-path native/rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path native/rust/Cargo.toml --workspace --all-targets -- -D warnings
 cargo test --manifest-path native/rust/Cargo.toml --workspace
-python3 native/rust/scripts/ipc_smoke.py
+python3 native/rust/scripts/ipc_smoke.py --engine native/build/blackgate-engine
 ```
 
 Pinned compiler comes from `rust-toolchain.toml`. Ubuntu 24.04 LTS with
