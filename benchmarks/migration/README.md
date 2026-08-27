@@ -44,8 +44,11 @@ docker run --rm --network host --privileged \
 ```
 
 Full run executes six normal workloads, each with 30-second warm-up, 120-second
-measurement, and three repetitions per engine. Run `non-sdi-soak.json`
-separately for one-hour-per-engine stability evidence.
+measurement, and three repetitions per engine. Each engine receives an
+unmeasured three-second preflight to remove cold-start bias. Measured runs are
+interleaved C then Rust per repetition to limit thermal and time drift. CPU and
+peak RSS exclude the warm-up window. Run `non-sdi-soak.json` separately for
+one-hour-per-engine stability evidence.
 
 Each run directory contains raw engine JSON, socket/stdout/stderr evidence,
 per-workload comparisons, `summary.json`, and `REPORT.md`. Runner exits nonzero

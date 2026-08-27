@@ -27,6 +27,7 @@ from render_report import render_report
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SOCKET = Path("/tmp/hydra_unix_sock")
+PREFLIGHT_SECONDS = 3.0
 THRESHOLDS = ROOT / "benchmarks" / "migration" / "thresholds.json"
 WORKLOAD_DIR = ROOT / "benchmarks" / "migration" / "workloads"
 
@@ -517,9 +518,11 @@ def run_engine_lifecycle(
         if not _wait_for(lambda: handshake in collector.text(), process, 2.0):
             raise RunnerError(f"missing IPC handshake: {handshake}")
 
-        cpu_start, initial_rss = _process_sample(process.pid)
-        peak_rss = initial_rss or 0
         run_start = time.monotonic()
+        initial_cpu, initial_rss = _process_sample(process.pid)
+        cpu_start = initial_cpu if warmup_seconds <= 0 else None
+        measurement_started_at = run_start if warmup_seconds <= 0 else None
+        peak_rss = (initial_rss or 0) if warmup_seconds <= 0 else 0
         measurement = measurement_seconds or max(duration_seconds - warmup_seconds, 0.001)
         original_measurement = max(float(workload["timing"]["measurement_seconds"]), 0.001)
         events = list(workload.get("events", []))
@@ -548,8 +551,12 @@ def run_engine_lifecycle(
                 marker = f"SOURCE_SWITCHED:{event.get('target', '')}"
                 if index in event_sent_at and marker in stdout_text:
                     failover_gaps.append((time.monotonic() - event_sent_at.pop(index)) * 1000.0)
-            _, rss = _process_sample(process.pid)
-            if rss is not None:
+            cpu, rss = _process_sample(process.pid)
+            if measurement_started_at is None and elapsed >= warmup_seconds:
+                measurement_started_at = time.monotonic()
+                cpu_start = cpu
+                peak_rss = rss or 0
+            elif measurement_started_at is not None and rss is not None:
                 peak_rss = max(peak_rss, rss)
             for child, pump, role in auxiliary:
                 if child.poll() is not None and child.returncode not in (0, None):
@@ -559,8 +566,14 @@ def run_engine_lifecycle(
             time.sleep(0.05)
 
         cpu_end, final_rss = _process_sample(process.pid)
-        if final_rss is not None:
+        measurement_finished_at = time.monotonic()
+        if measurement_started_at is None:
+            measurement_started_at = measurement_finished_at
+            cpu_start = cpu_end
+            peak_rss = final_rss or 0
+        elif final_rss is not None:
             peak_rss = max(peak_rss, final_rss)
+        measurement_elapsed = max(measurement_finished_at - measurement_started_at, 0.001)
         process.stdin.write(b'{"command":"stop-route"}\n')
         process.stdin.flush()
         if not _wait_for(lambda: process.poll() is not None, process, 2.0):
@@ -577,12 +590,11 @@ def run_engine_lifecycle(
         stderr_pump.join()
         frames = collector.text()
         stats = _socket_stats(frames, active_plan["route_id"])
-        elapsed = max(time.monotonic() - run_start, 0.001)
         metrics = _metrics_from_evidence(
             stats,
             cpu_start,
             cpu_end,
-            elapsed,
+            measurement_elapsed,
             peak_rss,
             startup_ms,
             failover_gaps,
@@ -644,8 +656,27 @@ def _run_workload(
     workload_output = output / workload["id"]
     workload_output.mkdir(parents=True, exist_ok=True)
     runs: dict[str, list[dict]] = {"c": [], "rust": []}
-    for engine_name, engine in (("c", c_engine), ("rust", rust_engine)):
-        for repetition in range(1, repetitions + 1):
+    engines = (("c", c_engine), ("rust", rust_engine))
+
+    if not quick:
+        for engine_name, engine in engines:
+            ports = reserve_ports(
+                1 + int("secondary_source" in workload) + len(workload["destinations"])
+            )
+            plan = build_plan(engine, workload, ports, PREFLIGHT_SECONDS)
+            run_engine_lifecycle(
+                engine_name,
+                engine,
+                workload,
+                DEFAULT_SOCKET,
+                PREFLIGHT_SECONDS,
+                plan=plan,
+                warmup_seconds=0.0,
+                measurement_seconds=PREFLIGHT_SECONDS,
+            )
+
+    for repetition in range(1, repetitions + 1):
+        for engine_name, engine in engines:
             ports = reserve_ports(
                 1 + int("secondary_source" in workload) + len(workload["destinations"])
             )
@@ -669,6 +700,7 @@ def _run_workload(
     comparison = {
         "workload": workload["id"],
         "quick": quick,
+        "preflight_seconds": 0.0 if quick else PREFLIGHT_SECONDS,
         "repetitions": repetitions,
         "c_runs": runs["c"],
         "rust_runs": runs["rust"],

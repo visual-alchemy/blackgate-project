@@ -5,6 +5,7 @@ import stat
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +18,7 @@ from run_benchmark import (
     RunnerError,
     _metadata,
     _metrics_from_evidence,
+    _run_workload,
     _timing,
     build_plan,
     parse_args,
@@ -31,6 +33,39 @@ WORKLOAD_PATH = (
 
 
 class RunnerDryRunTest(unittest.TestCase):
+    def test_full_workload_preflights_then_interleaves_engines(self):
+        workload = json.loads(WORKLOAD_PATH.read_text())
+        metrics = {
+            "throughput_mbps": 5.0,
+            "packet_loss": 0.0,
+            "cpu_percent": 1.0,
+            "peak_rss_bytes": 1.0,
+            "latency_ms": 1.0,
+            "startup_ms": 1.0,
+            "failover_gap_ms": 0.0,
+        }
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            with patch(
+                "run_benchmark.run_engine_lifecycle",
+                return_value={"metrics": metrics},
+            ) as lifecycle:
+                _run_workload(
+                    Path("c-engine"),
+                    Path("rust-engine"),
+                    workload,
+                    Path(raw_directory),
+                    False,
+                    2,
+                )
+
+        self.assertEqual(
+            [item.args[0] for item in lifecycle.call_args_list],
+            ["c", "rust", "c", "rust", "c", "rust"],
+        )
+        self.assertEqual(lifecycle.call_args_list[0].args[4], 3.0)
+        self.assertEqual(lifecycle.call_args_list[1].args[4], 3.0)
+
     def test_repetitions_override_supports_inconclusive_reruns(self):
         workload = json.loads(WORKLOAD_PATH.read_text())
 
@@ -165,6 +200,37 @@ class RunnerDryRunTest(unittest.TestCase):
         self.assertEqual(result["metrics"]["packet_loss"], 0.0)
         self.assertIn("route_id:bench-srt-1080p25-5m", result["socket_frames"])
         self.assertIn("Socket closed.", result["stdout"])
+
+    def test_lifecycle_excludes_warmup_from_cpu_and_peak_rss(self):
+        workload = json.loads(WORKLOAD_PATH.read_text())
+        first_sample_at = None
+
+        def fake_sample(_pid):
+            nonlocal first_sample_at
+            now = time.monotonic()
+            if first_sample_at is None:
+                first_sample_at = now
+            elapsed = now - first_sample_at
+            if elapsed < 0.08:
+                return 0.0, 999
+            return 100.0 + elapsed, 200
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            engine = self.make_engine(directory)
+            with patch("run_benchmark._process_sample", side_effect=fake_sample):
+                result = run_engine_lifecycle(
+                    "rust",
+                    engine,
+                    workload,
+                    directory / "engine.sock",
+                    duration_seconds=0.2,
+                    warmup_seconds=0.1,
+                    measurement_seconds=0.1,
+                )
+
+        self.assertLess(result["metrics"]["cpu_percent"], 200.0)
+        self.assertEqual(result["metrics"]["peak_rss_bytes"], 200.0)
 
     def test_child_failure_raises_and_leaves_no_socket(self):
         workload = json.loads(WORKLOAD_PATH.read_text())
