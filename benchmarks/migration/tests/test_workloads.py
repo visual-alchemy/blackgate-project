@@ -115,6 +115,14 @@ class WorkloadContractTest(unittest.TestCase):
             runtime_stage.index("BLACKGATE_BENCH_GIT_COMMIT"),
         )
 
+    def test_performance_ci_records_commit_and_image_identity(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "rust-migration-performance.yml"
+        ).read_text()
+
+        self.assertIn('--build-arg VCS_REF="${{ github.sha }}"', workflow)
+        self.assertIn("BLACKGATE_BENCH_IMAGE_DIGEST", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

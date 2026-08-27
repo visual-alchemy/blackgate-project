@@ -32,10 +32,14 @@ are not migration sign-off evidence.
 
 ```bash
 docker build --platform linux/amd64 \
+  --build-arg VCS_REF="$(git rev-parse HEAD)" \
   -f benchmarks/migration/Dockerfile.ubuntu-24.04 \
   -t blackgate-migration-bench:ubuntu-24.04 .
 
+benchmark_image_digest="$(docker image inspect \
+  blackgate-migration-bench:ubuntu-24.04 --format '{{.Id}}')"
 docker run --rm --network host --privileged \
+  -e BLACKGATE_BENCH_IMAGE_DIGEST="$benchmark_image_digest" \
   -v "$PWD/benchmarks/migration/results:/results" \
   blackgate-migration-bench:ubuntu-24.04 \
   --c-engine /opt/blackgate/engines/blackgate_pipeline \
