@@ -22,28 +22,35 @@ defmodule Blackgate.Db do
     end
   end
 
-  @spec get_route(String.t(), boolean) :: {:ok, map} | {:error, any}
+  @spec get_route(String.t(), boolean) :: {:ok, map | nil} | {:error, any}
   def get_route(id, include_dest? \\ false) when is_binary(id) do
-    route = :khepri.get!(["routes", id])
+    case :khepri.get(["routes", id]) do
+      {:error, {:khepri, :node_not_found, _info}} ->
+        {:ok, nil}
 
-    route =
-      if include_dest? do
-        destinations_list =
-          :khepri.get_many!("routes/#{id}/destinations/*")
-          |> Enum.reduce([], fn
-            {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
-              [dest | acc]
+      {:error, reason} ->
+        {:error, reason}
 
-            _, acc ->
-              acc
-          end)
+      {:ok, route} ->
+        route =
+          if include_dest? do
+            destinations_list =
+              :khepri.get_many!("routes/#{id}/destinations/*")
+              |> Enum.reduce([], fn
+                {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
+                  [dest | acc]
 
-        Map.put(route, "destinations", destinations_list)
-      else
-        route
-      end
+                _, acc ->
+                  acc
+              end)
 
-    {:ok, route}
+            Map.put(route, "destinations", destinations_list)
+          else
+            route
+          end
+
+        {:ok, route}
+    end
   end
 
   @spec update_route(String.t(), map) :: {:ok, map} | {:error, any}
