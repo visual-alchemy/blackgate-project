@@ -1,0 +1,220 @@
+{
+  "comparisons": [
+    {
+      "c_runs": [
+        {
+          "cpu_percent": 12.25191333995619,
+          "failover_gap_ms": 55.651750000834,
+          "latency_ms": 0.097,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 104775680.0,
+          "startup_ms": 866.3766770041548,
+          "throughput_mbps": 9.70301427212388
+        },
+        {
+          "cpu_percent": 12.102052293964194,
+          "failover_gap_ms": 55.79405999742448,
+          "latency_ms": 0.1225,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 105340928.0,
+          "startup_ms": 340.2932500030147,
+          "throughput_mbps": 9.70595694154758
+        },
+        {
+          "cpu_percent": 5.948511616613091,
+          "failover_gap_ms": 51.80340899823932,
+          "latency_ms": 0.028,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 102813696.0,
+          "startup_ms": 359.6972189989174,
+          "throughput_mbps": 9.70951646771595
+        },
+        {
+          "cpu_percent": 5.710060826061643,
+          "failover_gap_ms": 56.548449996626005,
+          "latency_ms": 0.0295,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 106471424.0,
+          "startup_ms": 439.20678600261454,
+          "throughput_mbps": 9.707471765303616
+        },
+        {
+          "cpu_percent": 5.6494053160082744,
+          "failover_gap_ms": 57.653679003124125,
+          "latency_ms": 0.028,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 102322176.0,
+          "startup_ms": 309.99969499680446,
+          "throughput_mbps": 9.709746942079176
+        },
+        {
+          "cpu_percent": 6.016542695052346,
+          "failover_gap_ms": 54.441423002572265,
+          "latency_ms": 0.0275,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 106020864.0,
+          "startup_ms": 369.6812199996202,
+          "throughput_mbps": 9.709237699200646
+        },
+        {
+          "cpu_percent": 5.708809301265025,
+          "failover_gap_ms": 51.84485400241101,
+          "latency_ms": 0.027,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 102580224.0,
+          "startup_ms": 263.49940900399815,
+          "throughput_mbps": 9.708456149621576
+        }
+      ],
+      "decision": {
+        "metrics": {
+          "cpu_ratio": {
+            "c": 5.948511616613091,
+            "operator": "<=",
+            "pass": true,
+            "ratio": 0.9710907919702058,
+            "rust": 5.776544856820776,
+            "threshold": 1.1
+          },
+          "failover_gap_ratio": {
+            "c": 55.651750000834,
+            "operator": "<=",
+            "pass": true,
+            "ratio": 0.9730233999379335,
+            "rust": 54.150454998307396,
+            "threshold": 1.1
+          },
+          "latency_ratio": {
+            "c": 0.028,
+            "operator": "<=",
+            "pass": true,
+            "ratio": 1.0357142857142858,
+            "rust": 0.029,
+            "threshold": 1.1
+          },
+          "packet_loss_delta": {
+            "c": 0.0,
+            "delta": 0.0,
+            "operator": "<=",
+            "pass": true,
+            "rust": 0.0,
+            "threshold": 0.0
+          },
+          "peak_rss_ratio": {
+            "c": 104775680.0,
+            "operator": "<=",
+            "pass": true,
+            "ratio": 1.0060594214229868,
+            "rust": 105410560.0,
+            "threshold": 1.15
+          },
+          "startup_ratio": {
+            "c": 359.6972189989174,
+            "operator": "<=",
+            "pass": true,
+            "ratio": 1.0633823221275986,
+            "rust": 382.49566400190815,
+            "threshold": 1.1
+          },
+          "throughput_ratio": {
+            "c": 9.708456149621576,
+            "operator": ">=",
+            "pass": true,
+            "ratio": 0.9998518094257361,
+            "rust": 9.707017447929548,
+            "threshold": 0.99
+          }
+        },
+        "reasons": [
+          "C cpu_percent coefficient of variation 0.377719 exceeds 0.050000",
+          "C latency_ms coefficient of variation 0.731371 exceeds 0.050000",
+          "C startup_ms coefficient of variation 0.447476 exceeds 0.050000",
+          "Rust cpu_percent coefficient of variation 0.451779 exceeds 0.050000",
+          "Rust latency_ms coefficient of variation 0.778764 exceeds 0.050000",
+          "Rust startup_ms coefficient of variation 0.089233 exceeds 0.050000"
+        ],
+        "status": "inconclusive"
+      },
+      "preflight_seconds": 3.0,
+      "quick": false,
+      "repetitions": 7,
+      "rust_runs": [
+        {
+          "cpu_percent": 15.290390638206725,
+          "failover_gap_ms": 56.303283003217075,
+          "latency_ms": 0.136,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 105410560.0,
+          "startup_ms": 330.0738440011628,
+          "throughput_mbps": 9.7028412136185
+        },
+        {
+          "cpu_percent": 10.85614999519842,
+          "failover_gap_ms": 54.20852299721446,
+          "latency_ms": 0.108,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 105529344.0,
+          "startup_ms": 382.4681289988803,
+          "throughput_mbps": 9.706449230750916
+        },
+        {
+          "cpu_percent": 5.266879183222574,
+          "failover_gap_ms": 53.21985100454185,
+          "latency_ms": 0.028,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 102772736.0,
+          "startup_ms": 427.80114900233457,
+          "throughput_mbps": 9.707017447929548
+        },
+        {
+          "cpu_percent": 5.549352460489946,
+          "failover_gap_ms": 55.469890001404565,
+          "latency_ms": 0.029,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 106627072.0,
+          "startup_ms": 358.1641579949064,
+          "throughput_mbps": 9.708844184517911
+        },
+        {
+          "cpu_percent": 5.776544856820776,
+          "failover_gap_ms": 51.68221500207437,
+          "latency_ms": 0.029,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 107175936.0,
+          "startup_ms": 415.741477998381,
+          "throughput_mbps": 9.709507035676417
+        },
+        {
+          "cpu_percent": 6.58425781300639,
+          "failover_gap_ms": 54.150454998307396,
+          "latency_ms": 0.028,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 104747008.0,
+          "startup_ms": 430.6597969989525,
+          "throughput_mbps": 9.707828156335953
+        },
+        {
+          "cpu_percent": 5.518624983899864,
+          "failover_gap_ms": 51.52062100387411,
+          "latency_ms": 0.028,
+          "packet_loss": 0.0,
+          "peak_rss_bytes": 103788544.0,
+          "startup_ms": 382.49566400190815,
+          "throughput_mbps": 9.70681856286642
+        }
+      ],
+      "workload": "dual-ingest-failover"
+    }
+  ],
+  "metadata": {
+    "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit\nByte Order:                              Little Endian\nCPU(s):                                  8\nOn-line CPU(s) list:                     0-7\nVendor ID:                               Apple\nModel name:                              -\nModel:                                   0\nThread(s) per core:                      1\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0x0\nCPU(s) scaling MHz:                      100%\nCPU max MHz:                             2000.0000\nCPU min MHz:                             2000.0000\nBogoMIPS:                                48.00\nFlags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 ecv\nL1d cache:                               1 MiB (8 instances)\nL1i cache:                               1.5 MiB (8 instances)\nL2 cache:                                32 MiB (2 instances)",
+    "ffmpeg": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+    "finished_at": "2026-08-27T17:46:45.272691+00:00",
+    "git_commit": "6cb052d3050e1d4426898214d5ec3845f41bf059",
+    "kernel": "Linux orbstack 7.0.14-orbstack-00380-ga7e0a2dc9535 #1 SMP PREEMPT Fri Aug  7 03:48:40 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+    "rust": "rustc 1.96.0",
+    "started_at": "2026-08-27T17:10:37.958972+00:00",
+    "ubuntu_image_digest": "sha256:d2f0dabe7fc920a78f6bd1119c1e3dd10bde6f19e0ce410cf6a7e8334592296a"
+  },
+  "status": "fail"
+}

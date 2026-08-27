@@ -6,6 +6,9 @@ Target repository endpoint: `SDI_MANUAL_PENDING`
 Required platform: Ubuntu 24.04 LTS amd64  
 Production engine: Rust `blackgate-engine` only
 
+Last verified: 2026-08-28
+Verified commit: `6cb052d3050e1d4426898214d5ec3845f41bf059`
+
 ## State definitions
 
 - `IN_PROGRESS`: one or more required automated checks or evidence sets missing,
@@ -23,16 +26,18 @@ Any failed/inconclusive rerun returns status to `IN_PROGRESS`.
 
 | Gate | Evidence / command | Current state |
 | --- | --- | --- |
-| Runtime boundary | `scripts/check_rust_only_runtime.sh` | Implemented; final rerun pending |
-| Toolchain | `scripts/check_toolchain_contract.sh` | Implemented; final rerun pending |
-| Rust quality | rustfmt, Clippy, workspace tests | Implemented; final rerun pending |
-| IPC lifecycle | `native/rust/scripts/ipc_smoke.py` | Implemented; final rerun pending |
-| Khepri/backend | `mix compile --warnings-as-errors`, `mix test` | Implemented; final rerun pending |
-| Frontend | `npm --prefix web_app run build` | Implemented; final rerun pending |
-| Ubuntu runtime | Noble Docker build plus release inspection | Pending final image build |
-| Performance | `benchmarks/migration/results/REPORT.md` | Pending benchmark run |
-| ISO | Noble workflow and shell/contract checks | Implemented; full ISO delegated to Linux CI |
-| Physical SDI | `SDI_MANUAL_SIGNOFF.md` | Manual pending |
+| Runtime boundary | guard unit tests, repository guard, release guard | PASS; production release contains only `blackgate-engine` |
+| Toolchain | `scripts/check_toolchain_contract.sh` plus unit test | PASS; Rust 1.96.0, Elixir 1.18.2, OTP 27.0.1 |
+| Rust quality | rustfmt, Clippy `-D warnings`, workspace tests | PASS; 27 tests |
+| IPC lifecycle | `native/rust/scripts/ipc_smoke.py` | PASS; SRT benchmark shutdown also exits 0 without forced stop |
+| Khepri/backend | `mix compile --warnings-as-errors`, `mix test` | PASS; 101 tests |
+| Frontend | `npm --prefix web_app run build` | PASS; lint remains authorized pre-migration baseline: 110 errors, 8 warnings |
+| Ubuntu runtime | production image plus release inspection | PASS; Ubuntu 24.04 amd64, image `sha256:5437f4b622ffbd3565c71cfe16c3871d47b1a8573d5060d60bda532e52c2722c` |
+| Benchmark image | Noble C/Rust oracle image | PASS; linux/amd64 image `sha256:d2f0dabe7fc920a78f6bd1119c1e3dd10bde6f19e0ce410cf6a7e8334592296a` |
+| Performance | `benchmarks/migration/results/dual-methodology-7/REPORT.md` | INCONCLUSIVE; all medians pass, variance fails on Apple-hosted amd64 emulation |
+| Non-SDI soak | `non-sdi-soak.json` | DEFERRED; full workload suite must pass first |
+| ISO | Noble workflow and shell/contract checks | PASS locally; full ISO build remains Linux CI validation |
+| Physical SDI | `SDI_MANUAL_SIGNOFF.md` | Manual pending after automated gates pass |
 
 ## No-regression policy
 
@@ -49,8 +54,31 @@ build, release, compose, ISO, Elixir, or Makefile path may invoke it.
 
 ## Remaining work
 
-1. Run full automated verification from current `rust-migration` commit.
-2. Build/inspect Ubuntu 24.04 runtime and benchmark images.
-3. Run benchmark workloads and commit machine/human-readable evidence.
-4. Set status to `SDI_MANUAL_PENDING` only if every automated gate passes.
-5. Operator performs and signs physical SDI checklist.
+1. Run the six-workload suite on a native Ubuntu 24.04 amd64 host. Current
+   Apple-hosted amd64 emulation produced coefficient-of-variation values from
+   8.9% to 77.9%, above the 5% contract, even after seven repetitions.
+2. Confirm every workload is `pass`, then run the one-hour-per-engine non-SDI
+   soak. Do not override an inconclusive decision.
+3. Set status to `SDI_MANUAL_PENDING` only when full performance and soak
+   evidence pass.
+4. Operator performs and signs the physical DeckLink/SDI checklist.
+
+## Latest performance evidence
+
+Seven interleaved repetitions of `dual-ingest-failover` used a three-second
+preflight, 30-second warm-up, and 120-second measurement per engine. Every
+median no-regression threshold passed:
+
+| Metric | Result | Gate |
+| --- | ---: | ---: |
+| Throughput ratio | 0.999852 | >= 0.99 |
+| Packet-loss delta | 0.0 | <= 0.0 |
+| CPU ratio | 0.971091 | <= 1.10 |
+| Peak RSS ratio | 1.006059 | <= 1.15 |
+| Latency ratio | 1.035714 | <= 1.10 |
+| Startup ratio | 1.063382 | <= 1.10 |
+| Failover-gap ratio | 0.973023 | <= 1.10 |
+
+Decision remains `INCONCLUSIVE` because raw CPU, latency, and startup samples
+exceed the fixed 5% variance limit. Evidence metadata identifies an Apple CPU
+behind an x86_64 emulation kernel, so it cannot replace native amd64 sign-off.
