@@ -18,6 +18,7 @@ defmodule BlackgateWeb.StatsChannel do
   @impl true
   def handle_info(:after_join, socket) do
     route_id = socket.assigns.route_id
+
     case Blackgate.RouteStatsRegistry.get_stats(route_id) do
       %{stats: stats, updated_at: updated_at} ->
         health = Blackgate.RouteHealth.evaluate(stats)
@@ -26,6 +27,7 @@ defmodule BlackgateWeb.StatsChannel do
       nil ->
         :ok
     end
+
     {:noreply, socket}
   end
 

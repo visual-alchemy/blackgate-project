@@ -18,7 +18,10 @@ defmodule Blackgate.MachineId do
         hash_id("mac_" <> mac)
 
       {:error, _reason} ->
-        Logger.warning("Could not resolve physical MAC address. Falling back to system architecture hash.")
+        Logger.warning(
+          "Could not resolve physical MAC address. Falling back to system architecture hash."
+        )
+
         fallback_id()
     end
   end
@@ -47,20 +50,22 @@ defmodule Blackgate.MachineId do
     # Filter out loopback and docker virtual interfaces
     # Look for link/ether followed by the MAC address
     lines = String.split(output, "\n")
-    
-    mac = Enum.reduce_while(lines, nil, fn line, acc ->
-      if String.contains?(line, "link/ether") do
-        # Format usually: link/ether 00:11:22:33:44:55 brd ...
-        parts = String.split(String.trim(line), " ")
-        if length(parts) >= 2 do
-          {:halt, Enum.at(parts, 1)}
+
+    mac =
+      Enum.reduce_while(lines, nil, fn line, acc ->
+        if String.contains?(line, "link/ether") do
+          # Format usually: link/ether 00:11:22:33:44:55 brd ...
+          parts = String.split(String.trim(line), " ")
+
+          if length(parts) >= 2 do
+            {:halt, Enum.at(parts, 1)}
+          else
+            {:cont, acc}
+          end
         else
           {:cont, acc}
         end
-      else
-        {:cont, acc}
-      end
-    end)
+      end)
 
     if mac, do: {:ok, mac}, else: {:error, :not_found}
   end
@@ -78,7 +83,7 @@ defmodule Blackgate.MachineId do
     arch = to_string(:erlang.system_info(:system_architecture))
     os_type = inspect(:os.type())
     version = to_string(:erlang.system_info(:otp_release))
-    
+
     hash_id("sys_" <> arch <> "_" <> os_type <> "_" <> version)
   end
 

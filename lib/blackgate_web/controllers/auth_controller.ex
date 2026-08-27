@@ -23,7 +23,11 @@ defmodule BlackgateWeb.AuthController do
     |> json(%{error: "Invalid request format"})
   end
 
-  def update_credentials(conn, %{"current_password" => current_pwd, "new_username" => new_user, "new_password" => new_pwd}) do
+  def update_credentials(conn, %{
+        "current_password" => current_pwd,
+        "new_username" => new_user,
+        "new_password" => new_pwd
+      }) do
     # Assuming standard flow where current username is retrieved from session if available, 
     # but the API allows changing both so user needs to provide their current password properly.
     # Since we only have 1 global user right now, we can read the current user from Khepri.
@@ -36,10 +40,10 @@ defmodule BlackgateWeb.AuthController do
     if verify_credentials(current_username, current_pwd) do
       # Store new credentials
       :khepri.put(["auth", "username"], new_user)
-      
+
       new_hash = :crypto.hash(:sha256, new_pwd) |> Base.encode16(case: :lower)
       :khepri.put(["auth", "password_hash"], new_hash)
-      
+
       conn
       |> put_status(:ok)
       |> json(%{message: "Credentials updated successfully"})
@@ -53,12 +57,14 @@ defmodule BlackgateWeb.AuthController do
   def update_credentials(conn, _) do
     conn
     |> put_status(:bad_request)
-    |> json(%{error: "Missing required parameters (current_password, new_username, new_password)"})
+    |> json(%{
+      error: "Missing required parameters (current_password, new_username, new_password)"
+    })
   end
 
   defp verify_credentials(user, password) do
     require Logger
-    
+
     stored_username =
       case :khepri.get(["auth", "username"]) do
         {:ok, u} when is_binary(u) -> u
@@ -69,8 +75,10 @@ defmodule BlackgateWeb.AuthController do
 
     stored_password_hash =
       case :khepri.get(["auth", "password_hash"]) do
-        {:ok, h} when is_binary(h) -> h
-        _ -> 
+        {:ok, h} when is_binary(h) ->
+          h
+
+        _ ->
           val = Application.get_env(:blackgate, :api_auth_password) || ""
           :crypto.hash(:sha256, val) |> Base.encode16(case: :lower)
       end

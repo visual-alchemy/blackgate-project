@@ -137,18 +137,19 @@ defmodule BlackgateWeb.BackupController do
       # The JSON is already parsed by the API pipeline
       # For raw JSON arrays, Phoenix puts it under "_json" key
       # For objects, it's in the params directly
-      routes_data = cond do
-        # Raw JSON array: params = %{"_json" => [...]}
-        is_list(Map.get(params, "_json")) ->
-          Map.get(params, "_json")
-        
-        # Object with data key: params = %{"data" => [...]}
-        is_list(Map.get(params, "data")) ->
-          Map.get(params, "data")
-        
-        true ->
-          nil
-      end
+      routes_data =
+        cond do
+          # Raw JSON array: params = %{"_json" => [...]}
+          is_list(Map.get(params, "_json")) ->
+            Map.get(params, "_json")
+
+          # Object with data key: params = %{"data" => [...]}
+          is_list(Map.get(params, "data")) ->
+            Map.get(params, "data")
+
+          true ->
+            nil
+        end
 
       if routes_data == nil do
         conn
@@ -156,13 +157,14 @@ defmodule BlackgateWeb.BackupController do
         |> json(%{error: "Invalid format: expected array of routes or {data: [routes]}"})
       else
         # Import each route
-        results = Enum.map(routes_data, fn route_data ->
-          import_single_route(route_data)
-        end)
-        
+        results =
+          Enum.map(routes_data, fn route_data ->
+            import_single_route(route_data)
+          end)
+
         successful = Enum.count(results, fn r -> match?({:ok, _}, r) end)
         failed = Enum.count(results, fn r -> match?({:error, _}, r) end)
-        
+
         conn
         |> put_status(:ok)
         |> json(%{
@@ -181,23 +183,26 @@ defmodule BlackgateWeb.BackupController do
 
   defp import_single_route(route_data) do
     # Extract route fields (remove id to create new)
-    route_params = route_data
+    route_params =
+      route_data
       |> Map.drop(["id", "destinations", "inserted_at", "updated_at", "status"])
-    
+
     # Create the route
     case Db.create_route(route_params) do
       {:ok, new_route} ->
         # Import destinations if present
         destinations = Map.get(route_data, "destinations", [])
+
         Enum.each(destinations, fn dest_data ->
-          dest_params = dest_data
+          dest_params =
+            dest_data
             |> Map.drop(["id", "route_id", "inserted_at", "updated_at"])
-          
+
           Db.create_destination(new_route["id"], dest_params)
         end)
-        
+
         {:ok, new_route}
-        
+
       error ->
         error
     end

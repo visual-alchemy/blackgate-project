@@ -17,6 +17,7 @@ defmodule Blackgate.RouteHealthTest do
       "warning_count" => 0,
       "sink_stats" => []
     }
+
     assert RouteHealth.evaluate(stats) == "healthy"
   end
 
@@ -29,6 +30,7 @@ defmodule Blackgate.RouteHealthTest do
       "warning_count" => 5,
       "sink_stats" => []
     }
+
     assert RouteHealth.evaluate(stats) == "source_corrupted"
   end
 
@@ -36,11 +38,13 @@ defmodule Blackgate.RouteHealthTest do
     stats = %{
       "receive-rate-mbps" => 5.5,
       "packets-received" => 1000,
-      "packets-received-lost" => 20, # 2.0% loss
+      # 2.0% loss
+      "packets-received-lost" => 20,
       "rtt-ms" => 10.0,
       "warning_count" => 5,
       "sink_stats" => []
     }
+
     assert RouteHealth.evaluate(stats) == "blackgate_config_issue"
   end
 
@@ -56,11 +60,13 @@ defmodule Blackgate.RouteHealthTest do
           sink_index: 0,
           stats: %{
             "packets-sent" => 1000,
-            "packets-sent-lost" => 30 # 3% loss
+            # 3% loss
+            "packets-sent-lost" => 30
           }
         }
       ]
     }
+
     assert RouteHealth.evaluate(stats) == "network_loss_egress"
   end
 end

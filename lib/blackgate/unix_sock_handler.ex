@@ -87,12 +87,16 @@ defmodule Blackgate.UnixSockHandler do
       ) do
     # Handle potentially concatenated source + sink stats messages
     {source_json, sink_json} = split_stats_message(message)
-    
+
     # Process source stats
     if source_json do
       case Jason.decode(source_json) do
         {:ok, %{"type" => "warning"} = warning} ->
-          RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
+          RouteStatsRegistry.put_warning(
+            warning["route_id"],
+            warning["element"],
+            warning["message"]
+          )
 
         {:ok, stats} ->
           case stats["source"] do
@@ -101,6 +105,7 @@ defmodule Blackgate.UnixSockHandler do
 
             _ ->
               RouteStatsRegistry.put_stats(data.route_id, Map.delete(stats, "source"))
+
               try do
                 stats_to_metrics(stats, data)
               rescue
@@ -108,32 +113,43 @@ defmodule Blackgate.UnixSockHandler do
                   Logger.error("Error processing stats: #{inspect(error)}")
               end
           end
-        _ -> :ok
+
+        _ ->
+          :ok
       end
     end
-    
+
     # Process sink stats if present
     if sink_json do
       case Jason.decode(sink_json) do
         {:ok, stats} ->
           sink_index = stats["sink-index"] || 0
           RouteStatsRegistry.put_sink_stats(data.route_id, sink_index, stats)
-        _ -> :ok
+
+        _ ->
+          :ok
       end
     end
 
     :keep_state_and_data
   end
 
-  def handle_event(:info, {:tcp, _port, "stats_sink:" <> json}, _state, %{route_id: route_id} = _data)
+  def handle_event(
+        :info,
+        {:tcp, _port, "stats_sink:" <> json},
+        _state,
+        %{route_id: route_id} = _data
+      )
       when is_binary(route_id) do
     case Jason.decode(json) do
       {:ok, stats} ->
         sink_index = stats["sink-index"] || 0
         RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
+
       _ ->
         :ok
     end
+
     :keep_state_and_data
   end
 
@@ -212,6 +228,7 @@ defmodule Blackgate.UnixSockHandler do
       [source_json, sink_json] ->
         # Both source and sink stats in one message
         {String.trim(source_json), String.trim(sink_json)}
+
       [source_json] ->
         # Only source stats
         {String.trim(source_json), nil}

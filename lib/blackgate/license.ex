@@ -95,8 +95,10 @@ defmodule Blackgate.License do
     # Check for existing license data in Khepri
     case :khepri.get(["license", "data"]) do
       {:ok, payload} when is_map(payload) ->
-        Logger.info("License: Found cached license data for #{payload["client_name"]}, loading...")
-        
+        Logger.info(
+          "License: Found cached license data for #{payload["client_name"]}, loading..."
+        )
+
         # Load immediately to ensure fast boot and offline capability
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
@@ -171,7 +173,7 @@ defmodule Blackgate.License do
     headers = [
       {"content-type", "application/json"}
     ]
-    
+
     body = %{
       license_key: license_key,
       machine_id: Blackgate.MachineId.get()
@@ -179,25 +181,26 @@ defmodule Blackgate.License do
 
     try do
       response = Req.post!("#{server_url}/api/validate", headers: headers, json: body)
-      
+
       # Vercel NextJS might sometimes return text/plain for error responses
-      parsed_body = if is_binary(response.body) do
-        case Jason.decode(response.body) do
-          {:ok, decoded} -> decoded
-          _ -> %{}
+      parsed_body =
+        if is_binary(response.body) do
+          case Jason.decode(response.body) do
+            {:ok, decoded} -> decoded
+            _ -> %{}
+          end
+        else
+          response.body || %{}
         end
-      else
-        response.body || %{}
-      end
-      
+
       cond do
         response.status == 200 && parsed_body["valid"] == true ->
           {:ok, parsed_body["license"]}
-          
+
         response.status in [401, 403, 404] ->
           error_msg = parsed_body["error"] || "Verification failed"
           {:error, error_msg}
-          
+
         true ->
           {:error, "Unexpected response from license server"}
       end
@@ -216,25 +219,32 @@ defmodule Blackgate.License do
         :khepri.put(["license", "data"], payload)
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
-        
+
       {:error, reason} ->
-        Logger.warning("License: Background verification failed (#{reason}). Keeping cached license active.")
+        Logger.warning(
+          "License: Background verification failed (#{reason}). Keeping cached license active."
+        )
     end
   end
 
   defp build_license_data(payload) do
     # Handle potentially null expires_at
-    expires_at = if payload["expires_at"], do: Date.from_iso8601!(payload["expires_at"] |> String.slice(0, 10)), else: nil
+    expires_at =
+      if payload["expires_at"],
+        do: Date.from_iso8601!(payload["expires_at"] |> String.slice(0, 10)),
+        else: nil
+
     today = Date.utc_today()
-    
+
     # Calculate days remaining if expiration exists
-    {days_remaining, is_expired} = if expires_at do
-      remaining = Date.diff(expires_at, today)
-      {max(remaining, 0), remaining < 0}
-    else
-      # Lifetime license
-      {9999, false}
-    end
+    {days_remaining, is_expired} =
+      if expires_at do
+        remaining = Date.diff(expires_at, today)
+        {max(remaining, 0), remaining < 0}
+      else
+        # Lifetime license
+        {9999, false}
+      end
 
     %{
       status: :licensed,
@@ -285,7 +295,9 @@ defmodule Blackgate.License do
     if is_expired do
       Logger.warning("License: Trial period has expired")
     else
-      Logger.info("License: Trial mode — #{days_remaining} days remaining (#{@trial_max_routes} routes max)")
+      Logger.info(
+        "License: Trial mode — #{days_remaining} days remaining (#{@trial_max_routes} routes max)"
+      )
     end
   end
 
@@ -302,4 +314,3 @@ defmodule Blackgate.License do
     end
   end
 end
-

@@ -57,19 +57,25 @@ defmodule BlackgateWeb.NetworkController do
 
   defp get_mac_address(opts) do
     case Keyword.get(opts, :hwaddr) do
-      nil -> nil
+      nil ->
+        nil
+
       hwaddr when is_list(hwaddr) ->
         hwaddr
         |> Enum.map(&:io_lib.format("~2.16.0B", [&1]))
         |> Enum.join(":")
         |> String.downcase()
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
-  defp is_ipv4?({a, b, c, d}) when is_integer(a) and is_integer(b) and is_integer(c) and is_integer(d) do
+  defp is_ipv4?({a, b, c, d})
+       when is_integer(a) and is_integer(b) and is_integer(c) and is_integer(d) do
     a in 0..255 and b in 0..255 and c in 0..255 and d in 0..255
   end
+
   defp is_ipv4?(_), do: false
 
   defp format_ip(nil), do: nil
