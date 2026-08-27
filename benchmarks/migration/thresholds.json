@@ -1,0 +1,10 @@
+{
+  "throughput_ratio_min": 0.99,
+  "packet_loss_delta_max": 0.0,
+  "cpu_ratio_max": 1.10,
+  "peak_rss_ratio_max": 1.15,
+  "latency_ratio_max": 1.10,
+  "startup_ratio_max": 1.10,
+  "failover_gap_ratio_max": 1.10,
+  "coefficient_of_variation_max": 0.05
+}

@@ -1,0 +1,10 @@
+{
+  "id": "srt-1080p25-5m",
+  "description": "Single SRT 1080p25 MPEG-TS stream at 5 Mbps",
+  "source": {"protocol": "srt", "mode": "listener"},
+  "destinations": [{"protocol": "srt", "mode": "caller"}],
+  "video": {"width": 1920, "height": 1080, "fps_num": 25, "fps_den": 1, "bitrate_mbps": 5},
+  "timing": {"warmup_seconds": 30, "measurement_seconds": 120, "repetitions": 3},
+  "events": [],
+  "metrics": ["throughput_mbps", "packet_loss", "cpu_percent", "peak_rss_bytes", "latency_ms", "startup_ms", "failover_gap_ms"]
+}

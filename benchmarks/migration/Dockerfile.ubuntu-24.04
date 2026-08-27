@@ -1,0 +1,64 @@
+FROM ubuntu:24.04 AS builder
+
+ARG RUST_VERSION="1.96.0"
+ENV DEBIAN_FRONTEND="noninteractive"
+ENV CARGO_HOME="/opt/rust/cargo"
+ENV RUSTUP_HOME="/opt/rust/rustup"
+ENV PATH="/opt/rust/cargo/bin:${PATH}"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libcjson-dev \
+        libglib2.0-dev \
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
+        libsrt-gnutls-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# rustup keeps benchmark compiler aligned with repository rust-toolchain.toml.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}"
+
+WORKDIR /src
+COPY native/archive/c-engine native/archive/c-engine
+COPY native/rust native/rust
+
+RUN make -C native/archive/c-engine verify \
+    && make -C native/archive/c-engine
+RUN cargo build \
+    --manifest-path native/rust/Cargo.toml \
+    --workspace \
+    --release
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND="noninteractive"
+ENV LANG="C.UTF-8"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        gstreamer1.0-libav \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        libcjson1 \
+        libgstreamer1.0-0 \
+        libgstreamer-plugins-base1.0-0 \
+        libsrt1.5-gnutls \
+        procps \
+        python3 \
+        sysstat \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/native/archive/c-engine/build/blackgate_pipeline /opt/blackgate/engines/blackgate_pipeline
+COPY --from=builder /src/native/rust/target/release/blackgate-engine /opt/blackgate/engines/blackgate-engine
+COPY benchmarks/migration /opt/blackgate/benchmarks/migration
+
+WORKDIR /opt/blackgate
+ENTRYPOINT ["/usr/bin/tini", "--", "python3", "/opt/blackgate/benchmarks/migration/scripts/run_benchmark.py"]

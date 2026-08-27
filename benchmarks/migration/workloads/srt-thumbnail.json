@@ -1,0 +1,11 @@
+{
+  "id": "srt-thumbnail",
+  "description": "SRT passthrough while JPEG thumbnail branch remains active",
+  "source": {"protocol": "srt", "mode": "listener"},
+  "destinations": [{"protocol": "udp", "mode": "sink"}],
+  "thumbnail": true,
+  "video": {"width": 1920, "height": 1080, "fps_num": 25, "fps_den": 1, "bitrate_mbps": 9},
+  "timing": {"warmup_seconds": 30, "measurement_seconds": 120, "repetitions": 3},
+  "events": [],
+  "metrics": ["throughput_mbps", "packet_loss", "cpu_percent", "peak_rss_bytes", "latency_ms", "startup_ms", "failover_gap_ms"]
+}

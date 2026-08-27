@@ -1,0 +1,10 @@
+{
+  "id": "udp-to-srt",
+  "description": "UDP MPEG-TS ingest forwarded to SRT caller output",
+  "source": {"protocol": "udp", "mode": "listener"},
+  "destinations": [{"protocol": "srt", "mode": "caller"}],
+  "video": {"width": 1920, "height": 1080, "fps_num": 25, "fps_den": 1, "bitrate_mbps": 9},
+  "timing": {"warmup_seconds": 30, "measurement_seconds": 120, "repetitions": 3},
+  "events": [],
+  "metrics": ["throughput_mbps", "packet_loss", "cpu_percent", "peak_rss_bytes", "latency_ms", "startup_ms", "failover_gap_ms"]
+}
