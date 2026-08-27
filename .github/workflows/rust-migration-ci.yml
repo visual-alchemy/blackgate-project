@@ -1,0 +1,115 @@
+name: Rust migration CI
+
+on:
+  push:
+    branches: [rust-migration]
+  pull_request:
+    branches: [rust-migration]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav libsrt-gnutls-dev libglib2.0-dev pkg-config
+      - name: Install pinned Rust
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt
+          rustup default 1.96.0
+      - name: Rust quality and IPC smoke
+        run: |
+          mkdir -p .ci-logs
+          set -o pipefail
+          cargo fmt --manifest-path native/rust/Cargo.toml --all -- --check 2>&1 | tee .ci-logs/cargo-fmt.log
+          cargo clippy --manifest-path native/rust/Cargo.toml --workspace --all-targets -- -D warnings 2>&1 | tee .ci-logs/cargo-clippy.log
+          cargo test --manifest-path native/rust/Cargo.toml --workspace 2>&1 | tee .ci-logs/cargo-test.log
+          make -C native 2>&1 | tee .ci-logs/native-build.log
+          python3 native/rust/scripts/ipc_smoke.py --engine native/build/blackgate-engine 2>&1 | tee .ci-logs/ipc-smoke.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: rust-quality-logs
+          path: .ci-logs
+
+  elixir-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: 27.0.1
+          elixir-version: 1.18.2
+      - name: Elixir quality and release inspection
+        env:
+          MIX_ENV: test
+        run: |
+          mkdir -p .ci-logs
+          set -o pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get 2>&1 | tee .ci-logs/mix-deps.log
+          mix format --check-formatted 2>&1 | tee .ci-logs/mix-format.log
+          mix compile --warnings-as-errors 2>&1 | tee .ci-logs/mix-compile.log
+          mix test 2>&1 | tee .ci-logs/mix-test.log
+          MIX_ENV=prod mix release --overwrite 2>&1 | tee .ci-logs/mix-release.log
+          bash scripts/check_rust_only_runtime.sh --root . --release _build/prod/rel/blackgate 2>&1 | tee .ci-logs/runtime-guard.log
+          bash scripts/check_toolchain_contract.sh 2>&1 | tee .ci-logs/toolchain-guard.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: elixir-quality-logs
+          path: .ci-logs
+
+  frontend-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+          cache: npm
+          cache-dependency-path: web_app/package-lock.json
+      - name: Install frontend dependencies
+        run: npm --prefix web_app ci
+      - name: Capture existing lint baseline
+        continue-on-error: true
+        run: |
+          mkdir -p .ci-logs
+          npm --prefix web_app run lint 2>&1 | tee .ci-logs/frontend-lint.log
+      - name: Build frontend
+        run: npm --prefix web_app run build
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: frontend-quality-logs
+          path: .ci-logs
+
+  noble-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate guards
+        run: |
+          bash test/scripts/check_rust_only_runtime_test.sh
+          bash test/scripts/check_toolchain_contract_test.sh
+      - name: Build Ubuntu 24.04 production image
+        run: docker build --platform linux/amd64 -t blackgate:rust-migration-noble .
+      - name: Inspect runtime image
+        run: |
+          docker run --rm --entrypoint sh blackgate:rust-migration-noble -c 'grep -q "VERSION_ID=\"24.04\"" /etc/os-release'
+          docker run --rm --entrypoint sh blackgate:rust-migration-noble -c 'test -x /app/bin/blackgate && test -x "$(find /app/lib -path "*/priv/native/build/blackgate-engine" -print -quit)"'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: noble-release-logs
+          path: /tmp/blackgate-build-logs

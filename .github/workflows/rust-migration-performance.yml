@@ -1,0 +1,58 @@
+name: Rust migration performance
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: Run one short lifecycle repetition per workload
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  compare-engines:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate benchmark runner
+        run: |
+          python3 -m unittest discover -s benchmarks/migration/tests -v
+          python3 benchmarks/migration/scripts/run_benchmark.py --help
+      - name: Build identical Ubuntu 24.04 benchmark image
+        run: docker build --platform linux/amd64 -f benchmarks/migration/Dockerfile.ubuntu-24.04 -t blackgate-migration-bench:ubuntu-24.04 .
+      - name: Run performance comparison
+        id: benchmark
+        shell: bash
+        run: |
+          mkdir -p benchmarks/migration/results
+          quick_arg=""
+          if [ "${{ inputs.quick }}" = "true" ]; then quick_arg="--quick"; fi
+          set +e
+          docker run --rm --network host --privileged \
+            -v "${{ github.workspace }}/benchmarks/migration/results:/results" \
+            blackgate-migration-bench:ubuntu-24.04 \
+            --c-engine /opt/blackgate/engines/blackgate_pipeline \
+            --rust-engine /opt/blackgate/engines/blackgate-engine \
+            --all --output /results $quick_arg
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          latest="$(find benchmarks/migration/results -mindepth 1 -maxdepth 1 -type d | sort | tail -1)"
+          if [ -n "$latest" ] && [ -f "$latest/summary.json" ]; then
+            python3 benchmarks/migration/scripts/render_report.py "$latest"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-migration-performance-results
+          path: benchmarks/migration/results
+          retention-days: 90
+      - name: Propagate benchmark decision
+        if: always()
+        run: exit "${{ steps.benchmark.outputs.status || '2' }}"

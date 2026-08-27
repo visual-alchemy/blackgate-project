@@ -27,7 +27,7 @@ for path in mix.exs Makefile Dockerfile docker-compose.yml lib rel iso-builder; 
 done
 
 if [[ ${#paths[@]} -gt 0 ]] &&
-  rg -n 'blackgate_pipeline|srt_proxy|native/(src|include|tests)' "${paths[@]}"; then
+  rg -n 'blackgate_pipeline|srt_proxy|native/(src|include|tests)|COPY[[:space:]]+native[[:space:]]+native' "${paths[@]}"; then
   echo "forbidden C runtime reference found" >&2
   exit 1
 fi
