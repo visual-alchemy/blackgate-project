@@ -631,14 +631,20 @@ defmodule Blackgate.RouteHandler do
   # ghost pad without tearing the pipeline down. This preserves all downstream
   # SRT connections (no reconnect storm) and is the whole point of dual-ingest.
   #
+  # Routes with SDI destinations are excluded: flipping the selector between
+  # different-muxer feeds starves the SDI branch's decoder pads (output
+  # freezes). They take the kill/respawn path — a few seconds of gap, but SDI
+  # comes back correct on the new source.
+  #
   # Non-dual-ingest routes (no failover, non-SRT secondary) or routes whose
-  # pipeline port is not live fall back to the legacy kill/respawn path: close
-  # the ports, persist the choice, and re-enter the reconnect loop.
+  # pipeline port is not live also fall back to the legacy path: close the
+  # ports, persist the choice, and re-enter the reconnect loop.
   def handle_event(:cast, {:switch_source, target}, _state, data)
       when target in ["primary", "secondary"] do
     Logger.info("RouteHandler: source switch -> #{target} for route #{data.id}")
 
-    if dual_ingest_eligible?(data.route) and is_port(data.port) do
+    if dual_ingest_eligible?(data.route) and not route_has_sdi_destination?(data.route) and
+         is_port(data.port) do
       maybe_join_or_leave_for_auto_join(data, target)
 
       Port.command(
@@ -680,15 +686,18 @@ defmodule Blackgate.RouteHandler do
       if data.ffmpeg_port && is_port(data.ffmpeg_port),
         do: close_port(data.ffmpeg_port)
 
-      enter_reconnecting(%{
-        data
-        | active_source: target,
-          route: Map.put(data.route, "active_source", target),
-          port: nil,
-          ffmpeg_port: nil,
-          failover_switched: false,
-          consecutive_startup_crashes: 0
-      })
+      enter_reconnecting(
+        %{
+          data
+          | active_source: target,
+            route: Map.put(data.route, "active_source", target),
+            port: nil,
+            ffmpeg_port: nil,
+            failover_switched: false,
+            consecutive_startup_crashes: 0
+        },
+        250
+      )
     end
   end
 
@@ -727,6 +736,12 @@ defmodule Blackgate.RouteHandler do
   # pipeline can actually receive a second SRT source. Requires failover to be
   # active (SRT primary + configured secondary) AND the secondary itself to be
   # SRT (so the C pipeline's dual-srtsrc bin can switch without restructure).
+  # Gates the in-process switch path off for SDI routes (see switch_source).
+  defp route_has_sdi_destination?(route) when is_map(route) do
+    destinations = Map.get(route, "destinations") || []
+    Enum.any?(destinations, &(&1["schema"] == "SDI"))
+  end
+
   defp dual_ingest_eligible?(route) do
     failover_active?(route) and
       case Map.get(route, "secondary_source") do
@@ -765,12 +780,20 @@ defmodule Blackgate.RouteHandler do
     overlay_secondary_source(route, active_source)
   end
 
+  # Swaps primary/secondary so a pipeline born on "secondary" dials the
+  # secondary feed as its primary slot and keeps the original primary as the
+  # secondary slot — both feeds stay connected and later switches (in-process
+  # or respawn) land on the right source instead of double-dialing one feed.
   defp overlay_secondary_source(route, "secondary") do
     case Map.get(route, "secondary_source") do
       %{"schema" => schema, "schema_options" => opts} when is_map(opts) ->
         route
         |> Map.put("schema", schema)
         |> Map.put("schema_options", opts)
+        |> Map.put("secondary_source", %{
+          "schema" => Map.get(route, "schema"),
+          "schema_options" => Map.get(route, "schema_options")
+        })
 
       _ ->
         route
@@ -1002,7 +1025,7 @@ defmodule Blackgate.RouteHandler do
         }
       )
 
-      enter_reconnecting(%{data | active_source: next})
+      enter_reconnecting(%{data | active_source: next}, 250)
     end
   end
 
@@ -1114,7 +1137,9 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  defp enter_reconnecting(data) do
+  # retry_ms: intentional switches (manual switch, auto-failover) pass a short
+  # interval — the 10s default is a crash-loop backoff, not a switch delay.
+  defp enter_reconnecting(data, retry_ms \\ @reconnect_interval_ms) do
     Blackgate.set_route_status(data.id, "reconnecting")
 
     Blackgate.EventLog.log(
@@ -1134,7 +1159,7 @@ defmodule Blackgate.RouteHandler do
          ffmpeg_port: nil,
          reconnect_started_at: System.monotonic_time(:millisecond),
          reconnect_count: 0
-     }, {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+     }, {{:timeout, :reconnect}, retry_ms, :retry}}
   end
 
   @impl true
