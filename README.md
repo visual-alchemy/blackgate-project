@@ -15,6 +15,7 @@
 | Category | Features |
 |----------|----------|
 | **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication, StreamID support |
+| **Input Failover** | Dual SRT sources (primary + secondary) per route with 4 modes: manual, maintain-primary, maintain-stability, and auto-switchback; live per-source health telemetry |
 | **RTMP/HLS/HTTP-FLV** | Ingest RTMP push or pull HLS/FLV streams via ffmpeg sidecar with SRT loopback normalization |
 | **UDP Support** | Source and Destination for local network streaming |
 | **SDI Output** | Blackmagic DeckLink hardware output (decode + scale to SDI) |
@@ -275,22 +276,39 @@ sequenceDiagram
     Note over RH, C: Mode: maintain-primary / maintain-stability
     PS--xRH: Network Loss / Stream Invalid (0 B/s or stall)
     RH->>RH: Evaluate Health (Primary: INVALID, Secondary: VALID)
-    RH->>C: Send stdin JSON: {"command": "switch-source", "target": "secondary"}
-    C->>C: Switch input-selector active-pad -> sink_1 (Secondary)
-    C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
+
+    alt Route has an SDI destination
+        RH->>RH: Persist active_source, close ports
+        RH->>C: Respawn pipeline (~250ms) born on Secondary
+        Note over C: ~3-4s black on SDI, then native format re-detected
+    else Non-SDI route
+        RH->>C: Send stdin JSON: {"command": "switch-source", "target": "secondary"}
+        C->>C: Switch input-selector active-pad -> sink_1 (Secondary)
+        C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
+    end
     RH->>Op: Broadcast WebSocket Failover Event & Dual Stats
 
-    Note over RH, C: Primary Stream Recovers
+    Note over PS, SS: Primary Stream Recovers
     PS->>RH: Primary Bytes Resume (Primary: VALID)
     alt maintain-primary
-        RH->>C: Auto-switch back to Primary (target: primary)
+        RH->>RH: Auto-switch back to Primary (same path as above)
     else maintain-stability
         RH->>RH: Hold Secondary active position while Secondary is healthy
     else manual-switchback / manual
         Op->>RH: Operator clicks [ Switch to Primary ]
-        RH->>C: Send stdin JSON: {"command": "switch-source", "target": "primary"}
+        RH->>RH: Switch executes via the same route-type paths
     end
 ```
+
+**Why SDI routes restart instead of flipping**: switching the input-selector
+between feeds from *different muxers* (different PMT/PID layouts) starves the
+SDI branch's demuxer/decoder pads — the output freezes on the last frame and
+never recovers, even after switching back. Restarting the pipeline on the
+persisted source is deterministic: ~3-4s of clean black, then the new source
+in its native format. Same-muxer feeds flip instantly with brief macroblock
+artifacts until the new feed's next keyframe. Full details and expected
+timings: [`docs/failover-runbook.md`](./docs/failover-runbook.md) →
+*Switch Behavior by Route Type*.
 
 ### Technology Stack
 
