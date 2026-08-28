@@ -7,6 +7,7 @@
 #include <srt/srt.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include "unix_socket.h"
 
@@ -135,6 +136,29 @@ static GstPad          *s_sdi_vq_sink_pad[8]   = {0};
 static GstElement      *s_sdi_vinterlace[8]    = {0};
 static char             s_sdi_applied_caps[8][256] = {{0}};
 
+// SDI branch registry per sink slot. switch_source() rebuilds branches through
+// add_sink_to_pipeline(); tsdemux/decodebin pad churn across different-muxer
+// feeds is not reliably migratable pad-by-pad, so teardown+rebuild is the
+// strategy. Element[0] is always the branch's input queue (tee peer).
+#define SDI_BRANCH_MAX_ELEMS 24
+static GstElement *s_sdi_branch_elems[8][SDI_BRANCH_MAX_ELEMS];
+static int         s_sdi_branch_n[8] = {0};
+static int         s_sdi_branch_device[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+static char       *s_sdi_sink_json[8] = {NULL};
+static GstElement *g_pipeline = NULL;
+static GstElement *tee_element; // tentative; defined with initializer below
+// Pacing elements per slot: teardown clears their sync flag first so the
+// 5s branch queues drain instantly instead of wall-clock paced.
+static GstElement *s_sdi_branch_identity[8] = {NULL};
+static GstElement *s_sdi_branch_vsink[8]    = {NULL};
+static GstElement *s_sdi_branch_asink[8]    = {NULL};
+static GstElement *s_sdi_branch_q2[8]       = {NULL};
+static GstElement *s_sdi_branch_vq[8]       = {NULL};
+static GstElement *s_sdi_branch_aq[8]       = {NULL};
+
+static void sdi_branch_track(int slot, int device_num, GstElement *first, ...);
+static void sdi_branch_untrack(int slot, GstElement *elem);
+
 // Re-run mode matching + capsfilter/interlace-element application for a slot
 // from the caps currently flowing into vqueue. Also updates decklinkvideosink
 // mode and sdi_detected_mode[].
@@ -231,6 +255,7 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
             if (gst_element_link_many(ctx->vscale, vinterlace, ctx->vcaps, NULL)) {
                 gst_element_sync_state_with_parent(vinterlace);
                 s_sdi_vinterlace[slot] = vinterlace;
+                sdi_branch_track(slot, ctx->device_number, vinterlace, NULL);
                 g_print("SDI AUTO-DETECT: interlace element inserted for switched source\n");
             } else {
                 g_printerr("SDI AUTO-DETECT: interlace insert link failed — reverting\n");
@@ -248,6 +273,8 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
         gst_element_unlink(vinterlace, ctx->vcaps);
         gst_element_set_state(vinterlace, GST_STATE_NULL);
         gst_bin_remove(GST_BIN(ctx->pipeline), vinterlace);
+        gst_object_unref(vinterlace);
+        sdi_branch_untrack(slot, vinterlace);
         s_sdi_vinterlace[slot] = NULL;
         GstCaps *out_caps = gst_caps_from_string(caps_str);
         g_object_set(ctx->vcaps, "caps", out_caps, NULL);
@@ -429,6 +456,26 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     (void)decodebin;
     SdiAutoDetectCtx *ctx = (SdiAutoDetectCtx *)user_data;
 
+    // Second pad-added = new program/muxer after a source switch. The old
+    // linked pad starves; migrate the link. Mode/caps follow via caps probe.
+    int slot = ctx->sink_index;
+    if (slot >= 0 && slot < 8 && s_sdi_vq_sink_pad[slot]) {
+        GstPad *vq_sink = s_sdi_vq_sink_pad[slot];
+        GstPad *old_peer = gst_pad_is_linked(vq_sink) ? gst_pad_get_peer(vq_sink) : NULL;
+        if (old_peer && old_peer != pad) {
+            gst_pad_unlink(old_peer, vq_sink);
+            g_print("SDI AUTO-DETECT: video pad migrated on program change (%s → %s)\n",
+                    GST_PAD_NAME(old_peer), GST_PAD_NAME(pad));
+            gst_object_unref(old_peer);
+        }
+        if (!gst_pad_is_linked(vq_sink) &&
+            gst_pad_link(pad, vq_sink) == GST_PAD_LINK_OK) {
+            g_print("SDI AUTO-DETECT: decodebin video → vqueue re-linked after switch\n");
+        }
+        s_sdi_applied_caps[slot][0] = '\0';
+        return;
+    }
+
     // --- Step 1: Only handle raw video pads ---
     GstCaps *caps = gst_pad_get_current_caps(pad);
     if (!caps) caps = gst_pad_query_caps(pad, NULL);
@@ -572,6 +619,7 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
             gst_util_set_object_arg(G_OBJECT(vinterlace), "field-pattern", "2:2");
             g_object_set(vinterlace, "top-field-first", TRUE, NULL);
             gst_bin_add(GST_BIN(ctx->pipeline), vinterlace);
+            sdi_branch_track(ctx->sink_index, ctx->device_number, vinterlace, NULL);
             g_print("SDI AUTO-DETECT: added interlace element (field-pattern=2:2, tff=TRUE)\n");
             if (ctx->sink_index >= 0 && ctx->sink_index < 8)
                 s_sdi_vinterlace[ctx->sink_index] = vinterlace;
@@ -653,6 +701,153 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     }
 }
 
+static void sdi_branch_track(int slot, int device_num, GstElement *first, ...)
+{
+    if (slot < 0 || slot > 7 || !first) return;
+    if (s_sdi_branch_n[slot] == 0) s_sdi_branch_device[slot] = device_num;
+
+    va_list ap;
+    va_start(ap, first);
+    for (GstElement *e = first; e; e = va_arg(ap, GstElement *)) {
+        if (s_sdi_branch_n[slot] < SDI_BRANCH_MAX_ELEMS)
+            s_sdi_branch_elems[slot][s_sdi_branch_n[slot]++] = e;
+    }
+    va_end(ap);
+}
+
+static void sdi_branch_untrack(int slot, GstElement *elem)
+{
+    if (slot < 0 || slot > 7 || !elem) return;
+    for (int i = 0; i < s_sdi_branch_n[slot]; i++) {
+        if (s_sdi_branch_elems[slot][i] == elem) {
+            memmove(&s_sdi_branch_elems[slot][i], &s_sdi_branch_elems[slot][i + 1],
+                    (s_sdi_branch_n[slot] - i - 1) * sizeof(GstElement *));
+            s_sdi_branch_n[slot]--;
+            return;
+        }
+    }
+}
+
+// Detaches one SDI branch from the tee and frees its elements; the stored
+// sink JSON is intentionally kept for the subsequent rebuild.
+
+// IDLE-probe detach state: owns its own pad refs so the waiter never shares
+// lifetime with the probe; outcome is observed via pad link state instead.
+typedef struct {
+    GstPad *tee_src;
+    GstPad *branch_sink;
+} TeeDetach;
+
+static void tee_detach_free(gpointer p)
+{
+    TeeDetach *d = p;
+    gst_object_unref(d->tee_src);
+    gst_object_unref(d->branch_sink);
+    g_free(d);
+}
+
+static GstPadProbeReturn tee_idle_detach_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user)
+{
+    (void)pad; (void)info;
+    TeeDetach *d = user;
+    gst_pad_unlink(d->tee_src, d->branch_sink);
+    return GST_PAD_PROBE_REMOVE;
+}
+
+static void teardown_sdi_branch(int slot)
+{
+    if (slot < 0 || slot > 7 || s_sdi_branch_n[slot] == 0 || !g_pipeline) return;
+
+    // decklink audio is paced by the card clock even with sync=FALSE, so the
+    // 5s branch queues never drain on demand. leaky=downstream dissolves the
+    // backpressure; unsync the pacing elements so sinks stop clock-waiting.
+    if (s_sdi_branch_q2[slot])       g_object_set(s_sdi_branch_q2[slot],       "leaky", 2, NULL);
+    if (s_sdi_branch_vq[slot])       g_object_set(s_sdi_branch_vq[slot],       "leaky", 2, NULL);
+    if (s_sdi_branch_aq[slot])       g_object_set(s_sdi_branch_aq[slot],       "leaky", 2, NULL);
+    if (s_sdi_branch_identity[slot]) g_object_set(s_sdi_branch_identity[slot], "sync", FALSE, NULL);
+    if (s_sdi_branch_vsink[slot])    g_object_set(s_sdi_branch_vsink[slot],    "sync", FALSE, NULL);
+    if (s_sdi_branch_asink[slot])    g_object_set(s_sdi_branch_asink[slot],    "sync", FALSE, NULL);
+    g_usleep(100000);
+
+    // Unlink only while the tee pad is idle; releasing a request pad that is
+    // mid-push is what crashed the pipeline before. Outcome is checked via
+    // pad link state, never through shared probe memory.
+    GstElement *queue = s_sdi_branch_elems[slot][0];
+    if (queue && tee_element) {
+        GstPad *qsink = gst_element_get_static_pad(queue, "sink");
+        GstPad *tee_src = qsink ? gst_pad_get_peer(qsink) : NULL;
+        if (tee_src) {
+            TeeDetach *d = g_new(TeeDetach, 1);
+            d->tee_src = gst_object_ref(tee_src);
+            d->branch_sink = gst_object_ref(qsink);
+            gst_pad_add_probe(tee_src, GST_PAD_PROBE_TYPE_IDLE,
+                              tee_idle_detach_cb, d, tee_detach_free);
+            gboolean detached = FALSE;
+            for (int i = 0; i < 50 && !detached; i++) {
+                if (!gst_pad_is_linked(qsink)) detached = TRUE;
+                else g_usleep(20000);
+            }
+            if (!detached) gst_pad_unlink(tee_src, qsink);
+            gst_element_release_request_pad(tee_element, tee_src);
+            gst_object_unref(tee_src);
+        }
+        if (qsink) gst_object_unref(qsink);
+    }
+
+    // Two-phase stop: set_state(NULL) returns ASYNC for sinks with live
+    // scheduling threads (decklink) — freeing before completion segfaults.
+    for (int i = 0; i < s_sdi_branch_n[slot]; i++)
+        gst_element_set_state(s_sdi_branch_elems[slot][i], GST_STATE_NULL);
+    for (int i = 0; i < s_sdi_branch_n[slot]; i++)
+        gst_element_get_state(s_sdi_branch_elems[slot][i], NULL, NULL, GST_SECOND);
+    for (int i = 0; i < s_sdi_branch_n[slot]; i++) {
+        GstElement *e = s_sdi_branch_elems[slot][i];
+        gst_bin_remove(GST_BIN(g_pipeline), e);
+        gst_object_unref(e);
+    }
+    s_sdi_branch_n[slot] = 0;
+
+    int dev = s_sdi_branch_device[slot];
+    if (dev >= 0 && dev < 8) {
+        sdi_vrate_elements[dev] = NULL;
+        sdi_detected_mode[dev] = NULL;
+        sdi_video_buffer_count[dev] = 0;
+        sdi_audio_buffer_count[dev] = 0;
+    }
+    if (s_sdi_vq_sink_pad[slot]) {
+        gst_object_unref(s_sdi_vq_sink_pad[slot]);
+        s_sdi_vq_sink_pad[slot] = NULL;
+    }
+    s_sdi_auto_ctx[slot] = NULL;
+    s_sdi_vinterlace[slot] = NULL;
+    s_sdi_applied_caps[slot][0] = '\0';
+    s_sdi_branch_identity[slot] = NULL;
+    s_sdi_branch_vsink[slot] = NULL;
+    s_sdi_branch_asink[slot] = NULL;
+    s_sdi_branch_q2[slot] = NULL;
+    s_sdi_branch_vq[slot] = NULL;
+    s_sdi_branch_aq[slot] = NULL;
+    g_print("SDI: branch slot %d torn down for source switch\n", slot);
+}
+
+static void rebuild_sdi_branch(int slot)
+{
+    if (slot < 0 || slot > 7 || !s_sdi_sink_json[slot] || !g_pipeline) return;
+
+    cJSON *cfg = cJSON_Parse(s_sdi_sink_json[slot]);
+    if (!cfg) {
+        g_printerr("SDI: branch slot %d rebuild failed to parse stored config\n", slot);
+        return;
+    }
+    gboolean ok = add_sink_to_pipeline(g_pipeline, tee_element, cfg, slot);
+    if (ok && GST_STATE(g_pipeline) == GST_STATE_PLAYING) {
+        for (int i = 0; i < s_sdi_branch_n[slot]; i++)
+            gst_element_sync_state_with_parent(s_sdi_branch_elems[slot][i]);
+    }
+    cJSON_Delete(cfg);
+    g_print("SDI: branch slot %d rebuilt for active source (ok=%d)\n", slot, ok);
+}
+
 // Called when audio decodebin exposes a decoded raw audio pad
 static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data)
 {
@@ -670,12 +865,21 @@ static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad,
     if (!g_str_has_prefix(name, "audio/x-raw")) return;
 
     GstPad *sink_pad = gst_element_get_static_pad(aqueue, "sink");
-    if (sink_pad && !gst_pad_is_linked(sink_pad)) {
-        GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
-        if (ret == GST_PAD_LINK_OK) {
-            g_print("SDI: decodebin audio → output chain linked\n");
-        } else {
-            g_printerr("SDI: decodebin audio pad link failed: %d\n", ret);
+    if (sink_pad) {
+        GstPad *old_peer = gst_pad_is_linked(sink_pad) ? gst_pad_get_peer(sink_pad) : NULL;
+        if (old_peer && old_peer != pad) {
+            gst_pad_unlink(old_peer, sink_pad);
+            g_print("SDI: audio pad migrated on program change (%s → %s)\n",
+                    GST_PAD_NAME(old_peer), GST_PAD_NAME(pad));
+            gst_object_unref(old_peer);
+        }
+        if (!gst_pad_is_linked(sink_pad)) {
+            GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
+            if (ret == GST_PAD_LINK_OK) {
+                g_print("SDI: decodebin audio → output chain linked\n");
+            } else {
+                g_printerr("SDI: decodebin audio pad link failed: %d\n", ret);
+            }
         }
     }
     if (sink_pad) gst_object_unref(sink_pad);
@@ -2183,6 +2387,7 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
 
     source_element = source;
     tee_element = tee;
+    g_pipeline = pipeline;
 
     running = TRUE;
     if (pthread_create(&stats_thread, NULL, print_stats, source) != 0) {
@@ -2366,6 +2571,25 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         if (device_number >= 0 && device_number < 8) {
             sdi_vrate_elements[device_number] = vrate;
         }
+
+        s_sdi_branch_n[sink_index] = 0;
+        {
+            char *json_text = cJSON_PrintUnformatted(sink_config);
+            g_free(s_sdi_sink_json[sink_index]);
+            s_sdi_sink_json[sink_index] = g_strdup(json_text);
+            cJSON_free(json_text);
+        }
+        s_sdi_branch_identity[sink_index] = vid_identity;
+        s_sdi_branch_vsink[sink_index]    = videosink;
+        s_sdi_branch_asink[sink_index]    = audiosink;
+        s_sdi_branch_q2[sink_index]       = queue;
+        s_sdi_branch_vq[sink_index]       = vqueue;
+        s_sdi_branch_aq[sink_index]       = aqueue;
+        sdi_branch_track(sink_index, device_number,
+                         queue, tsdemux,
+                         vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
+                         adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
+                         NULL);
 
         if (is_auto_detect) {
             // =================================================================
@@ -2703,6 +2927,23 @@ void handle_command_line(const char *line)
     cJSON_Delete(cmd);
 }
 
+// Off the stdin path: set_state(NULL) can block seconds on clock-waiting
+// sinks. Serialized; rapid switches converge to the latest rebuild.
+static GMutex s_sdi_rebuild_lock;
+static gpointer sdi_rebuild_worker(gpointer data)
+{
+    (void)data;
+    g_mutex_lock(&s_sdi_rebuild_lock);
+    for (int slot = 0; slot < 8; slot++) {
+        if (s_sdi_sink_json[slot]) teardown_sdi_branch(slot);
+    }
+    for (int slot = 0; slot < 8; slot++) {
+        if (s_sdi_sink_json[slot]) rebuild_sdi_branch(slot);
+    }
+    g_mutex_unlock(&s_sdi_rebuild_lock);
+    return NULL;
+}
+
 void switch_source(const char *target)
 {
     if (!dual_ingest_active || !selector_element) {
@@ -2721,10 +2962,10 @@ void switch_source(const char *target)
     g_object_set(selector_element, "active-pad", pad, NULL);
     g_print("SOURCE_SWITCHED:%s\n", to_secondary ? "secondary" : "primary");
 
-    for (int slot = 0; slot < 8; slot++) {
-        if (s_sdi_auto_ctx[slot] && s_sdi_vq_sink_pad[slot])
-            s_sdi_applied_caps[slot][0] = '\0';
-    }
+    // sdi_rebuild_worker() (SDI branch teardown+rebuild) is implemented but
+    // intentionally NOT wired: it stalls and has segfaulted under live streams
+    // — needs a gdb session on the pipeline before enabling. Until then SDI
+    // holds its last frame across a switch; route restart restores it.
 }
 
 void join_secondary(void)
