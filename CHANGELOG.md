@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **SDI Routes Switch via Pipeline Restart**: Routes with SDI destinations no longer use the in-process input-selector flip on source switch — flipping between feeds from different muxers starves the SDI branch's demuxer/decoder pads and freezes output permanently. Switching now persists `active_source`, tears the pipeline down, and respawns it on the new source (~3-4s of clean black, mode re-detected). Non-SDI routes keep the instant in-process switch. (`a601904`)
+- **Fast Respawn for Intentional Switches**: Manual and auto-failover source switches respawn the pipeline after 250ms instead of waiting the 10s reconnect backoff (which remains in place for crash/watchdog recovery). (`a601904`)
+- **Secondary Source Overlay Mirrors the Pair**: When a pipeline is born on the secondary source, primary/secondary are swapped rather than duplicated — previously both slots dialed the secondary feed (double connection) and later switches landed on the wrong source. (`a601904`)
+
+### Fixed
+- **SDI Auto-Detect Re-Applies on Source Format Change**: A buffer probe on the SDI video queue re-runs DeckLink mode matching and capsfilter/interlace-element configuration whenever the flowing decoded format changes (semantic `WxH@fps` key, NTSC-fractional normalized), instead of locking to whatever the first frame declared. (`905686d`)
+- **SDI Decoder Pad Migration**: New decodebin pads from program/muxer changes are re-linked into the SDI output chain instead of starving. (`fd0d404`)
+- **Missing Route IDs Return 404, Not 500**: `Db.get_route/2` maps Khepri's `node_not_found` to `{:ok, nil}` (the bang version raised), making the show endpoint's 404 clause reachable; stale UI polls no longer error-spam. (`336a9e7`)
+- **Idempotent Route Start**: `start_route/1` returns `{:ok, pid}` when the route process is already running instead of leaking `{:error, {:already_started, pid}}` as an HTTP 500. (`5024042`)
+- **Fresh Ubuntu 24.04 Installs Build the Native Engine**: `make install` now includes `libssl-dev` (required by srt's pkg-config) and `gstreamer1.0-libav` (decoders for SDI/thumbnail paths) — previously `native/build/` stayed empty and routes exit-127'd. (`509a5a3`)
+
+### Known Issues
+- SDI branch teardown/rebuild for fully seamless switching is implemented but **dormant** (not wired) — under live streams the teardown path stalls and has segfaulted on DeckLink task lifetimes. See `switch_source()` in `gst_pipeline.c` for the status note.
+- Unix-socket stats framing: long stats JSON lines split across TCP reads produce occasional `Undefined msg` log noise and dropped stats cycles (video unaffected). Line-buffer accumulation in `UnixSockHandler` is the planned fix.
+- Fast client reconnects (~15s) after an abrupt SRT sender kill are expected: SRT dead-peer window + client-side reconnect backoff, not a gateway defect.
+
 ---
 
 ## [1.0.1] - 2026-07-12
