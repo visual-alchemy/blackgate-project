@@ -120,12 +120,199 @@ typedef struct {
     GstElement *vid_identity;
     GstElement *videosink;
     int device_number;
+    int sink_index;
     // Fallback values (used when auto-detect can't match a broadcast standard)
     char fallback_mode[32];
     int fallback_width;
     int fallback_height;
     char fallback_framerate[16];
 } SdiAutoDetectCtx;
+
+// INVARIANT: switch_source() clears s_sdi_applied_caps[slot]; the vqueue-sink
+// probe (below) re-applies mode+caps when flowing caps differ from it.
+static SdiAutoDetectCtx *s_sdi_auto_ctx[8]     = {0};
+static GstPad          *s_sdi_vq_sink_pad[8]   = {0};
+static GstElement      *s_sdi_vinterlace[8]    = {0};
+static char             s_sdi_applied_caps[8][256] = {{0}};
+
+// Re-run mode matching + capsfilter/interlace-element application for a slot
+// from the caps currently flowing into vqueue. Also updates decklinkvideosink
+// mode and sdi_detected_mode[].
+static void sdi_reapply_mode(int slot, GstCaps *caps)
+{
+    SdiAutoDetectCtx *ctx = s_sdi_auto_ctx[slot];
+    if (!ctx || !caps || gst_caps_is_empty(caps)) return;
+
+    GstCaps *nc = gst_caps_make_writable(gst_caps_copy(caps));
+    GstStructure *s = gst_caps_get_structure(nc, 0);
+    gst_structure_fixate(s);
+
+    gint width = 0, height = 0, fps_num = 0, fps_den = 1;
+    gboolean interlaced = FALSE;
+    gst_structure_get_int(s, "width", &width);
+    gst_structure_get_int(s, "height", &height);
+    gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
+    const gchar *ims = gst_structure_get_string(s, "interlace-mode");
+    if (ims && g_strcmp0(ims, "interleaved") == 0) interlaced = TRUE;
+    gst_caps_unref(nc);
+
+    if (width <= 0 || height <= 0 || fps_num <= 0) return;
+
+    int lookup_num = fps_num, lookup_den = fps_den;
+    if (fps_den == 1001 && (fps_num == 24000 || fps_num == 30000 || fps_num == 60000)) {
+        lookup_num = fps_num / 1000; lookup_den = 1;
+    } else if (fps_den == 1001 && fps_num == 50000) {
+        lookup_num = 50; lookup_den = 1;
+    } else if (fps_den != 1 && fps_den != 0) {
+        lookup_num = (fps_num + fps_den / 2) / fps_den; lookup_den = 1;
+    }
+
+    const DeckLinkModeEntry *entry = lookup_decklink_mode(width, height, fps_num, fps_den, interlaced);
+    if (!entry && (lookup_num != fps_num || lookup_den != fps_den))
+        entry = lookup_decklink_mode(width, height, lookup_num, lookup_den, interlaced);
+
+    const char *mode_str;
+    int out_w, out_h;
+    const char *out_fr;
+    gboolean need_interlace = FALSE;
+    const char *out_im = NULL;
+    char fr_buf[16];
+
+    if (entry) {
+        mode_str = entry->mode_str;
+        out_w = entry->width;
+        out_h = entry->height;
+        out_im = entry->caps_interlace_mode;
+        need_interlace = (!interlaced && entry->caps_interlace_mode != NULL);
+        snprintf(fr_buf, sizeof(fr_buf), "%d/%d", entry->fps_num, entry->fps_den);
+        out_fr = fr_buf;
+    } else {
+        mode_str = ctx->fallback_mode;
+        out_w = ctx->fallback_width;
+        out_h = ctx->fallback_height;
+        out_fr = ctx->fallback_framerate;
+        if (strstr(mode_str, "i") != NULL || strcmp(mode_str, "pal") == 0 || strcmp(mode_str, "ntsc") == 0) {
+            need_interlace = !interlaced;
+            out_im = "interleaved";
+        }
+    }
+
+    if (ctx->device_number >= 0 && ctx->device_number < 8)
+        sdi_detected_mode[ctx->device_number] = mode_str;
+
+    gst_util_set_object_arg(G_OBJECT(ctx->videosink), "mode", mode_str);
+
+    char caps_str[256];
+    if (out_im)
+        snprintf(caps_str, sizeof(caps_str),
+                 "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s, interlace-mode=%s",
+                 out_w, out_h, out_fr, out_im);
+    else
+        snprintf(caps_str, sizeof(caps_str),
+                 "video/x-raw, format=UYVY, width=%d, height=%d, framerate=%s",
+                 out_w, out_h, out_fr);
+
+    gboolean has_interlace = (s_sdi_vinterlace[slot] != NULL);
+    g_print("SDI AUTO-DETECT: re-apply for switch → mode=%s need_interlace=%s (chain has=%s)\n",
+            mode_str, need_interlace ? "yes" : "no", has_interlace ? "yes" : "no");
+
+    if (need_interlace == has_interlace) {
+        GstCaps *out_caps = gst_caps_from_string(caps_str);
+        g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+        gst_caps_unref(out_caps);
+    } else if (need_interlace && !has_interlace) {
+        // vscale → vcaps becomes vscale → vinterlace → vcaps
+        GstElement *vinterlace = gst_element_factory_make("interlace", NULL);
+        if (vinterlace) {
+            gst_util_set_object_arg(G_OBJECT(vinterlace), "field-pattern", "2:2");
+            g_object_set(vinterlace, "top-field-first", TRUE, NULL);
+            gst_bin_add(GST_BIN(ctx->pipeline), vinterlace);
+            gst_element_unlink(ctx->vscale, ctx->vcaps);
+            if (gst_element_link_many(ctx->vscale, vinterlace, ctx->vcaps, NULL)) {
+                gst_element_sync_state_with_parent(vinterlace);
+                s_sdi_vinterlace[slot] = vinterlace;
+                g_print("SDI AUTO-DETECT: interlace element inserted for switched source\n");
+            } else {
+                g_printerr("SDI AUTO-DETECT: interlace insert link failed — reverting\n");
+                gst_element_unlink(ctx->vscale, vinterlace);
+                gst_bin_remove(GST_BIN(ctx->pipeline), vinterlace);
+                GstCaps *out_caps = gst_caps_from_string(caps_str);
+                g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+                gst_caps_unref(out_caps);
+            }
+        }
+    } else if (!need_interlace && has_interlace) {
+        // vscale → vinterlace → vcaps becomes vscale → vcaps
+        GstElement *vinterlace = s_sdi_vinterlace[slot];
+        gst_element_unlink(ctx->vscale, vinterlace);
+        gst_element_unlink(vinterlace, ctx->vcaps);
+        gst_element_set_state(vinterlace, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(ctx->pipeline), vinterlace);
+        s_sdi_vinterlace[slot] = NULL;
+        GstCaps *out_caps = gst_caps_from_string(caps_str);
+        g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+        gst_caps_unref(out_caps);
+        g_print("SDI AUTO-DETECT: interlace element removed for switched source\n");
+    }
+
+    snprintf(s_sdi_applied_caps[slot], sizeof(s_sdi_applied_caps[slot]),
+             "%dx%d@%d/%d%s", width, height, lookup_num, lookup_den,
+             interlaced ? "i" : "p");
+    g_print("SDI AUTO-DETECT: re-applied → %dx%d@%d/%d %s mode=%s\n",
+            out_w, out_h, lookup_num, lookup_den, interlaced ? "interlaced" : "progressive",
+            mode_str);
+}
+
+// vqueue-sink probe: s_sdi_applied_caps[slot] is cleared by switch_source();
+// when flowing caps differ from the stored set, re-apply mode + capsfilter.
+static GstPadProbeReturn sdi_caps_reapply_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)info;
+    int slot = GPOINTER_TO_INT(user_data);
+    SdiAutoDetectCtx *ctx = s_sdi_auto_ctx[slot];
+    if (!ctx) return GST_PAD_PROBE_OK;
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) return GST_PAD_PROBE_OK;
+
+    GstCaps *nc = gst_caps_make_writable(gst_caps_copy(caps));
+    GstStructure *s = gst_caps_get_structure(nc, 0);
+    gst_structure_fixate(s);
+
+    gint width = 0, height = 0, fps_num = 0, fps_den = 1;
+    gboolean interlaced = FALSE;
+    gst_structure_get_int(s, "width", &width);
+    gst_structure_get_int(s, "height", &height);
+    gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
+    const gchar *ims = gst_structure_get_string(s, "interlace-mode");
+    if (ims && g_strcmp0(ims, "interleaved") == 0) interlaced = TRUE;
+    gst_caps_unref(nc);
+
+    if (width <= 0 || height <= 0 || fps_num <= 0) {
+        gst_caps_unref(caps);
+        return GST_PAD_PROBE_OK;
+    }
+
+    int lookup_num = fps_num, lookup_den = fps_den;
+    if (fps_den == 1001 && (fps_num == 24000 || fps_num == 30000 || fps_num == 60000)) {
+        lookup_num = fps_num / 1000; lookup_den = 1;
+    } else if (fps_den == 1001 && fps_num == 50000) {
+        lookup_num = 50; lookup_den = 1;
+    } else if (fps_den != 1 && fps_den != 0) {
+        lookup_num = (fps_num + fps_den / 2) / fps_den; lookup_den = 1;
+    }
+
+    char key[64];
+    snprintf(key, sizeof(key), "%dx%d@%d/%d%s",
+             width, height, lookup_num, lookup_den, interlaced ? "i" : "p");
+
+    if (g_strcmp0(key, s_sdi_applied_caps[slot]) != 0) {
+        sdi_reapply_mode(slot, caps);
+    }
+
+    gst_caps_unref(caps);
+    return GST_PAD_PROBE_OK;
+}
 
 static GstPadProbeReturn sdi_audio_health_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
@@ -386,6 +573,8 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
             g_object_set(vinterlace, "top-field-first", TRUE, NULL);
             gst_bin_add(GST_BIN(ctx->pipeline), vinterlace);
             g_print("SDI AUTO-DETECT: added interlace element (field-pattern=2:2, tff=TRUE)\n");
+            if (ctx->sink_index >= 0 && ctx->sink_index < 8)
+                s_sdi_vinterlace[ctx->sink_index] = vinterlace;
         } else {
             g_printerr("SDI AUTO-DETECT: WARNING — failed to create interlace element, proceeding without\n");
             need_interlace_element = FALSE;
@@ -446,6 +635,12 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
         GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
         if (ret == GST_PAD_LINK_OK) {
             g_print("SDI AUTO-DETECT: decodebin video → vqueue linked, flow started\n");
+            if (ctx->sink_index >= 0 && ctx->sink_index < 8 && !s_sdi_vq_sink_pad[ctx->sink_index]) {
+                s_sdi_vq_sink_pad[ctx->sink_index] = gst_object_ref(sink_pad);
+                gst_pad_add_probe(sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                  sdi_caps_reapply_probe, GINT_TO_POINTER(ctx->sink_index), NULL);
+                g_print("SDI AUTO-DETECT: caps re-apply probe installed (slot %d)\n", ctx->sink_index);
+            }
         } else {
             g_printerr("SDI AUTO-DETECT: decodebin video → vqueue link FAILED: %d\n", ret);
         }
@@ -2236,6 +2431,17 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             auto_ctx->fallback_width  = width;
             auto_ctx->fallback_height = height;
             snprintf(auto_ctx->fallback_framerate, sizeof(auto_ctx->fallback_framerate), "%s", framerate);
+            auto_ctx->sink_index = sink_index;
+
+            if (sink_index >= 0 && sink_index < 8) {
+                if (s_sdi_vq_sink_pad[sink_index]) {
+                    gst_object_unref(s_sdi_vq_sink_pad[sink_index]);
+                    s_sdi_vq_sink_pad[sink_index] = NULL;
+                }
+                s_sdi_vinterlace[sink_index] = NULL;
+                s_sdi_applied_caps[sink_index][0] = '\0';
+                s_sdi_auto_ctx[sink_index] = auto_ctx;
+            }
 
             // Connect auto-detect callback for video (deferred linking)
             g_signal_connect_data(
@@ -2514,6 +2720,22 @@ void switch_source(const char *target)
 
     g_object_set(selector_element, "active-pad", pad, NULL);
     g_print("SOURCE_SWITCHED:%s\n", to_secondary ? "secondary" : "primary");
+
+    // The new encoder's first decodable frame is its next IDR; without this
+    // flush the decoder holds a reference-less P-frame and the SDI output
+    // freezes until that IDR arrives (long GOPs = minute-long freezes).
+    GstPad *selector_src = gst_element_get_static_pad(selector_element, "src");
+    if (selector_src) {
+        gst_pad_send_event(selector_src, gst_event_new_flush_start());
+        gst_pad_send_event(selector_src, gst_event_new_flush_stop(TRUE));
+        gst_object_unref(selector_src);
+        g_print("SDI/tee branch flushed for clean decoder restart\n");
+    }
+
+    for (int slot = 0; slot < 8; slot++) {
+        if (s_sdi_auto_ctx[slot] && s_sdi_vq_sink_pad[slot])
+            s_sdi_applied_caps[slot][0] = '\0';
+    }
 }
 
 void join_secondary(void)
