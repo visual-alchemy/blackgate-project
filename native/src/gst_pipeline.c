@@ -2721,17 +2721,6 @@ void switch_source(const char *target)
     g_object_set(selector_element, "active-pad", pad, NULL);
     g_print("SOURCE_SWITCHED:%s\n", to_secondary ? "secondary" : "primary");
 
-    // The new encoder's first decodable frame is its next IDR; without this
-    // flush the decoder holds a reference-less P-frame and the SDI output
-    // freezes until that IDR arrives (long GOPs = minute-long freezes).
-    GstPad *selector_src = gst_element_get_static_pad(selector_element, "src");
-    if (selector_src) {
-        gst_pad_send_event(selector_src, gst_event_new_flush_start());
-        gst_pad_send_event(selector_src, gst_event_new_flush_stop(TRUE));
-        gst_object_unref(selector_src);
-        g_print("SDI/tee branch flushed for clean decoder restart\n");
-    }
-
     for (int slot = 0; slot < 8; slot++) {
         if (s_sdi_auto_ctx[slot] && s_sdi_vq_sink_pad[slot])
             s_sdi_applied_caps[slot][0] = '\0';
