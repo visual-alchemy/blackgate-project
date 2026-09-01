@@ -12,6 +12,7 @@ defmodule Blackgate.RouteValidator do
       []
       |> validate_primary_source(route)
       |> validate_failover(route)
+      |> validate_seamless_sdi(route)
 
     case Enum.reverse(errors) do
       [] -> :ok
@@ -66,6 +67,33 @@ defmodule Blackgate.RouteValidator do
   end
 
   defp validate_failover(errors, _route), do: errors
+
+  defp validate_seamless_sdi(errors, route) do
+    case Map.fetch(route, "seamless_sdi_failover") do
+      :error ->
+        errors
+
+      {:ok, false} ->
+        errors
+
+      {:ok, true} ->
+        errors
+        |> require_setting(
+          Map.get(route, "failover_enabled") == true,
+          "seamless SDI failover requires failover to be enabled"
+        )
+        |> require_setting(
+          Map.get(route, "auto_join", true) == true,
+          "seamless SDI failover requires auto_join=true"
+        )
+
+      {:ok, _value} ->
+        ["seamless_sdi_failover must be boolean" | errors]
+    end
+  end
+
+  defp require_setting(errors, true, _message), do: errors
+  defp require_setting(errors, false, message), do: [message | errors]
 
   defp validate_srt_source(errors, opts, label) when is_map(opts) do
     errors

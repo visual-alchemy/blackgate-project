@@ -642,6 +642,13 @@ const RouteItem = () => {
                   {(routeData.active_source || 'primary').toUpperCase()}
                 </Tag>
               </Descriptions.Item>
+              <Descriptions.Item label="SDI Switch Strategy">
+                {routeData.seamless_sdi_failover ? (
+                  <Tag color="green">KEYFRAME-GATED</Tag>
+                ) : (
+                  <Tag>RESTART FALLBACK</Tag>
+                )}
+              </Descriptions.Item>
               <Descriptions.Item label="Secondary Source">
                 <Tag color="orange">
                   {routeData.secondary_source?.schema || 'SRT'}

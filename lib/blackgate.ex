@@ -5,12 +5,39 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    case DynamicSupervisor.start_child(
-           {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
-           {Blackgate.RoutesSupervisor, %{id: id}}
-         ) do
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      other -> other
+    supervisor = {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}}
+    child_spec = {Blackgate.RoutesSupervisor, %{id: id}}
+
+    case DynamicSupervisor.start_child(supervisor, child_spec) do
+      {:error, {:already_started, pid}} ->
+        if route_supervisor_has_handler?(pid, id) do
+          {:ok, pid}
+        else
+          Logger.warning("Replacing empty route supervisor for #{id}")
+
+          with :ok <- DynamicSupervisor.terminate_child(supervisor, pid) do
+            DynamicSupervisor.start_child(supervisor, child_spec)
+          end
+        end
+
+      other ->
+        other
+    end
+  end
+
+  @doc false
+  def route_supervisor_has_handler?(pid, id) when is_pid(pid) do
+    try do
+      Enum.any?(Supervisor.which_children(pid), fn
+        {{:route_handler, ^id}, child_pid, :worker, _modules}
+        when is_pid(child_pid) or child_pid == :restarting ->
+          true
+
+        _ ->
+          false
+      end)
+    catch
+      :exit, _reason -> true
     end
   end
 

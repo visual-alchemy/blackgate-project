@@ -8,8 +8,23 @@ Reduce or eliminate the visible SDI blackout during source failover by keeping b
 
 - Dual-source configuration and selector switching are implemented.
 - Safe dual-SRT routes can switch in-process.
-- SDI routes currently use restart/reconnect failover.
+- SDI routes use restart/reconnect failover unless `seamless_sdi_failover` is enabled.
 - Observed SDI recovery gap is approximately 5–6 seconds.
+
+## Implemented checkpoint
+
+- Added opt-in `seamless_sdi_failover` route setting; default remains disabled.
+- Seamless mode forces both SRT branches to remain warm.
+- Native probes collect PAT/PMT program maps independently from both sources.
+- Switch requests wait for an H.264 IDR, H.265 IRAP, or MPEG-2 I-picture on the target source.
+- Selector switches only when program, PMT/PCR/video PIDs, codec, and all elementary stream PID/type entries match.
+- Missing metadata, incompatible maps, missing keyframes, or missing acknowledgment use the existing restart fallback.
+- Active-source persistence remains gated by native acknowledgment.
+- Selector inactive-stream synchronization remains disabled because deployed testing showed it can stall the active SRT source when its peer is absent. Network sources preserve encoder PCR/PTS with `do-timestamp=false`; keyframe gating supplies the guarded media boundary without rewriting arrival timestamps.
+
+## Remaining optional normalization work
+
+The guarded implementation provides fast switching for matching encoders. It does not rewrite incompatible PIDs, continuity counters, PCR, or PTS. Supporting seamless switching between arbitrary encoder/muxer layouts requires a demux/remux normalizer before selection; until then those pairs deliberately use restart fallback.
 
 ## Implementation phases
 

@@ -23,6 +23,7 @@ defmodule Blackgate.RouteHandler do
   # Don't check for first 30 seconds after start
   @watchdog_grace_period_ms 30_000
   @switch_ack_timeout_ms 5_000
+  @seamless_switch_ack_timeout_ms 12_000
 
   # SDI audio desync auto-recovery (RTMP/HTTP/HLS only)
   # Minimum total audio buffers before we treat a silence event as a hardware desync.
@@ -182,7 +183,7 @@ defmodule Blackgate.RouteHandler do
     new_data =
       String.split(info, "\n")
       |> Enum.reduce(data, fn line, acc ->
-        Logger.debug("RouteHandler: pipeline: #{sanitize_pipeline_log(line)}")
+        log_pipeline_line(line)
 
         acc =
           if String.starts_with?(line, "SOURCE_SWITCHED:") do
@@ -195,6 +196,34 @@ defmodule Blackgate.RouteHandler do
         acc =
           if String.trim(line) == "PIPELINE_READY" do
             acknowledge_pending_switch(acc)
+          else
+            acc
+          end
+
+        acc =
+          if String.starts_with?(line, "SOURCE_SWITCH_REJECTED:") do
+            [_, rejection] = String.split(line, "SOURCE_SWITCH_REJECTED:", parts: 2)
+            [target | reason_parts] = String.split(String.trim(rejection), ":")
+
+            if acc.pending_switch == target do
+              reason = Enum.join(reason_parts, ":")
+
+              Logger.warning(
+                "RouteHandler: seamless source switch rejected (#{reason}); restarting on #{target}"
+              )
+
+              Blackgate.EventLog.log(
+                :warning,
+                "failover_seamless_fallback",
+                "Seamless switch unavailable; using restart fallback",
+                %{route_id: acc.id, route_name: get_in(acc, [:route, "name"]) || acc.id}
+              )
+
+              send(self(), {:restart_for_source_switch, target})
+              %{acc | pending_switch_token: nil}
+            else
+              acc
+            end
           else
             acc
           end
@@ -307,121 +336,121 @@ defmodule Blackgate.RouteHandler do
         # Get current bytes from stats registry
         current_bytes = get_total_bytes_received(data.id)
 
-      # Determine if the route has an active SDI destination
-      has_sdi_destination? =
-        case data.route["destinations"] do
-          destinations when is_list(destinations) ->
-            Enum.any?(destinations, &(&1["schema"] == "SDI"))
+        # Determine if the route has an active SDI destination
+        has_sdi_destination? =
+          case data.route["destinations"] do
+            destinations when is_list(destinations) ->
+              Enum.any?(destinations, &(&1["schema"] == "SDI"))
 
-          _ ->
-            false
-        end
+            _ ->
+              false
+          end
 
-      # Query latest SDI video stats
-      stats =
-        case Blackgate.RouteStatsRegistry.get_stats(data.id) do
-          %{stats: stats} when is_map(stats) -> stats
-          _ -> nil
-        end
+        # Query latest SDI video stats
+        stats =
+          case Blackgate.RouteStatsRegistry.get_stats(data.id) do
+            %{stats: stats} when is_map(stats) -> stats
+            _ -> nil
+          end
 
-      sdi_frames_map =
-        if stats && is_list(stats["sdi_video_stats"]) do
-          Enum.reduce(stats["sdi_video_stats"], %{}, fn sdi_item, acc ->
-            dev = sdi_item["device_number"]
-            frames = sdi_item["video_frames"] || 0
+        sdi_frames_map =
+          if stats && is_list(stats["sdi_video_stats"]) do
+            Enum.reduce(stats["sdi_video_stats"], %{}, fn sdi_item, acc ->
+              dev = sdi_item["device_number"]
+              frames = sdi_item["video_frames"] || 0
 
-            if is_integer(dev) do
-              Map.put(acc, dev, frames)
-            else
-              acc
-            end
-          end)
-        else
-          %{}
-        end
-
-      # 1. Evaluate Network Bytes
-      {last_bytes_received, last_bytes_changed_at} =
-        if current_bytes > data.last_bytes_received do
-          {current_bytes, now}
-        else
-          {data.last_bytes_received, data.last_bytes_changed_at}
-        end
-
-      # 2. Evaluate Playout Frames (only if SDI destination is present)
-      playout_stalled? =
-        if has_sdi_destination? do
-          if map_size(sdi_frames_map) > 0 do
-            # Stalled if any configured device's frame count has not advanced
-            Enum.any?(sdi_frames_map, fn {dev, current_val} ->
-              last_val = Map.get(data.last_sdi_frames, dev, 0)
-              current_val <= last_val
+              if is_integer(dev) do
+                Map.put(acc, dev, frames)
+              else
+                acc
+              end
             end)
           else
-            # SDI destination exists but no frames/stats received yet from C pipeline
-            true
+            %{}
           end
-        else
-          false
-        end
 
-      {last_sdi_frames, last_sdi_frames_changed_at} =
-        if playout_stalled? do
-          {data.last_sdi_frames, data.last_sdi_frames_changed_at}
-        else
-          {sdi_frames_map, now}
-        end
+        # 1. Evaluate Network Bytes
+        {last_bytes_received, last_bytes_changed_at} =
+          if current_bytes > data.last_bytes_received do
+            {current_bytes, now}
+          else
+            {data.last_bytes_received, data.last_bytes_changed_at}
+          end
 
-      net_stall_duration = now - last_bytes_changed_at
-      sdi_stall_duration = now - last_sdi_frames_changed_at
+        # 2. Evaluate Playout Frames (only if SDI destination is present)
+        playout_stalled? =
+          if has_sdi_destination? do
+            if map_size(sdi_frames_map) > 0 do
+              # Stalled if any configured device's frame count has not advanced
+              Enum.any?(sdi_frames_map, fn {dev, current_val} ->
+                last_val = Map.get(data.last_sdi_frames, dev, 0)
+                current_val <= last_val
+              end)
+            else
+              # SDI destination exists but no frames/stats received yet from C pipeline
+              true
+            end
+          else
+            false
+          end
 
-      cond do
-        net_stall_duration >= @watchdog_stall_threshold_ms ->
-          Logger.warning(
-            "RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route"
-          )
+        {last_sdi_frames, last_sdi_frames_changed_at} =
+          if playout_stalled? do
+            {data.last_sdi_frames, data.last_sdi_frames_changed_at}
+          else
+            {sdi_frames_map, now}
+          end
 
-          Blackgate.EventLog.log(
-            :warning,
-            "watchdog_restart",
-            "No data for #{div(net_stall_duration, 1000)}s, restarting route",
-            %{
-              route_id: data.id,
-              route_name: get_in(data, [:route, "name"]) || data.id
+        net_stall_duration = now - last_bytes_changed_at
+        sdi_stall_duration = now - last_sdi_frames_changed_at
+
+        cond do
+          net_stall_duration >= @watchdog_stall_threshold_ms ->
+            Logger.warning(
+              "RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route"
+            )
+
+            Blackgate.EventLog.log(
+              :warning,
+              "watchdog_restart",
+              "No data for #{div(net_stall_duration, 1000)}s, restarting route",
+              %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              }
+            )
+
+            trigger_restart(data)
+
+          sdi_stall_duration >= @watchdog_stall_threshold_ms ->
+            Logger.warning(
+              "RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route"
+            )
+
+            Blackgate.EventLog.log(
+              :warning,
+              "watchdog_restart",
+              "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route",
+              %{
+                route_id: data.id,
+                route_name: get_in(data, [:route, "name"]) || data.id
+              }
+            )
+
+            trigger_restart(data)
+
+          true ->
+            updated_data = %{
+              data
+              | last_bytes_received: last_bytes_received,
+                last_bytes_changed_at: last_bytes_changed_at,
+                last_sdi_frames: last_sdi_frames,
+                last_sdi_frames_changed_at: last_sdi_frames_changed_at
             }
-          )
 
-          trigger_restart(data)
-
-        sdi_stall_duration >= @watchdog_stall_threshold_ms ->
-          Logger.warning(
-            "RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route"
-          )
-
-          Blackgate.EventLog.log(
-            :warning,
-            "watchdog_restart",
-            "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route",
-            %{
-              route_id: data.id,
-              route_name: get_in(data, [:route, "name"]) || data.id
-            }
-          )
-
-          trigger_restart(data)
-
-        true ->
-          updated_data = %{
-            data
-            | last_bytes_received: last_bytes_received,
-              last_bytes_changed_at: last_bytes_changed_at,
-              last_sdi_frames: last_sdi_frames,
-              last_sdi_frames_changed_at: last_sdi_frames_changed_at
-          }
-
-          {:keep_state, updated_data,
-           {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
-      end
+            {:keep_state, updated_data,
+             {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+        end
       end
     end
   end
@@ -762,10 +791,9 @@ defmodule Blackgate.RouteHandler do
   # without tearing the pipeline down. This preserves all downstream
   # SRT connections (no reconnect storm) and is the whole point of dual-ingest.
   #
-  # Routes with SDI destinations are excluded: flipping the selector between
-  # different-muxer feeds starves the SDI branch's decoder pads (output
-  # freezes). They take the kill/respawn path — a few seconds of gap, but SDI
-  # comes back correct on the new source.
+  # SDI routes use this path only when seamless_sdi_failover is explicitly
+  # enabled. Native code then validates MPEG-TS compatibility and waits for a
+  # target keyframe. Rejection or timeout falls back to kill/respawn.
   #
   # Non-dual-ingest routes (no failover, non-SRT secondary) or routes whose
   # pipeline port is not live also fall back to the restart path. Selection is
@@ -783,7 +811,12 @@ defmodule Blackgate.RouteHandler do
 
       if command_sent do
         token = make_ref()
-        Process.send_after(self(), {:switch_ack_timeout, target, token}, @switch_ack_timeout_ms)
+
+        Process.send_after(
+          self(),
+          {:switch_ack_timeout, target, token},
+          switch_ack_timeout(data.route)
+        )
 
         Blackgate.EventLog.log(
           :info,
@@ -868,7 +901,6 @@ defmodule Blackgate.RouteHandler do
   # pipeline can actually receive a second SRT source. Requires failover to be
   # active (SRT primary + configured secondary) AND the secondary itself to be
   # SRT (so the C pipeline's dual-srtsrc bin can switch without restructure).
-  # Gates the in-process switch path off for SDI routes (see switch_source).
   defp route_has_sdi_destination?(route) when is_map(route) do
     destinations = Map.get(route, "destinations") || []
     Enum.any?(destinations, &(&1["schema"] == "SDI"))
@@ -885,9 +917,19 @@ defmodule Blackgate.RouteHandler do
   defp port_open?(port) when is_port(port), do: Port.info(port) != nil
   defp port_open?(_port), do: false
 
+  defp seamless_sdi_enabled?(route) when is_map(route) do
+    Map.get(route, "seamless_sdi_failover", false) == true
+  end
+
+  defp switch_ack_timeout(route) do
+    if seamless_sdi_enabled?(route),
+      do: @seamless_switch_ack_timeout_ms,
+      else: @switch_ack_timeout_ms
+  end
+
   defp in_process_switch_allowed?(data) do
     dual_ingest_eligible?(data.route) and
-      not route_has_sdi_destination?(data.route) and
+      (not route_has_sdi_destination?(data.route) or seamless_sdi_enabled?(data.route)) and
       port_open?(data.port)
   end
 
@@ -1165,7 +1207,12 @@ defmodule Blackgate.RouteHandler do
 
             if sent do
               token = make_ref()
-              Process.send_after(self(), {:switch_ack_timeout, target, token}, @switch_ack_timeout_ms)
+
+              Process.send_after(
+                self(),
+                {:switch_ack_timeout, target, token},
+                switch_ack_timeout(data.route)
+              )
 
               {:keep_state,
                %{
@@ -1467,6 +1514,8 @@ defmodule Blackgate.RouteHandler do
                 "secondary_source" => secondary,
                 "active_source" => active_source_from_route(route),
                 "auto_join" => Map.get(route, "auto_join", true),
+                "seamless_sdi_failover" =>
+                  seamless_sdi_enabled?(route) and route_has_sdi_destination?(route),
                 "sinks" => sinks
               }
 
@@ -1859,6 +1908,31 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp sanitize_pipeline_log(_line), do: "<non-binary>"
+
+  # Native pipeline stdout is normally verbose, so routine lines stay at debug.
+  # Promote actionable failures to production-visible levels; otherwise the
+  # only journal evidence is an unhelpful status-0 Port exit. Sanitize before
+  # logging because GStreamer diagnostics can include complete source URIs.
+  defp log_pipeline_line(line) when is_binary(line) do
+    sanitized = sanitize_pipeline_log(line)
+
+    cond do
+      String.starts_with?(line, "Error:") ->
+        Logger.error("RouteHandler: pipeline: #{sanitized}")
+
+      String.starts_with?(line, "Pipeline Warning") or
+        String.starts_with?(line, "SOURCE_INVALID:") or
+        String.starts_with?(line, "Failed to ") or
+          String.starts_with?(line, "Unable to ") ->
+        Logger.warning("RouteHandler: pipeline: #{sanitized}")
+
+      true ->
+        Logger.debug("RouteHandler: pipeline: #{sanitized}")
+    end
+  end
+
+  defp log_pipeline_line(line),
+    do: Logger.debug("RouteHandler: pipeline: #{sanitize_pipeline_log(line)}")
 
   defp sanitize_log_content(content) when is_binary(content), do: sanitize_pipeline_log(content)
   defp sanitize_log_content(_content), do: "<non-binary>"

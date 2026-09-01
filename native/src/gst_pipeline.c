@@ -908,6 +908,10 @@ static GstPad *primary_sink_pad = NULL;
 static GstPad *secondary_sink_pad = NULL;
 static gboolean dual_ingest_active = FALSE;
 static gboolean auto_join_enabled = TRUE;
+static gboolean seamless_sdi_enabled = FALSE;
+static gint selected_source_index = 0;
+static gint pending_source_index = -1;
+static GMutex seamless_switch_mutex;
 
 // Thumbnail capture state
 static GstElement *thumbnail_appsink = NULL;
@@ -924,6 +928,28 @@ static gboolean thumbnail_thread_started = FALSE;
 #define STREAM_TYPE_MPEG2_VIDEO 0x02
 #define STREAM_TYPE_H264 0x1B
 #define STREAM_TYPE_HEVC 0x24
+#define MAX_PROGRAM_STREAMS 16
+
+typedef struct {
+    gboolean pat_valid;
+    gboolean pmt_valid;
+    guint16 transport_stream_id;
+    guint16 program_number;
+    guint16 pmt_pid;
+    guint16 pcr_pid;
+    guint16 video_pid;
+    guint8 video_stream_type;
+    guint32 program_map_hash;
+    gboolean codec_config_valid;
+    guint32 codec_config_hash;
+    guint stream_count;
+    guint16 stream_pids[MAX_PROGRAM_STREAMS];
+    guint8 stream_types[MAX_PROGRAM_STREAMS];
+    guint8 es_tail[4];
+    guint es_tail_len;
+} SourceTsInfo;
+
+static SourceTsInfo source_ts_info[2];
 
 // Parsed video information
 typedef struct {
@@ -953,6 +979,8 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
 static void parse_h264_sps(const guint8 *data, gsize size);
 static void parse_mpeg2_sequence(const guint8 *data, gsize size);
 static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
+static GstPadProbeReturn source_ts_probe_callback(GstPad *pad, GstPadProbeInfo *info,
+                                                  gpointer user_data);
 
 static void send_json_to_socket(cJSON *root)
 {
@@ -977,7 +1005,9 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
     }
 
     GstStructure *stats = NULL;
-    g_object_get(src, "stats", &stats, NULL);
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(src), "stats")) {
+        g_object_get(src, "stats", &stats, NULL);
+    }
 
     if (stats) {
         guint64 bytes_total = 0;
@@ -1605,6 +1635,330 @@ static void parse_pmt(const guint8 *data, gsize size)
     }
 }
 
+static gboolean get_ts_payload(const guint8 *packet, const guint8 **payload,
+                               gsize *payload_size)
+{
+    if (!packet || packet[0] != TS_SYNC_BYTE || !(packet[3] & 0x10)) return FALSE;
+
+    gsize offset = 4;
+    if (packet[3] & 0x20) {
+        offset += 1 + packet[4];
+    }
+    if (offset >= TS_PACKET_SIZE) return FALSE;
+
+    *payload = packet + offset;
+    *payload_size = TS_PACKET_SIZE - offset;
+    return TRUE;
+}
+
+static guint32 fnv1a_hash(const guint8 *data, gsize size)
+{
+    guint32 hash = 2166136261u;
+    for (gsize i = 0; i < size; i++) {
+        hash ^= data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static void parse_source_pat(SourceTsInfo *info, const guint8 *packet)
+{
+    const guint8 *payload = NULL;
+    gsize payload_size = 0;
+    if (!(packet[1] & 0x40) || !get_ts_payload(packet, &payload, &payload_size) ||
+        payload_size < 9) {
+        return;
+    }
+
+    guint pointer = payload[0];
+    if ((gsize)pointer + 9 > payload_size) return;
+    const guint8 *section = payload + 1 + pointer;
+    gsize available = payload_size - 1 - pointer;
+    if (section[0] != 0x00 || available < 8) return;
+
+    guint16 section_length = ((section[1] & 0x0F) << 8) | section[2];
+    gsize section_size = 3 + section_length;
+    if (section_size > available || section_size < 12) return;
+
+    guint16 transport_stream_id = (section[3] << 8) | section[4];
+    gsize entry_end = section_size - 4;
+    for (gsize offset = 8; offset + 4 <= entry_end; offset += 4) {
+        guint16 program_number = (section[offset] << 8) | section[offset + 1];
+        if (program_number == 0) continue;
+
+        info->transport_stream_id = transport_stream_id;
+        info->program_number = program_number;
+        info->pmt_pid = ((section[offset + 2] & 0x1F) << 8) | section[offset + 3];
+        info->pat_valid = TRUE;
+        return;
+    }
+}
+
+static void parse_source_pmt(SourceTsInfo *info, const guint8 *packet)
+{
+    const guint8 *payload = NULL;
+    gsize payload_size = 0;
+    if (!(packet[1] & 0x40) || !get_ts_payload(packet, &payload, &payload_size) ||
+        payload_size < 13) {
+        return;
+    }
+
+    guint pointer = payload[0];
+    if ((gsize)pointer + 13 > payload_size) return;
+    const guint8 *section = payload + 1 + pointer;
+    gsize available = payload_size - 1 - pointer;
+    if (section[0] != 0x02 || available < 12) return;
+
+    guint16 section_length = ((section[1] & 0x0F) << 8) | section[2];
+    gsize section_size = 3 + section_length;
+    if (section_size > available || section_size < 16) return;
+
+    guint16 program_number = (section[3] << 8) | section[4];
+    guint16 pcr_pid = ((section[8] & 0x1F) << 8) | section[9];
+    guint16 program_info_length = ((section[10] & 0x0F) << 8) | section[11];
+    gsize offset = 12 + program_info_length;
+    gsize entry_end = section_size - 4;
+
+    guint count = 0;
+    guint16 video_pid = 0;
+    guint8 video_type = 0;
+    guint16 pids[MAX_PROGRAM_STREAMS] = {0};
+    guint8 types[MAX_PROGRAM_STREAMS] = {0};
+
+    while (offset + 5 <= entry_end && count < MAX_PROGRAM_STREAMS) {
+        guint8 stream_type = section[offset];
+        guint16 stream_pid = ((section[offset + 1] & 0x1F) << 8) | section[offset + 2];
+        guint16 es_info_length = ((section[offset + 3] & 0x0F) << 8) | section[offset + 4];
+        if (offset + 5 + es_info_length > entry_end) break;
+
+        types[count] = stream_type;
+        pids[count] = stream_pid;
+        count++;
+
+        if (video_pid == 0 &&
+            (stream_type == STREAM_TYPE_MPEG2_VIDEO || stream_type == STREAM_TYPE_H264 ||
+             stream_type == STREAM_TYPE_HEVC)) {
+            video_pid = stream_pid;
+            video_type = stream_type;
+        }
+
+        offset += 5 + es_info_length;
+    }
+
+    if (count == 0 || video_pid == 0) return;
+
+    info->program_number = program_number;
+    info->pcr_pid = pcr_pid;
+    info->video_pid = video_pid;
+    info->video_stream_type = video_type;
+    info->program_map_hash = fnv1a_hash(section + 8, section_size - 12);
+    info->stream_count = count;
+    memcpy(info->stream_pids, pids, sizeof(pids));
+    memcpy(info->stream_types, types, sizeof(types));
+    info->pmt_valid = TRUE;
+}
+
+static gboolean source_maps_compatible_unlocked(void)
+{
+    const SourceTsInfo *primary = &source_ts_info[0];
+    const SourceTsInfo *secondary = &source_ts_info[1];
+
+    if (!primary->pat_valid || !primary->pmt_valid ||
+        !secondary->pat_valid || !secondary->pmt_valid) {
+        return FALSE;
+    }
+
+    if (primary->transport_stream_id != secondary->transport_stream_id ||
+        primary->program_number != secondary->program_number ||
+        primary->pmt_pid != secondary->pmt_pid || primary->pcr_pid != secondary->pcr_pid ||
+        primary->video_pid != secondary->video_pid ||
+        primary->video_stream_type != secondary->video_stream_type ||
+        primary->program_map_hash != secondary->program_map_hash ||
+        !primary->codec_config_valid || !secondary->codec_config_valid ||
+        primary->codec_config_hash != secondary->codec_config_hash ||
+        primary->stream_count != secondary->stream_count) {
+        return FALSE;
+    }
+
+    for (guint i = 0; i < primary->stream_count; i++) {
+        if (primary->stream_pids[i] != secondary->stream_pids[i] ||
+            primary->stream_types[i] != secondary->stream_types[i]) {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static gboolean source_maps_ready_unlocked(void)
+{
+    return source_ts_info[0].pat_valid && source_ts_info[0].pmt_valid &&
+           source_ts_info[1].pat_valid && source_ts_info[1].pmt_valid;
+}
+
+static gboolean source_descriptions_ready_unlocked(void)
+{
+    return source_maps_ready_unlocked() && source_ts_info[0].codec_config_valid &&
+           source_ts_info[1].codec_config_valid;
+}
+
+static gboolean payload_contains_keyframe(SourceTsInfo *info, const guint8 *payload,
+                                          gsize payload_size)
+{
+    guint8 scan[TS_PACKET_SIZE + 4];
+    guint prefix = MIN(info->es_tail_len, (guint)sizeof(info->es_tail));
+    memcpy(scan, info->es_tail, prefix);
+    memcpy(scan + prefix, payload, payload_size);
+    gsize scan_size = prefix + payload_size;
+    gboolean keyframe = FALSE;
+
+    for (gsize i = 0; i + 5 < scan_size; i++) {
+        if (scan[i] != 0 || scan[i + 1] != 0 || scan[i + 2] != 1) continue;
+
+        guint8 code = scan[i + 3];
+        gsize config_available = scan_size - (i + 3);
+        if (info->video_stream_type == STREAM_TYPE_H264) {
+            guint8 nal_type = code & 0x1F;
+            if (nal_type == 7 && config_available >= 12) {
+                info->codec_config_hash = fnv1a_hash(scan + i + 3, 12);
+                info->codec_config_valid = TRUE;
+            } else if (nal_type == 5) {
+                keyframe = TRUE;
+            }
+        }
+        if (info->video_stream_type == STREAM_TYPE_HEVC) {
+            guint8 nal_type = (code >> 1) & 0x3F;
+            if (nal_type == 33 && config_available >= 16) {
+                info->codec_config_hash = fnv1a_hash(scan + i + 3, 16);
+                info->codec_config_valid = TRUE;
+            } else if (nal_type >= 16 && nal_type <= 21) {
+                keyframe = TRUE;
+            }
+        }
+        if (info->video_stream_type == STREAM_TYPE_MPEG2_VIDEO) {
+            if (code == 0xB3 && config_available >= 8) {
+                info->codec_config_hash = fnv1a_hash(scan + i + 3, 8);
+                info->codec_config_valid = TRUE;
+            } else if (code == 0x00) {
+                guint8 picture_coding_type = (scan[i + 5] >> 3) & 0x07;
+                if (picture_coding_type == 1) keyframe = TRUE;
+            }
+        }
+    }
+
+    info->es_tail_len = MIN((guint)scan_size, (guint)sizeof(info->es_tail));
+    if (info->es_tail_len > 0) {
+        memcpy(info->es_tail, scan + scan_size - info->es_tail_len, info->es_tail_len);
+    }
+    return keyframe;
+}
+
+static void reject_pending_switch_if_incompatible(void)
+{
+    gint rejected = -1;
+
+    g_mutex_lock(&seamless_switch_mutex);
+    if (pending_source_index >= 0 && source_descriptions_ready_unlocked() &&
+        !source_maps_compatible_unlocked()) {
+        rejected = pending_source_index;
+        pending_source_index = -1;
+    }
+    g_mutex_unlock(&seamless_switch_mutex);
+
+    if (rejected >= 0) {
+        g_print("SOURCE_SWITCH_REJECTED:%s:incompatible-mpegts-map\n",
+                rejected == 1 ? "secondary" : "primary");
+    }
+}
+
+static void complete_pending_switch_on_keyframe(gint source_index)
+{
+    gboolean switched = FALSE;
+    gboolean rejected = FALSE;
+    GstPad *target_pad = source_index == 1 ? secondary_sink_pad : primary_sink_pad;
+
+    if (!target_pad || !selector_element) {
+        g_mutex_lock(&seamless_switch_mutex);
+        if (pending_source_index == source_index) pending_source_index = -1;
+        g_mutex_unlock(&seamless_switch_mutex);
+        g_print("SOURCE_SWITCH_REJECTED:%s:target-pad-unavailable\n",
+                source_index == 1 ? "secondary" : "primary");
+        return;
+    }
+
+    g_mutex_lock(&seamless_switch_mutex);
+    if (pending_source_index == source_index) {
+        if (source_descriptions_ready_unlocked() && source_maps_compatible_unlocked()) {
+            selected_source_index = source_index;
+            pending_source_index = -1;
+            switched = TRUE;
+        } else if (source_descriptions_ready_unlocked()) {
+            pending_source_index = -1;
+            rejected = TRUE;
+        }
+    }
+    g_mutex_unlock(&seamless_switch_mutex);
+
+    if (rejected) {
+        g_print("SOURCE_SWITCH_REJECTED:%s:incompatible-mpegts-map\n",
+                source_index == 1 ? "secondary" : "primary");
+        return;
+    }
+    if (!switched) return;
+
+    g_object_set(selector_element, "active-pad", target_pad, NULL);
+    g_print("SOURCE_SWITCHED:%s\n", source_index == 1 ? "secondary" : "primary");
+}
+
+static GstPadProbeReturn source_ts_probe_callback(GstPad *pad, GstPadProbeInfo *probe_info,
+                                                  gpointer user_data)
+{
+    (void)pad;
+    gint source_index = GPOINTER_TO_INT(user_data);
+    if (source_index < 0 || source_index > 1) return GST_PAD_PROBE_OK;
+
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+    if (!buffer) return GST_PAD_PROBE_OK;
+
+    GstMapInfo map;
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) return GST_PAD_PROBE_OK;
+
+    gboolean keyframe = FALSE;
+    gsize first_packet = 0;
+    while (first_packet < map.size && first_packet < TS_PACKET_SIZE &&
+           map.data[first_packet] != TS_SYNC_BYTE) {
+        first_packet++;
+    }
+
+    g_mutex_lock(&seamless_switch_mutex);
+    SourceTsInfo *stream_info = &source_ts_info[source_index];
+    for (gsize offset = first_packet; offset + TS_PACKET_SIZE <= map.size;
+         offset += TS_PACKET_SIZE) {
+        const guint8 *packet = map.data + offset;
+        if (packet[0] != TS_SYNC_BYTE) continue;
+
+        guint16 pid = ((packet[1] & 0x1F) << 8) | packet[2];
+        if (pid == PAT_PID) {
+            parse_source_pat(stream_info, packet);
+        } else if (stream_info->pat_valid && pid == stream_info->pmt_pid) {
+            parse_source_pmt(stream_info, packet);
+        } else if (stream_info->pmt_valid && pid == stream_info->video_pid) {
+            const guint8 *payload = NULL;
+            gsize payload_size = 0;
+            if (get_ts_payload(packet, &payload, &payload_size) &&
+                payload_contains_keyframe(stream_info, payload, payload_size)) {
+                keyframe = TRUE;
+            }
+        }
+    }
+    g_mutex_unlock(&seamless_switch_mutex);
+
+    gst_buffer_unmap(buffer, &map);
+    reject_pending_switch_if_incompatible();
+    if (keyframe) complete_pending_switch_on_keyframe(source_index);
+    return GST_PAD_PROBE_OK;
+}
+
 // Bit reader helper for H.264 SPS parsing
 typedef struct {
     const guint8 *data;
@@ -2148,10 +2502,10 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 
 // Build a single source element from its JSON config. Mirrors the source setup
 // historically inlined in create_pipeline (type lookup → factory make →
-// set_element_properties → SDI do-timestamp → srtsrc caller-connecting signal).
+// set_element_properties → timestamp policy → srtsrc caller-connecting signal).
 // `name` becomes both the GstElement name and the user_data passed to
 // on_caller_connecting so T3 can attribute health to primary vs secondary.
-static GstElement *make_source(cJSON *source_obj, const char *name, cJSON *sinks_array)
+static GstElement *make_source(cJSON *source_obj, const char *name)
 {
     cJSON *source_type = cJSON_GetObjectItem(source_obj, "type");
     if (!cJSON_IsString(source_type)) {
@@ -2169,26 +2523,13 @@ static GstElement *make_source(cJSON *source_obj, const char *name, cJSON *sinks
 
     set_element_properties(src, source_obj, source_type->valuestring, "type");
 
-    gboolean has_sdi_sink = FALSE;
-    if (cJSON_IsArray(sinks_array)) {
-        cJSON *sink_item;
-        cJSON_ArrayForEach(sink_item, sinks_array) {
-            cJSON *sink_type = cJSON_GetObjectItem(sink_item, "type");
-            if (sink_type && cJSON_IsString(sink_type) &&
-                strcmp(sink_type->valuestring, "sdisink") == 0) {
-                has_sdi_sink = TRUE;
-                break;
-            }
-        }
-    }
-
-    if (has_sdi_sink) {
-        g_object_set(src, "do-timestamp", TRUE, NULL);
-        g_print("Set do-timestamp=TRUE for %s source element (SDI playout detected)\n", name);
-    } else {
-        g_object_set(src, "do-timestamp", FALSE, NULL);
-        g_print("Set do-timestamp=FALSE for %s source element (pure passthrough)\n", name);
-    }
+    // Preserve encoder PCR/PTS for every MPEG-TS network source. Applying the
+    // local arrival clock here turns SRT/UDP jitter into timestamp jitter and
+    // has caused decklinkvideosink ScheduleVideoFrame failures (E_FAIL).
+    // input-selector keyframe gating chooses the switch boundary; it does not
+    // require rewriting source buffer timestamps.
+    g_object_set(src, "do-timestamp", FALSE, NULL);
+    g_print("Set do-timestamp=FALSE for %s source element (preserve source timing)\n", name);
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
         g_signal_connect(src, "caller-connecting", G_CALLBACK(on_caller_connecting), (gpointer)name);
@@ -2232,12 +2573,25 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     cJSON *auto_join_json = cJSON_GetObjectItem(json, "auto_join");
     auto_join_enabled = auto_join_json ? cJSON_IsTrue(auto_join_json) : TRUE;
 
+    cJSON *seamless_sdi_json = cJSON_GetObjectItem(json, "seamless_sdi_failover");
+    seamless_sdi_enabled = seamless_sdi_json && cJSON_IsTrue(seamless_sdi_json);
+    if (seamless_sdi_enabled && !auto_join_enabled) {
+        g_printerr("Seamless SDI failover requires auto_join; forcing secondary warm\n");
+        auto_join_enabled = TRUE;
+    }
+
     // Keep primary/secondary slots stable. Elixir passes persisted logical
     // selection so later switch-source commands keep their meaning.
     cJSON *active_source_json = cJSON_GetObjectItem(json, "active_source");
     gboolean start_on_secondary =
         cJSON_IsString(active_source_json) &&
         g_strcmp0(active_source_json->valuestring, "secondary") == 0;
+
+    g_mutex_lock(&seamless_switch_mutex);
+    memset(source_ts_info, 0, sizeof(source_ts_info));
+    selected_source_index = start_on_secondary ? 1 : 0;
+    pending_source_index = -1;
+    g_mutex_unlock(&seamless_switch_mutex);
 
     pipeline = gst_pipeline_new("test-pipeline");
     tee = gst_element_factory_make("tee", "tee");
@@ -2250,7 +2604,7 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     g_object_set(tee, "allow-not-linked", TRUE, NULL);
     g_print("Set allow-not-linked=TRUE for tee element\n");
 
-    primary_source_element = make_source(source_obj, "source", sinks_array);
+    primary_source_element = make_source(source_obj, "source");
     if (!primary_source_element) {
         gst_object_unref(pipeline);
         gst_object_unref(tee);
@@ -2265,7 +2619,7 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         // DUAL-INGEST: primary + secondary → input-selector → tee
         // =================================================================
         selector_element = gst_element_factory_make("input-selector", "input-selector");
-        secondary_source_element = make_source(secondary_obj, "secondary_source", sinks_array);
+        secondary_source_element = make_source(secondary_obj, "secondary_source");
 
         if (!selector_element || !secondary_source_element) {
             g_printerr("Failed to create input-selector or secondary source for dual-ingest\n");
@@ -2275,8 +2629,10 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
             return NULL;
         }
 
-        // Disable inactive-stream synchronization. On GStreamer 1.24,
-        // sync-mode=0 means active-segment; it does not mean synchronization off.
+        // Keep inactive-stream synchronization disabled even in seamless mode:
+        // sync-streams can stall the active SRT input while its peer is absent.
+        // Preserve encoder PCR/PTS and let the seamless gate below switch only
+        // when the target reaches a compatible random-access frame.
         g_object_set(selector_element,
                      "sync-streams", FALSE,
                      "sync-mode", 0,
@@ -2304,6 +2660,14 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
 
         GstPad *primary_src_pad = gst_element_get_static_pad(primary_source_element, "src");
         GstPad *secondary_src_pad = gst_element_get_static_pad(secondary_source_element, "src");
+
+        if (seamless_sdi_enabled) {
+            gst_pad_add_probe(primary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                              source_ts_probe_callback, GINT_TO_POINTER(0), NULL);
+            gst_pad_add_probe(secondary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                              source_ts_probe_callback, GINT_TO_POINTER(1), NULL);
+        }
+
         if (gst_pad_link(primary_src_pad, primary_sink_pad) != GST_PAD_LINK_OK) {
             g_printerr("DUAL-INGEST: failed to link primary source → selector sink_0\n");
         }
@@ -2323,8 +2687,9 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         g_object_set(selector_element, "active-pad", initial_pad, NULL);
 
         g_print("DUAL-INGEST Pipeline: primary+secondary → input-selector → tee "
-                "(initial=%s)\n",
-                start_on_secondary ? "secondary" : "primary");
+                "(initial=%s, seamless-sdi=%s)\n",
+                start_on_secondary ? "secondary" : "primary",
+                seamless_sdi_enabled ? "enabled" : "disabled");
     } else {
         // =================================================================
         // SINGLE-SOURCE (legacy): source → tee
@@ -2898,6 +3263,18 @@ void cleanup_pipeline(GstElement *pipeline)
 
     gst_object_unref(pipeline);
 
+    selector_element = NULL;
+    primary_source_element = NULL;
+    secondary_source_element = NULL;
+    primary_sink_pad = NULL;
+    secondary_sink_pad = NULL;
+    dual_ingest_active = FALSE;
+    seamless_sdi_enabled = FALSE;
+    g_mutex_lock(&seamless_switch_mutex);
+    pending_source_index = -1;
+    memset(source_ts_info, 0, sizeof(source_ts_info));
+    g_mutex_unlock(&seamless_switch_mutex);
+
     if (loop) {
         g_main_loop_unref(loop);
         loop = NULL;
@@ -2962,6 +3339,34 @@ void switch_source(const char *target)
     }
 
     gboolean to_secondary = (g_strcmp0(target, "secondary") == 0);
+    gint target_index = to_secondary ? 1 : 0;
+
+    if (seamless_sdi_enabled) {
+        gboolean already_selected = FALSE;
+        gboolean incompatible = FALSE;
+
+        g_mutex_lock(&seamless_switch_mutex);
+        already_selected = selected_source_index == target_index;
+        if (!already_selected && source_descriptions_ready_unlocked() &&
+            !source_maps_compatible_unlocked()) {
+            incompatible = TRUE;
+            pending_source_index = -1;
+        } else if (!already_selected) {
+            pending_source_index = target_index;
+        }
+        g_mutex_unlock(&seamless_switch_mutex);
+
+        if (already_selected) {
+            g_print("SOURCE_SWITCHED:%s\n", to_secondary ? "secondary" : "primary");
+        } else if (incompatible) {
+            g_print("SOURCE_SWITCH_REJECTED:%s:incompatible-mpegts-map\n",
+                    to_secondary ? "secondary" : "primary");
+        } else {
+            g_print("SOURCE_SWITCH_PENDING:%s:waiting-for-keyframe\n",
+                    to_secondary ? "secondary" : "primary");
+        }
+        return;
+    }
 
     // Keep auto_join=false lifecycle atomic inside native code. Secondary must
     // be running before selector moves to it.

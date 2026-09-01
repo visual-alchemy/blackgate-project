@@ -59,4 +59,27 @@ defmodule Blackgate.RouteValidatorTest do
     assert {:error, errors} = RouteValidator.validate(route)
     assert "failover requires an SRT primary source" in errors
   end
+
+  test "accepts seamless SDI failover when both sources stay joined" do
+    route =
+      valid_route()
+      |> Map.put("auto_join", true)
+      |> Map.put("seamless_sdi_failover", true)
+
+    assert :ok = RouteValidator.validate(route)
+  end
+
+  test "rejects seamless SDI failover when auto_join is disabled" do
+    route = Map.put(valid_route(), "seamless_sdi_failover", true)
+
+    assert {:error, errors} = RouteValidator.validate(route)
+    assert "seamless SDI failover requires auto_join=true" in errors
+  end
+
+  test "rejects non-boolean seamless SDI setting" do
+    route = Map.put(valid_route(), "seamless_sdi_failover", "yes")
+
+    assert {:error, errors} = RouteValidator.validate(route)
+    assert "seamless_sdi_failover must be boolean" in errors
+  end
 end

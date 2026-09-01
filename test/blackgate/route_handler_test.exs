@@ -925,9 +925,34 @@ defmodule Blackgate.RouteHandlerTest do
       assert payload["secondary_source"]["uri"] =~ "secondary-host"
 
       assert payload["auto_join"] == true
+      assert payload["seamless_sdi_failover"] == false
       assert payload["active_source"] == "secondary"
       assert is_list(payload["sinks"])
       refute Map.has_key?(payload, "source")
+    end
+
+    test "send_initial_command enables seamless mode only for SDI routes" do
+      path =
+        Path.join(System.tmp_dir!(), "bg_init_sdi_#{System.unique_integer([:positive])}.json")
+
+      port = capture_port(path)
+
+      route =
+        failover_route_with_sinks()
+        |> Map.put("seamless_sdi_failover", true)
+        |> Map.put("destinations", [%{"schema" => "SDI", "schema_options" => %{}}])
+
+      assert :ok = RouteHandler.send_initial_command(port, route)
+      Port.close(port)
+
+      receive do
+        {^port, {:exit_status, _}} -> :ok
+      after
+        1_000 -> :ok
+      end
+
+      {:ok, payload} = path |> read_and_cleanup() |> String.trim() |> Jason.decode()
+      assert payload["seamless_sdi_failover"] == true
     end
 
     test "send_initial_command emits legacy source-only JSON for non-failover route" do
@@ -1059,7 +1084,10 @@ defmodule Blackgate.RouteHandlerTest do
     end
 
     test "acknowledged switch retries database persistence failure" do
-      :meck.expect(Blackgate.Db, :update_route, fn _id, _params -> {:error, :temporarily_unavailable} end)
+      :meck.expect(Blackgate.Db, :update_route, fn _id, _params ->
+        {:error, :temporarily_unavailable}
+      end)
+
       port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
 
       data =
@@ -1095,7 +1123,7 @@ defmodule Blackgate.RouteHandlerTest do
       Port.close(port)
     end
 
-    test "SDI route always uses kill/respawn switch path" do
+    test "SDI route uses kill/respawn switch path by default" do
       port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
 
       route =
@@ -1110,6 +1138,49 @@ defmodule Blackgate.RouteHandlerTest do
       assert is_nil(new_data.port)
       assert new_data.active_source == "secondary"
       assert new_data.pending_switch == "secondary"
+    end
+
+    test "seamless-enabled SDI route switches in-process and falls back on native rejection" do
+      path =
+        Path.join(System.tmp_dir!(), "bg_sdi_switch_#{System.unique_integer([:positive])}.json")
+
+      port = Port.open({:spawn, "cat > #{path}"}, [:binary, :exit_status])
+
+      route =
+        failover_route("maintain-primary")
+        |> Map.put("destinations", [%{"schema" => "SDI", "schema_options" => %{}}])
+        |> Map.put("seamless_sdi_failover", true)
+        |> Map.put("auto_join", true)
+
+      data = base_data(%{port: port, route: route})
+
+      assert {:keep_state, pending} =
+               RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
+
+      assert pending.port == port
+      assert pending.pending_switch == "secondary"
+
+      assert {:keep_state, rejected} =
+               RouteHandler.handle_event(
+                 :info,
+                 {port, {:data, "SOURCE_SWITCH_REJECTED:secondary:incompatible-mpegts-map\n"}},
+                 :started,
+                 pending
+               )
+
+      assert_receive {:restart_for_source_switch, "secondary"}
+
+      assert {:next_state, :reconnecting, restarting, _actions} =
+               RouteHandler.handle_event(
+                 :info,
+                 {:restart_for_source_switch, "secondary"},
+                 :started,
+                 rejected
+               )
+
+      assert is_nil(restarting.port)
+      assert restarting.active_source == "secondary"
+      File.rm(path)
     end
   end
 
