@@ -16,6 +16,7 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
           label="Schema"
           name={schemaName}
           required
+          rules={[{ required: true, message: 'Schema is required' }]}
         >
           <Radio.Group buttonStyle="solid">
             <Radio.Button value="SRT">SRT</Radio.Button>
@@ -34,6 +35,7 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                 label="Mode"
                 name={[...prefix, 'mode']}
                 required
+                rules={[{ required: true, message: 'SRT mode is required' }]}
                 extra="The SRT connection mode. Caller: Actively initiates the connection to a Listener. Listener: Waits for an incoming connection from a Caller. Rendezvous: Both endpoints attempt to connect to each other simultaneously"
               >
                 <Radio.Group buttonStyle="solid">
@@ -46,6 +48,8 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
               <Form.Item
                 label="Local Address"
                 name={[...prefix, 'localaddress']}
+                required
+                rules={[{ required: true, whitespace: true, message: 'SRT address is required' }]}
                 extra="The address to bind when mode is listener or rendezvous. This property can be set by URI parameters."
               >
                 <Input
@@ -62,6 +66,10 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                 required
                 tooltip="Port number (1-65535)"
                 rules={[
+                  {
+                    required: true,
+                    message: 'SRT port is required',
+                  },
                   {
                     type: 'number',
                     min: 1,
@@ -129,6 +137,11 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                         label="Passphrase"
                         name={[...prefix, 'passphrase']}
                         required
+                        rules={[
+                          { required: true, message: 'Passphrase is required' },
+                          { min: 10, message: 'Passphrase must contain at least 10 characters' },
+                          { max: 79, message: 'Passphrase must contain at most 79 characters' },
+                        ]}
                         extra="Encryption passphrase for SRT authentication"
                       >
                         <Input.Password placeholder="Enter passphrase" />
@@ -138,6 +151,7 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                         label="Key Length"
                         name={[...prefix, 'pbkeylen']}
                         required
+                        rules={[{ required: true, message: 'Key length is required' }]}
                         extra="Encryption key length for SRT authentication"
                       >
                         <Select

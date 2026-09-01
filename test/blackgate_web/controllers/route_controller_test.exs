@@ -179,7 +179,7 @@ defmodule BlackgateWeb.RouteControllerSwitchSourceTest do
     }
   end
 
-  test "switch-source with valid target returns 200 and switched status" do
+  test "switch-source with valid target returns 202 and switching status" do
     :meck.expect(Blackgate.Db, :get_route, fn @route_id, _ -> {:ok, failover_route()} end)
     :meck.expect(Blackgate, :switch_route_source, fn @route_id, "secondary" -> :ok end)
 
@@ -187,9 +187,9 @@ defmodule BlackgateWeb.RouteControllerSwitchSourceTest do
       auth_conn()
       |> post("/api/routes/#{@route_id}/switch-source", %{target: "secondary"})
 
-    assert json_response(conn, 200)["data"] == %{
-             "status" => "switched",
-             "active_source" => "secondary"
+    assert json_response(conn, 202)["data"] == %{
+             "status" => "switching",
+             "requested_source" => "secondary"
            }
 
     assert :meck.num_calls(Blackgate, :switch_route_source, [@route_id, "secondary"]) == 1

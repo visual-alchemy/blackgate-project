@@ -2,6 +2,7 @@ defmodule BlackgateWeb.RouteController do
   use BlackgateWeb, :controller
 
   alias Blackgate.Db
+  alias Blackgate.RouteValidator
 
   action_fallback BlackgateWeb.FallbackController
 
@@ -48,10 +49,16 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def create(conn, %{"route" => route_params}) do
-    with {:ok, route} <- Db.create_route(route_params) do
-      conn
-      |> put_status(:created)
-      |> data(route)
+    case RouteValidator.validate(route_params) do
+      :ok ->
+        with {:ok, route} <- Db.create_route(route_params) do
+          conn
+          |> put_status(:created)
+          |> data(route)
+        end
+
+      {:error, errors} ->
+        validation_error(conn, errors)
     end
   end
 
@@ -75,13 +82,22 @@ defmodule BlackgateWeb.RouteController do
   def update(conn, %{"id" => id, "route" => route_params}) do
     was_running = route_is_running?(id)
 
-    with {:ok, route} <- Db.update_route(id, route_params) do
-      if was_running do
-        Blackgate.restart_route(id)
-      end
-
+    with {:ok, existing_route} <- Db.get_route(id, true),
+         merged_route when is_map(merged_route) <- Map.merge(existing_route || %{}, route_params),
+         :ok <- RouteValidator.validate(merged_route),
+         {:ok, route} <- Db.update_route(id, route_params) do
+      if was_running, do: Blackgate.restart_route(id)
       data(conn, Map.put(route, "restarted", was_running))
+    else
+      {:error, errors} when is_list(errors) -> validation_error(conn, errors)
+      error -> error
     end
+  end
+
+  defp validation_error(conn, errors) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "Invalid route configuration", details: errors})
   end
 
   def delete(conn, %{"id" => id}) do
@@ -154,8 +170,8 @@ defmodule BlackgateWeb.RouteController do
           case Blackgate.switch_route_source(route_id, target) do
             :ok ->
               conn
-              |> put_status(:ok)
-              |> data(%{status: "switched", active_source: target})
+              |> put_status(:accepted)
+              |> data(%{status: "switching", requested_source: target})
 
             {:error, reason} ->
               conn

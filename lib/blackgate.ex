@@ -52,9 +52,9 @@ defmodule Blackgate do
   @doc """
   Manually switches a running route's active SRT source to `target`.
 
-  The route's `RouteHandler` gen_statem receives a `{:switch_source, target}` cast,
-  persists the new `active_source`, and restarts the pipeline against the chosen
-  source. Returns `:ok` as soon as the cast is dispatched.
+  RouteHandler dispatches native switch or restart work. Persisted
+  `active_source` changes only after native acknowledgement or successful
+  replacement-pipeline startup. Returns `:ok` when request is accepted.
   """
   @spec switch_route_source(String.t(), String.t()) :: :ok | {:error, term()}
   def switch_route_source(id, target) do
@@ -73,7 +73,6 @@ defmodule Blackgate do
           Logger.error("RouteHandler: pid not found for route #{id}")
           {:error, :handler_not_found}
         else
-          _ = Db.update_route(id, %{"active_source" => target})
           :gen_statem.cast(handler_pid, {:switch_source, target})
         end
 

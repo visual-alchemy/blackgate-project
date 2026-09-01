@@ -74,7 +74,21 @@ export const authFetch = async (url, options = {}) => {
       removeToken();
       removeUser();
       window.location.href = '/#/login';
-      return Promise.reject('Authentication error');
+      throw new Error('Authentication error');
+    }
+
+    if (!response.ok) {
+      let message = `Request failed with status ${response.status}`;
+      try {
+        const body = await response.clone().json();
+        if (typeof body?.error === 'string' && body.error.length > 0) {
+          message = body.error;
+        }
+      } catch {
+        // Response body is not JSON. Preserve status-only error.
+      }
+
+      throw new Error(message);
     }
     
     return response;
@@ -118,4 +132,4 @@ export const logout = () => {
   removeToken();
   removeUser();
   window.location.href = '/#/login';
-}; 
+};

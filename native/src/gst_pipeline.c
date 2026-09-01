@@ -960,7 +960,6 @@ static void send_json_to_socket(cJSON *root)
     char *json_str = cJSON_PrintUnformatted(root);
     if (json_str) {
         send_message_to_unix_socket(json_str);
-        send_message_to_unix_socket("\n");
         free(json_str);
     }
 }
@@ -1300,9 +1299,7 @@ static void collect_sink_stats(void)
         char *json_str = cJSON_PrintUnformatted(root);
         if (json_str) {
             // Send with sink prefix so Elixir can distinguish from source stats
-            send_message_to_unix_socket("stats_sink:");
-            send_message_to_unix_socket(json_str);
-            send_message_to_unix_socket("\n"); // Newline separator
+            send_prefixed_message_to_unix_socket("stats_sink:", json_str);
             free(json_str);
         }
 
@@ -1337,7 +1334,6 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
                 char *json_str = cJSON_PrintUnformatted(root);
                 if (json_str) {
                     send_message_to_unix_socket(json_str);
-                    send_message_to_unix_socket("\n");
                     free(json_str);
                 }
                 cJSON_Delete(root);
@@ -1380,7 +1376,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
         case GST_MESSAGE_ELEMENT: {
             const GstStructure *s = gst_message_get_structure(msg);
             if (s && gst_structure_has_name(s, "GstSRTObject")) {
-                g_print("SRT Event: %s\n", gst_structure_to_string(s));
+                g_print("SRT event received\n");
             } else if (s && gst_structure_has_name(s, "connection-removed")) {
                 GstObject *src_obj = GST_MESSAGE_SRC(msg);
                 const gchar *oname = src_obj ? GST_OBJECT_NAME(src_obj) : "";
@@ -1395,9 +1391,10 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
     return TRUE;
 }
 
-static void on_caller_connecting(GstElement *element, GSocketAddress *addr, const gchar *stream_id,
-                                 gboolean *authenticated, gpointer user_data)
+static gboolean on_caller_connecting(GstElement *element, GSocketAddress *addr,
+                                     const gchar *stream_id, gpointer user_data)
 {
+    (void)element;
     const char *name = (const char *)user_data;
 
     gchar *addr_str = NULL;
@@ -1410,15 +1407,11 @@ static void on_caller_connecting(GstElement *element, GSocketAddress *addr, cons
         g_free(ip);
     }
 
-    g_print("New SRT caller connection to %s from %s (stream_id: %s)\n",
+    g_print("New SRT caller connection to %s from %s (stream ID: %s)\n",
             name ? name : "source",
             addr_str ? addr_str : "unknown",
-            stream_id ? stream_id : "none");
+            stream_id ? "present" : "none");
     g_free(addr_str);
-
-    if (authenticated) {
-        *authenticated = TRUE;
-    }
 
     // Attribute the connection to primary or secondary source for health tracking.
     if (name && g_strcmp0(name, "secondary_source") == 0)
@@ -1427,9 +1420,10 @@ static void on_caller_connecting(GstElement *element, GSocketAddress *addr, cons
         g_print("SOURCE_VALID:primary\n");
 
     if (stream_id) {
-        send_message_to_unix_socket("stats_source_stream_id:");
-        send_message_to_unix_socket(stream_id);
+        send_prefixed_message_to_unix_socket("stats_source_stream_id:", stream_id);
     }
+
+    return TRUE;
 }
 
 static void set_srt_mode_property(GstElement *element, const char *mode_str, const char *element_desc)
@@ -1488,7 +1482,14 @@ static void set_element_properties(GstElement *element, cJSON *config, const cha
             g_print("Set %s=%d for %s element\n", property->string, property->valueint, element_type);
         } else if (cJSON_IsString(property)) {
             g_object_set(element, property->string, property->valuestring, NULL);
-            g_print("Set %s=%s for %s element\n", property->string, property->valuestring, element_type);
+            if (strcmp(property->string, "uri") == 0 ||
+                strcmp(property->string, "passphrase") == 0 ||
+                strcmp(property->string, "streamid") == 0) {
+                g_print("Set %s=<redacted> for %s element\n", property->string, element_type);
+            } else {
+                g_print("Set %s=%s for %s element\n", property->string, property->valuestring,
+                        element_type);
+            }
         }
     }
 }
@@ -2231,6 +2232,13 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     cJSON *auto_join_json = cJSON_GetObjectItem(json, "auto_join");
     auto_join_enabled = auto_join_json ? cJSON_IsTrue(auto_join_json) : TRUE;
 
+    // Keep primary/secondary slots stable. Elixir passes persisted logical
+    // selection so later switch-source commands keep their meaning.
+    cJSON *active_source_json = cJSON_GetObjectItem(json, "active_source");
+    gboolean start_on_secondary =
+        cJSON_IsString(active_source_json) &&
+        g_strcmp0(active_source_json->valuestring, "secondary") == 0;
+
     pipeline = gst_pipeline_new("test-pipeline");
     tee = gst_element_factory_make("tee", "tee");
 
@@ -2267,8 +2275,10 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
             return NULL;
         }
 
-        // sync-mode=0 (SYNC_NONE): prevents idle secondary pad from stalling primary SRT listener buffer.
+        // Disable inactive-stream synchronization. On GStreamer 1.24,
+        // sync-mode=0 means active-segment; it does not mean synchronization off.
         g_object_set(selector_element,
+                     "sync-streams", FALSE,
                      "sync-mode", 0,
                      "cache-buffers", TRUE,
                      "drop-backwards", TRUE,
@@ -2309,14 +2319,12 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
             return NULL;
         }
 
-        // active-pad takes GstPad*, not string — fetch sink_0 explicitly.
-        GstPad *active_pad = gst_element_get_static_pad(selector_element, "sink_0");
-        if (active_pad) {
-            g_object_set(selector_element, "active-pad", active_pad, NULL);
-            gst_object_unref(active_pad);
-        }
+        GstPad *initial_pad = start_on_secondary ? secondary_sink_pad : primary_sink_pad;
+        g_object_set(selector_element, "active-pad", initial_pad, NULL);
 
-        g_print("DUAL-INGEST Pipeline: primary+secondary → input-selector → tee\n");
+        g_print("DUAL-INGEST Pipeline: primary+secondary → input-selector → tee "
+                "(initial=%s)\n",
+                start_on_secondary ? "secondary" : "primary");
     } else {
         // =================================================================
         // SINGLE-SOURCE (legacy): source → tee
@@ -2396,7 +2404,9 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
 
     // auto_join=false: hold secondary at NULL so it does not connect until T3
     // explicitly raises it via join_secondary(). Primary still plays.
-    if (dual_ingest_active && !auto_join_enabled && secondary_source_element) {
+    if (dual_ingest_active && !auto_join_enabled && secondary_source_element &&
+        !start_on_secondary) {
+        gst_element_set_locked_state(secondary_source_element, TRUE);
         gst_element_set_state(secondary_source_element, GST_STATE_NULL);
         g_print("DUAL-INGEST: secondary held at NULL (auto_join=false)\n");
     }
@@ -2906,7 +2916,7 @@ void handle_command_line(const char *line)
 
     cJSON *cmd = cJSON_Parse(line);
     if (!cmd) {
-        g_printerr("Bad command JSON: %s\n", line);
+        g_printerr("Bad command JSON\n");
         return;
     }
 
@@ -2952,6 +2962,13 @@ void switch_source(const char *target)
     }
 
     gboolean to_secondary = (g_strcmp0(target, "secondary") == 0);
+
+    // Keep auto_join=false lifecycle atomic inside native code. Secondary must
+    // be running before selector moves to it.
+    if (to_secondary && !auto_join_enabled) {
+        join_secondary();
+    }
+
     GstPad *pad = (to_secondary && secondary_sink_pad) ? secondary_sink_pad
                                                         : primary_sink_pad;
     if (!pad) {
@@ -2961,6 +2978,11 @@ void switch_source(const char *target)
 
     g_object_set(selector_element, "active-pad", pad, NULL);
     g_print("SOURCE_SWITCHED:%s\n", to_secondary ? "secondary" : "primary");
+
+    // Move selector to primary before stopping secondary.
+    if (!to_secondary && !auto_join_enabled) {
+        leave_secondary();
+    }
 
     // sdi_rebuild_worker() (SDI branch teardown+rebuild) is implemented but
     // intentionally NOT wired: it stalls and has segfaulted under live streams
@@ -2973,7 +2995,11 @@ void join_secondary(void)
     if (!dual_ingest_active || !secondary_source_element) {
         return;
     }
-    gst_element_set_state(secondary_source_element, GST_STATE_PLAYING);
+    gst_element_set_locked_state(secondary_source_element, FALSE);
+    if (!gst_element_sync_state_with_parent(secondary_source_element)) {
+        g_printerr("join_secondary: failed to synchronize secondary with parent\n");
+        return;
+    }
     g_print("SECONDARY_JOINED\n");
 }
 
@@ -2982,6 +3008,7 @@ void leave_secondary(void)
     if (!dual_ingest_active || !secondary_source_element) {
         return;
     }
+    gst_element_set_locked_state(secondary_source_element, TRUE);
     gst_element_set_state(secondary_source_element, GST_STATE_NULL);
     g_print("SECONDARY_LEFT\n");
 }

@@ -68,11 +68,36 @@ const RouteItem = () => {
     fetchRouteData();
   }, [id]);
 
+  // Automatic failover changes persisted route state outside this page. Poll
+  // route metadata while failover is running so active-source badges follow
+  // native acknowledgements without requiring manual refresh.
+  useEffect(() => {
+    const routeStatus = routeData?.status?.toLowerCase();
+    const failoverRunning =
+      routeData?.failover_enabled && ['started', 'reconnecting'].includes(routeStatus);
+
+    if (!failoverRunning) return undefined;
+
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const result = await routesApi.getById(id);
+        if (!cancelled) setRouteData(result.data);
+      } catch (error) {
+        console.error('Failed to refresh failover route state:', error);
+      }
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [id, routeData?.failover_enabled, routeData?.status]);
+
   const fetchRouteData = async () => {
     try {
       const result = await routesApi.getById(id);
       setRouteData(result.data);
-      console.log("Route data:", result.data);
     } catch (error) {
       messageApi.error(`Failed to fetch route data: ${error.message}`);
       console.error('Error:', error);
@@ -313,7 +338,7 @@ const RouteItem = () => {
     const target = (routeData.active_source || 'primary') === 'primary' ? 'secondary' : 'primary';
     try {
       await routesApi.switchSource(id, target);
-      messageApi.success(`Switched source to ${target}`);
+      messageApi.success(`Source switch to ${target} requested`);
       fetchRouteData();
     } catch (error) {
       messageApi.error(`Failed to switch source: ${error.message}`);

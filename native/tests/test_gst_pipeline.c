@@ -1,8 +1,8 @@
 #include <assert.h>
 #include <cJSON.h>
-#include <cmocka.h>
 #include <setjmp.h>
 #include <stdarg.h>
+#include <cmocka.h>
 #include <stdlib.h>
 #include <string.h>
 

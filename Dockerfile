@@ -78,7 +78,6 @@ ENV MIX_REBAR3="/usr/bin/rebar3"
 
 # Copy mix dependencies
 COPY mix.exs mix.lock ./
-COPY deps deps
 # Install hex from GitHub source (bypasses builds.hex.pm DNS and matches OTP 27)
 RUN mix archive.install github hexpm/hex branch latest --force
 RUN mkdir config
@@ -87,6 +86,7 @@ RUN mkdir config
 # to ensure any relevant config change will trigger the dependencies
 # to be re-compiled.
 COPY config/config.exs config/${MIX_ENV}.exs config/
+RUN mix deps.get --only ${MIX_ENV}
 RUN mix deps.compile
 
 # Copy the rest of the application code
@@ -176,4 +176,4 @@ RUN sed -i 's/\r$//' run.sh && chmod +x run.sh && \
 
 # Set the entrypoint
 ENTRYPOINT ["/usr/bin/tini", "-s", "-g", "--", "/app/run.sh"]
-CMD ["/app/bin/server"] 
+CMD ["/app/bin/server"]

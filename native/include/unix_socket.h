@@ -8,6 +8,7 @@ extern int sock;
 
 void init_unix_socket(const char *socket_path);
 void send_message_to_unix_socket(const char *message);
+void send_prefixed_message_to_unix_socket(const char *prefix, const char *message);
 void cleanup_socket(void);
 
 #endif

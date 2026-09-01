@@ -22,6 +22,7 @@ defmodule Blackgate.RouteHandler do
   @watchdog_stall_threshold_ms 60_000
   # Don't check for first 30 seconds after start
   @watchdog_grace_period_ms 30_000
+  @switch_ack_timeout_ms 5_000
 
   # SDI audio desync auto-recovery (RTMP/HTTP/HLS only)
   # Minimum total audio buffers before we treat a silence event as a hardware desync.
@@ -38,9 +39,10 @@ defmodule Blackgate.RouteHandler do
   @impl true
   def init(args) do
     Process.flag(:trap_exit, true)
-    Logger.info("RouteHandler: init: #{inspect(args)}")
+    Logger.info("RouteHandler: init route #{args.id}")
 
     {:ok, route} = Db.get_route(args.id, true)
+    active_source = active_source_from_route(route)
 
     data = %{
       id: args.id,
@@ -58,7 +60,10 @@ defmodule Blackgate.RouteHandler do
       # Tracks last time we auto-restarted due to SDI audio desync.
       # Used to enforce a cooldown and prevent restart loops.
       sdi_audio_last_restart_at: nil,
-      active_source: "primary",
+      active_source: active_source,
+      pending_switch: nil,
+      pending_switch_token: nil,
+      pipeline_output_buffer: <<>>,
       failover_switched: false,
       source_health: %{primary: :unknown, secondary: :unknown},
       auto_join: Map.get(route, "auto_join", true),
@@ -78,7 +83,8 @@ defmodule Blackgate.RouteHandler do
   @impl true
   def handle_event(:internal, :start, _state, data) do
     # For RTMP/HTTP/HLS sources, spawn ffmpeg sidecar to convert to SRT
-    {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(data.route)
+    active_route = active_route_for_pipeline(data)
+    {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(active_route)
 
     port = start_native_pipeline(route_for_pipeline)
     Logger.info("RouteHandler: Started port: #{inspect(port)}")
@@ -95,19 +101,19 @@ defmodule Blackgate.RouteHandler do
 
         now = System.monotonic_time(:millisecond)
 
-            {:next_state, :started,
-             %{
-               data
-               | port: port,
-                 ffmpeg_port: ffmpeg_port,
-                 started_at: now,
-                 last_bytes_changed_at: now,
-                 last_sdi_frames_changed_at: now,
-                 last_sdi_frames: %{},
-                 consecutive_startup_crashes: 0,
-                 sdi_audio_last_restart_at: nil,
-                 failover_switched: false
-             }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+        {:next_state, :started,
+         %{
+           data
+           | port: port,
+             ffmpeg_port: ffmpeg_port,
+             started_at: now,
+             last_bytes_changed_at: now,
+             last_sdi_frames_changed_at: now,
+             last_sdi_frames: %{},
+             consecutive_startup_crashes: 0,
+             sdi_audio_last_restart_at: nil,
+             failover_switched: false
+         }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
@@ -153,13 +159,45 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  def handle_event(:info, {_port, {:data, info}}, state, data) do
+  def handle_event(:info, {port, {:data, {:noeol, fragment}}}, _state, %{port: port} = data)
+      when is_binary(fragment) do
+    if Port.info(port) != nil do
+      buffer = Map.get(data, :pipeline_output_buffer, <<>>)
+      {:keep_state, Map.put(data, :pipeline_output_buffer, buffer <> fragment)}
+    else
+      :keep_state_and_data
+    end
+  end
+
+  def handle_event(:info, {port, {:data, {:eol, fragment}}}, state, %{port: port} = data)
+      when is_binary(fragment) do
+    buffer = Map.get(data, :pipeline_output_buffer, <<>>)
+    data = Map.put(data, :pipeline_output_buffer, <<>>)
+    handle_event(:info, {port, {:data, buffer <> fragment}}, state, data)
+  end
+
+  def handle_event(:info, {port, {:data, info}}, state, %{port: port} = data) do
     # Process each line from the C pipeline stdout and check for actionable events.
     # Returns updated data if SDI audio desync recovery fires, otherwise keeps state.
     new_data =
       String.split(info, "\n")
       |> Enum.reduce(data, fn line, acc ->
-        Logger.warning("RouteHandler: pipeline: #{line}")
+        Logger.debug("RouteHandler: pipeline: #{sanitize_pipeline_log(line)}")
+
+        acc =
+          if String.starts_with?(line, "SOURCE_SWITCHED:") do
+            [_, target] = String.split(line, "SOURCE_SWITCHED:", parts: 2)
+            acknowledge_switch(acc, String.trim(target))
+          else
+            acc
+          end
+
+        acc =
+          if String.trim(line) == "PIPELINE_READY" do
+            acknowledge_pending_switch(acc)
+          else
+            acc
+          end
 
         # Detect SDI graceful failure from C pipeline output
         if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
@@ -175,7 +213,10 @@ defmodule Blackgate.RouteHandler do
           if String.starts_with?(line, "SOURCE_INVALID:") do
             [_, rest] = String.split(line, "SOURCE_INVALID:", parts: 2)
             tag_src = rest |> String.trim() |> String.split(" ") |> hd()
-            tag = if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
+
+            tag =
+              if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
+
             new_acc = put_in(acc, [:source_health, tag], :invalid)
 
             if dual_ingest_eligible?(new_acc.route) and is_port(new_acc.port) do
@@ -192,7 +233,10 @@ defmodule Blackgate.RouteHandler do
           if String.starts_with?(line, "SOURCE_VALID:") do
             [_, rest] = String.split(line, "SOURCE_VALID:", parts: 2)
             tag_src = rest |> String.trim() |> String.split(" ") |> hd()
-            tag = if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
+
+            tag =
+              if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
+
             put_in(acc, [:source_health, tag], :valid)
           else
             acc
@@ -237,6 +281,11 @@ defmodule Blackgate.RouteHandler do
     else
       {:keep_state, new_data}
     end
+  end
+
+  # Ignore delayed output from a Port that has already been replaced.
+  def handle_event(:info, {port, {:data, _info}}, _state, _data) when is_port(port) do
+    :keep_state_and_data
   end
 
   # Watchdog: check if data is still flowing
@@ -417,7 +466,13 @@ defmodule Blackgate.RouteHandler do
           {:stop, :normal,
            %{data | port: nil, ffmpeg_port: nil, consecutive_startup_crashes: consecutive}}
         else
-          trigger_restart(%{data | consecutive_startup_crashes: consecutive})
+          cleared = %{data | port: nil, consecutive_startup_crashes: consecutive}
+
+          if is_binary(data.pending_switch) do
+            enter_reconnecting(%{cleared | active_source: data.pending_switch}, 250)
+          else
+            trigger_restart(cleared)
+          end
         end
 
       port == data.ffmpeg_port ->
@@ -427,8 +482,8 @@ defmodule Blackgate.RouteHandler do
         )
 
         # Kill the pipeline too since it depends on ffmpeg
-        if data.port && is_port(data.port), do: close_port(data.port)
-        trigger_restart(data)
+        if port_open?(data.port), do: close_port(data.port)
+        trigger_restart(%{data | port: nil, ffmpeg_port: nil})
 
       true ->
         :keep_state_and_data
@@ -445,8 +500,6 @@ defmodule Blackgate.RouteHandler do
           # One-shot fallback: primary would not reconnect within the timeout
           # window, so switch to the configured secondary source once and give
           # it a fresh reconnect window. failover_switched prevents repeat hops.
-          _ = Db.update_route(data.id, %{"active_source" => "secondary"})
-
           Blackgate.EventLog.log(
             :warning,
             "failover_primary_timeout",
@@ -462,6 +515,8 @@ defmodule Blackgate.RouteHandler do
            %{
              data
              | active_source: "secondary",
+               pending_switch: "secondary",
+               pending_switch_token: nil,
                failover_switched: true,
                reconnect_started_at: System.monotonic_time(:millisecond),
                reconnect_count: 0
@@ -518,23 +573,25 @@ defmodule Blackgate.RouteHandler do
 
             now = System.monotonic_time(:millisecond)
 
-            {:next_state, :started,
-              %{
-                data
-                | route: fresh_route,
-                  port: port,
-                  ffmpeg_port: ffmpeg_port,
-                  reconnect_started_at: nil,
-                  reconnect_count: 0,
-                  started_at: now,
-                  last_bytes_changed_at: now,
-                  last_sdi_frames_changed_at: now,
-                  last_sdi_frames: %{},
-                  last_bytes_received: 0,
-                  consecutive_startup_crashes: 0,
-                  sdi_audio_last_restart_at: nil,
-                  failover_switched: false
-              }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+            started_data = %{
+              data
+              | route: fresh_route,
+                port: port,
+                ffmpeg_port: ffmpeg_port,
+                reconnect_started_at: nil,
+                reconnect_count: 0,
+                started_at: now,
+                last_bytes_changed_at: now,
+                last_sdi_frames_changed_at: now,
+                last_sdi_frames: %{},
+                last_bytes_received: 0,
+                consecutive_startup_crashes: 0,
+                sdi_audio_last_restart_at: nil,
+                failover_switched: data.failover_switched
+            }
+
+            {:next_state, :started, started_data,
+             {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
           {:error, _reason} ->
             if ffmpeg_port, do: close_port(ffmpeg_port)
@@ -606,7 +663,7 @@ defmodule Blackgate.RouteHandler do
   end
 
   # Ignore port messages during reconnecting state
-  def handle_event(:info, {_port, _msg}, :reconnecting, _data) do
+  def handle_event(:info, _content, :reconnecting, _data) do
     :keep_state_and_data
   end
 
@@ -623,12 +680,86 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # Automatic failover for SDI or any route unsafe for raw in-process TS
+  # switching. Selector never flips; new pipeline starts on requested source.
+  def handle_event(
+        :info,
+        {:restart_for_source_switch, target},
+        :started,
+        %{pending_switch: target} = data
+      ) do
+    if port_open?(data.port), do: close_port(data.port)
+    if port_open?(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+
+    enter_reconnecting(
+      %{
+        data
+        | active_source: target,
+          pending_switch_token: nil,
+          port: nil,
+          ffmpeg_port: nil
+      },
+      250
+    )
+  end
+
+  def handle_event(:info, {:restart_for_source_switch, _target}, _state, _data) do
+    :keep_state_and_data
+  end
+
+  # Native accepted stdin but emitted no switch acknowledgement. Fall back to
+  # restart-based selection instead of leaving route permanently pending.
+  def handle_event(
+        :info,
+        {:switch_ack_timeout, target, token},
+        :started,
+        %{pending_switch: target, pending_switch_token: token} = data
+      )
+      when data.active_source != target do
+    Logger.warning(
+      "RouteHandler: native source switch acknowledgement timed out; restarting on #{target}"
+    )
+
+    if port_open?(data.port), do: close_port(data.port)
+    if port_open?(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+
+    enter_reconnecting(
+      %{
+        data
+        | active_source: target,
+          pending_switch_token: nil,
+          port: nil,
+          ffmpeg_port: nil
+      },
+      250
+    )
+  end
+
+  def handle_event(:info, {:switch_ack_timeout, _target, _token}, _state, _data) do
+    :keep_state_and_data
+  end
+
+  # Persistence failures after a native acknowledgement retry without changing
+  # actual selection. A newer operator request supersedes stale retry messages.
+  def handle_event(
+        :info,
+        {:persist_acknowledged_switch, target},
+        _state,
+        %{pending_switch: target} = data
+      ) do
+    {:keep_state, acknowledge_switch(data, target)}
+  end
+
+  def handle_event(:info, {:persist_acknowledged_switch, _target}, _state, _data) do
+    :keep_state_and_data
+  end
+
   # Manual source switch requested by the operator via the REST API
   # (POST /api/routes/:route_id/switch-source).
   #
-  # Dual-ingest SRT routes switch in-process: the C pipeline's dual-srtsrc bin
-  # receives a "switch-source" command over its stdin channel and re-points its
-  # ghost pad without tearing the pipeline down. This preserves all downstream
+  # Dual-ingest SRT routes switch in-process: the C pipeline receives a
+  # "switch-source" command over stdin and selects the requested input pad
+  # without tearing the pipeline down. This preserves all downstream
   # SRT connections (no reconnect storm) and is the whole point of dual-ingest.
   #
   # Routes with SDI destinations are excluded: flipping the selector between
@@ -637,43 +768,43 @@ defmodule Blackgate.RouteHandler do
   # comes back correct on the new source.
   #
   # Non-dual-ingest routes (no failover, non-SRT secondary) or routes whose
-  # pipeline port is not live also fall back to the legacy path: close the
-  # ports, persist the choice, and re-enter the reconnect loop.
+  # pipeline port is not live also fall back to the restart path. Selection is
+  # persisted only after replacement pipeline startup succeeds.
   def handle_event(:cast, {:switch_source, target}, _state, data)
       when target in ["primary", "secondary"] do
     Logger.info("RouteHandler: source switch -> #{target} for route #{data.id}")
 
-    if dual_ingest_eligible?(data.route) and not route_has_sdi_destination?(data.route) and
-         is_port(data.port) do
-      maybe_join_or_leave_for_auto_join(data, target)
+    if in_process_switch_allowed?(data) do
+      command_sent =
+        Port.command(
+          data.port,
+          Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
+        )
 
-      Port.command(
-        data.port,
-        Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
-      )
+      if command_sent do
+        token = make_ref()
+        Process.send_after(self(), {:switch_ack_timeout, target, token}, @switch_ack_timeout_ms)
 
-      _ = Db.update_route(data.id, %{"active_source" => target})
+        Blackgate.EventLog.log(
+          :info,
+          "failover_inprocess_switch",
+          "Requested active source #{target} (in-process)",
+          %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+        )
 
-      Blackgate.EventLog.log(
-        :info,
-        "failover_inprocess_switch",
-        "Switched active source to #{target} (in-process)",
-        %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
-      )
-
-      updated_route = Map.put(data.route, "active_source", target)
-
-      {:keep_state,
-       %{
-         data
-         | active_source: target,
-           route: updated_route,
-           failover_switched: true,
-           consecutive_startup_crashes: 0
-       }}
+        {:keep_state,
+         %{
+           data
+           | pending_switch: target,
+             pending_switch_token: token,
+             failover_switched: true,
+             consecutive_startup_crashes: 0
+         }}
+      else
+        Logger.error("RouteHandler: native port rejected source switch command")
+        :keep_state_and_data
+      end
     else
-      _ = Db.update_route(data.id, %{"active_source" => target})
-
       Blackgate.EventLog.log(
         :info,
         "failover_manual_switch",
@@ -681,16 +812,17 @@ defmodule Blackgate.RouteHandler do
         %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
       )
 
-      if data.port && is_port(data.port), do: close_port(data.port)
+      if port_open?(data.port), do: close_port(data.port)
 
-      if data.ffmpeg_port && is_port(data.ffmpeg_port),
+      if port_open?(data.ffmpeg_port),
         do: close_port(data.ffmpeg_port)
 
       enter_reconnecting(
         %{
           data
           | active_source: target,
-            route: Map.put(data.route, "active_source", target),
+            pending_switch: target,
+            pending_switch_token: nil,
             port: nil,
             ffmpeg_port: nil,
             failover_switched: false,
@@ -709,8 +841,8 @@ defmodule Blackgate.RouteHandler do
 
   def handle_event(type, content, state, data) do
     Logger.error(
-      "RouteHandler: Undefined msg: #{inspect([{"type", type}, {"content", content}, {"state", state}, {"data", data}],
-      pretty: true)}"
+      "RouteHandler: Undefined msg type=#{inspect(type)} state=#{inspect(state)} " <>
+        "route_id=#{data.id} content=#{inspect(sanitize_log_content(content))}"
     )
 
     :keep_state_and_data
@@ -750,21 +882,59 @@ defmodule Blackgate.RouteHandler do
       end
   end
 
-  # When auto_join is false, the C pipeline did not join the secondary at
-  # startup. On an in-process switch we must tell it to join (switch to
-  # secondary) or leave (switch back to primary) explicitly. When auto_join is
-  # true, both sources are already live and only the switch-source command is
-  # needed.
-  defp maybe_join_or_leave_for_auto_join(data, target) do
-    if data.auto_join == false do
-      cmd =
-        case target do
-          "secondary" -> %{"command" => "join-secondary"}
-          "primary" -> %{"command" => "leave-secondary"}
-        end
+  defp port_open?(port) when is_port(port), do: Port.info(port) != nil
+  defp port_open?(_port), do: false
 
-      Port.command(data.port, Jason.encode!(cmd) <> "\n")
+  defp in_process_switch_allowed?(data) do
+    dual_ingest_eligible?(data.route) and
+      not route_has_sdi_destination?(data.route) and
+      port_open?(data.port)
+  end
+
+  defp acknowledge_pending_switch(%{pending_switch: target} = data) when is_binary(target) do
+    acknowledge_switch(data, target)
+  end
+
+  defp acknowledge_pending_switch(data), do: data
+
+  defp acknowledge_switch(%{pending_switch: target} = data, target)
+       when target in ["primary", "secondary"] do
+    updated_route = Map.put(data.route, "active_source", target)
+
+    case Db.update_route(data.id, %{"active_source" => target}) do
+      {:ok, _route} ->
+        Blackgate.EventLog.log(
+          :info,
+          "failover_switch_acknowledged",
+          "Native pipeline acknowledged source switch to #{target}",
+          %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+        )
+
+        %{
+          data
+          | active_source: target,
+            route: updated_route,
+            pending_switch: nil,
+            pending_switch_token: nil
+        }
+
+      error ->
+        Logger.error(
+          "RouteHandler: failed to persist acknowledged active source: #{inspect(error)}"
+        )
+
+        Process.send_after(self(), {:persist_acknowledged_switch, target}, 1_000)
+
+        %{data | active_source: target, route: updated_route, pending_switch_token: nil}
     end
+  end
+
+  defp acknowledge_switch(data, target) do
+    Logger.warning(
+      "RouteHandler: ignored unexpected source-switch acknowledgement #{inspect(target)}"
+    )
+
+    data
   end
 
   @doc false
@@ -780,27 +950,34 @@ defmodule Blackgate.RouteHandler do
     overlay_secondary_source(route, active_source)
   end
 
-  # Swaps primary/secondary so a pipeline born on "secondary" dials the
-  # secondary feed as its primary slot and keeps the original primary as the
-  # secondary slot — both feeds stay connected and later switches (in-process
-  # or respawn) land on the right source instead of double-dialing one feed.
-  defp overlay_secondary_source(route, "secondary") do
+  # Dual-ingest pipelines keep stable logical slots and tell native which pad
+  # should start active. Swapping source configs would invert every later
+  # switch-source command. Legacy single-source fallback still overlays the
+  # selected secondary because it has no selector.
+  defp overlay_secondary_source(route, active_source)
+       when active_source in ["primary", "secondary"] do
+    if dual_ingest_eligible?(route) do
+      Map.put(route, "active_source", active_source)
+    else
+      overlay_single_source(route, active_source)
+    end
+  end
+
+  defp overlay_secondary_source(route, _active_source), do: route
+
+  defp overlay_single_source(route, "secondary") do
     case Map.get(route, "secondary_source") do
       %{"schema" => schema, "schema_options" => opts} when is_map(opts) ->
         route
         |> Map.put("schema", schema)
         |> Map.put("schema_options", opts)
-        |> Map.put("secondary_source", %{
-          "schema" => Map.get(route, "schema"),
-          "schema_options" => Map.get(route, "schema_options")
-        })
 
       _ ->
         route
     end
   end
 
-  defp overlay_secondary_source(route, _primary), do: route
+  defp overlay_single_source(route, _primary), do: route
 
   @doc false
   def choose_next_source(current_active, failover_switched, mode, _route_map) do
@@ -843,15 +1020,17 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp trigger_restart(data) do
-    if dual_ingest_eligible?(data.route) and is_port(data.port) do
+    if in_process_switch_allowed?(data) do
       evaluate_failover(data)
     else
-      if data.port && is_port(data.port), do: close_port(data.port)
-      if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+      if port_open?(data.port), do: close_port(data.port)
+      if port_open?(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
 
       cleared = %{data | port: nil, ffmpeg_port: nil}
 
-      if failover_active?(data.route), do: failover_restart(cleared), else: enter_reconnecting(cleared)
+      if failover_active?(data.route),
+        do: failover_restart(cleared),
+        else: enter_reconnecting(cleared)
     end
   end
 
@@ -945,7 +1124,8 @@ defmodule Blackgate.RouteHandler do
     else
       desired =
         case {data.active_source, mode} do
-          {"primary", m} when m in ["maintain-primary", "maintain-stability", "manual-switchback"] ->
+          {"primary", m}
+          when m in ["maintain-primary", "maintain-stability", "manual-switchback"] ->
             if h[:primary] == :invalid, do: "secondary"
 
           {"secondary", "maintain-primary"} ->
@@ -965,33 +1145,59 @@ defmodule Blackgate.RouteHandler do
         nil ->
           {:keep_state, %{data | both_dead_reported: false}}
 
+        _target when is_binary(data.pending_switch) ->
+          {:keep_state, data}
+
         target ->
-          maybe_join_or_leave_for_auto_join(data, target)
-
-          Port.command(
-            data.port,
-            Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
-          )
-
-          _ = Db.update_route(data.id, %{"active_source" => target})
-
           Blackgate.EventLog.log(
             :warning,
             "failover_auto",
-            "Auto-switched to #{target} (mode=#{mode})",
+            "Automatic source switch requested: #{target} (mode=#{mode})",
             %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
           )
 
-          {:keep_state,
-           %{data | active_source: target, failover_switched: true, both_dead_reported: false}}
+          if in_process_switch_allowed?(data) do
+            sent =
+              Port.command(
+                data.port,
+                Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
+              )
+
+            if sent do
+              token = make_ref()
+              Process.send_after(self(), {:switch_ack_timeout, target, token}, @switch_ack_timeout_ms)
+
+              {:keep_state,
+               %{
+                 data
+                 | pending_switch: target,
+                   pending_switch_token: token,
+                   failover_switched: true,
+                   both_dead_reported: false
+               }}
+            else
+              {:keep_state, data}
+            end
+          else
+            send(self(), {:restart_for_source_switch, target})
+
+            {:keep_state,
+             %{
+               data
+               | pending_switch: target,
+                 pending_switch_token: nil,
+                 failover_switched: true,
+                 both_dead_reported: false
+             }}
+          end
       end
     end
   end
 
   # Failover-aware restart. "manual" mode leaves switching to the operator: the
   # route is stopped instead of auto-reconnecting to a known-dead source.
-  # All other modes compute the next source via choose_next_source/4, persist it,
-  # and re-enter the reconnect loop against the new source.
+  # All other modes compute the next source and reconnect. Persistence happens
+  # only after the replacement native pipeline starts successfully.
   defp failover_restart(data) do
     mode = Map.get(data.route, "failover_mode", "manual")
 
@@ -1013,8 +1219,6 @@ defmodule Blackgate.RouteHandler do
       next =
         choose_next_source(data.active_source, data.failover_switched, mode, data.route)
 
-      _ = Db.update_route(data.id, %{"active_source" => next})
-
       Blackgate.EventLog.log(
         :warning,
         "failover_switched",
@@ -1025,7 +1229,10 @@ defmodule Blackgate.RouteHandler do
         }
       )
 
-      enter_reconnecting(%{data | active_source: next}, 250)
+      enter_reconnecting(
+        %{data | active_source: next, pending_switch: next, pending_switch_token: nil},
+        250
+      )
     end
   end
 
@@ -1258,6 +1465,7 @@ defmodule Blackgate.RouteHandler do
                 "route_id" => route["id"],
                 "primary_source" => source,
                 "secondary_source" => secondary,
+                "active_source" => active_source_from_route(route),
                 "auto_join" => Map.get(route, "auto_join", true),
                 "sinks" => sinks
               }
@@ -1323,7 +1531,8 @@ defmodule Blackgate.RouteHandler do
 
           {:error, error} ->
             Logger.error(
-              "RouteHandler: sink_from_record error: #{inspect(error)}, destination: #{inspect(destination)}"
+              "RouteHandler: sink_from_record error: #{inspect(error)}, " <>
+                "destination schema: #{inspect(destination["schema"])}"
             )
 
             acc
@@ -1472,13 +1681,11 @@ defmodule Blackgate.RouteHandler do
       # Pick an available internal port for SRT loopback
       internal_port = find_available_port()
 
-      Logger.info(
-        "RouteHandler: Starting ffmpeg sidecar: #{url} → srt://127.0.0.1:#{internal_port}"
-      )
+      Logger.info("RouteHandler: Starting ffmpeg sidecar on loopback port #{internal_port}")
 
       # Spawn ffmpeg: pull source URL → remux to MPEG-TS → push SRT to internal port
       ffmpeg_cmd = build_ffmpeg_command(url, internal_port)
-      Logger.info("RouteHandler: ffmpeg command: #{ffmpeg_cmd}")
+      Logger.debug("RouteHandler: ffmpeg command prepared with source URL redacted")
 
       ffmpeg_port =
         Port.open({:spawn, ffmpeg_cmd}, [
@@ -1503,7 +1710,7 @@ defmodule Blackgate.RouteHandler do
           "latency" => 500
         })
 
-      Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started: #{url}", %{
+      Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started", %{
         route_id: route["id"],
         route_name: route["name"],
         internal_port: internal_port
@@ -1635,6 +1842,26 @@ defmodule Blackgate.RouteHandler do
     }
     |> Jason.encode!()
   end
+
+  defp sanitize_pipeline_log(line) when is_binary(line) do
+    redacted_uris =
+      Regex.replace(
+        ~r<\b(?:srt|rtmp|rtmps|https?)://[^\s"']+>i,
+        line,
+        "<redacted-uri>"
+      )
+
+    Regex.replace(
+      ~r<(?i)(passphrase\s*[=:]\s*)[^\s,&}"']+>,
+      redacted_uris,
+      "\\1<redacted>"
+    )
+  end
+
+  defp sanitize_pipeline_log(_line), do: "<non-binary>"
+
+  defp sanitize_log_content(content) when is_binary(content), do: sanitize_pipeline_log(content)
+  defp sanitize_log_content(_content), do: "<non-binary>"
 
   defp diagnose_hardware_issue do
     # 1. Check if GStreamer plugin is installed

@@ -538,6 +538,7 @@ defmodule Blackgate.RouteHandlerTest do
     test "active_route_for_pipeline returns original route when active is primary" do
       route = %{
         "schema" => "SRT",
+        "failover_enabled" => true,
         "schema_options" => %{"localaddress" => "primary-host"},
         "secondary_source" => %{
           "schema" => "SRT",
@@ -549,12 +550,14 @@ defmodule Blackgate.RouteHandlerTest do
 
       result = RouteHandler.active_route_for_pipeline(data)
       assert result["schema_options"]["localaddress"] == "primary-host"
-      assert result == route
+      assert result["secondary_source"] == route["secondary_source"]
+      assert result["active_source"] == "primary"
     end
 
-    test "active_route_for_pipeline overlays secondary schema + schema_options when active is secondary" do
+    test "active_route_for_pipeline keeps stable dual-ingest slots and selects secondary" do
       route = %{
         "schema" => "SRT",
+        "failover_enabled" => true,
         "schema_options" => %{"localaddress" => "primary-host", "localport" => 4201},
         "secondary_source" => %{
           "schema" => "SRT",
@@ -566,8 +569,18 @@ defmodule Blackgate.RouteHandlerTest do
 
       result = RouteHandler.active_route_for_pipeline(data)
       assert result["schema"] == "SRT"
-      assert result["schema_options"]["localaddress"] == "secondary-host"
-      assert result["schema_options"]["localport"] == 9999
+      assert result["schema_options"]["localaddress"] == "primary-host"
+      assert result["schema_options"]["localport"] == 4201
+      assert result["secondary_source"]["schema_options"]["localaddress"] == "secondary-host"
+      assert result["secondary_source"]["schema_options"]["localport"] == 9999
+      assert result["active_source"] == "secondary"
+    end
+
+    test "active_source_from_route restores persisted secondary selection" do
+      assert RouteHandler.active_source_from_route(%{"active_source" => "secondary"}) ==
+               "secondary"
+
+      assert RouteHandler.active_source_from_route(%{"active_source" => "invalid"}) == "primary"
     end
 
     test "choose_next_source with maintain-stability toggles primary to secondary and back" do
@@ -638,6 +651,8 @@ defmodule Blackgate.RouteHandlerTest do
         consecutive_startup_crashes: 0,
         sdi_audio_last_restart_at: nil,
         active_source: "primary",
+        pending_switch: nil,
+        pending_switch_token: nil,
         failover_switched: false,
         source_health: %{primary: :unknown, secondary: :unknown},
         auto_join: true,
@@ -709,11 +724,9 @@ defmodule Blackgate.RouteHandlerTest do
              end)
     end
 
-    # Scenario (b): mode="manual" with a live port + SRT secondary is
-    # dual-ingest eligible, so trigger_restart routes through evaluate_failover.
-    # The mode-aware engine treats "manual" as fully operator-driven: with no
-    # health signal forcing a switch, it holds position on primary.
-    test "mode=manual with live port: evaluate_failover no-ops on unknown health" do
+    # Closed Port terms still satisfy is_port/1. Regression: exit recovery must
+    # clear the dead term instead of treating it as a live dual-ingest pipeline.
+    test "mode=manual native exit clears dead port and stops by policy" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -721,23 +734,16 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :keep_state
+      assert elem(res, 0) == :stop
 
-      new_data = elem(res, 1)
-      # manual mode + unknown health → no automatic switch
+      new_data = elem(res, 2)
       assert new_data.active_source == "primary"
-      assert new_data.port == port
+      assert is_nil(new_data.port)
 
       Port.close(port)
     end
 
-    # Scenario (c): mode="maintain-stability" with a live port + SRT secondary
-    # is dual-ingest eligible, so trigger_restart routes through evaluate_failover.
-    # With source_health=unknown (no stats yet) the engine has no signal to
-    # switch, so it holds position. The in-process switch path is exercised by
-    # the dedicated "failover mode engine" describe block below via
-    # evaluate_failover_for_test/1 with explicit health maps.
-    test "mode=maintain-stability on live port: no switch without health signal" do
+    test "mode=maintain-stability native exit clears dead port and reconnects secondary" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -745,12 +751,13 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :keep_state
+      assert elem(res, 0) == :next_state
+      assert elem(res, 1) == :reconnecting
 
-      new_data = elem(res, 1)
-      # unknown health -> engine holds position
-      assert new_data.active_source == "primary"
-      assert new_data.port == port
+      new_data = elem(res, 2)
+      assert new_data.active_source == "secondary"
+      assert new_data.pending_switch == "secondary"
+      assert is_nil(new_data.port)
 
       Port.close(port)
     end
@@ -779,10 +786,14 @@ defmodule Blackgate.RouteHandlerTest do
 
       new_data = elem(res, 2)
       assert new_data.active_source == "secondary"
+      assert new_data.pending_switch == "secondary"
       assert new_data.failover_switched == true
       assert new_data.reconnect_count == 0
 
-      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
+      # Persistence waits for successful replacement-pipeline startup.
+      refute Enum.any?(captured_update_route(), fn {_id, params} ->
+               Map.has_key?(params, "active_source")
+             end)
     end
 
     # Scenario (d') guard: once already switched, timeout stops (no repeat switch).
@@ -882,7 +893,7 @@ defmodule Blackgate.RouteHandlerTest do
     test "send_initial_command emits dual-source JSON for failover route" do
       path = Path.join(System.tmp_dir!(), "bg_init_#{System.unique_integer([:positive])}.json")
       port = capture_port(path)
-      route = failover_route_with_sinks()
+      route = Map.put(failover_route_with_sinks(), "active_source", "secondary")
 
       assert :ok = RouteHandler.send_initial_command(port, route)
 
@@ -914,6 +925,7 @@ defmodule Blackgate.RouteHandlerTest do
       assert payload["secondary_source"]["uri"] =~ "secondary-host"
 
       assert payload["auto_join"] == true
+      assert payload["active_source"] == "secondary"
       assert is_list(payload["sinks"])
       refute Map.has_key?(payload, "source")
     end
@@ -968,10 +980,22 @@ defmodule Blackgate.RouteHandlerTest do
       result = RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
 
       assert {:keep_state, new_data} = result
-      assert new_data.active_source == "secondary"
+      assert new_data.active_source == "primary"
+      assert new_data.pending_switch == "secondary"
       assert new_data.failover_switched == true
       # In-process switch preserves the live port — no kill/respawn.
       assert new_data.port == port
+
+      assert {:keep_state, acknowledged} =
+               RouteHandler.handle_event(
+                 :info,
+                 {port, {:data, "SOURCE_SWITCHED:secondary\n"}},
+                 :started,
+                 new_data
+               )
+
+      assert acknowledged.active_source == "secondary"
+      assert is_nil(acknowledged.pending_switch)
 
       Port.close(port)
 
@@ -1003,7 +1027,89 @@ defmodule Blackgate.RouteHandlerTest do
       assert is_nil(new_data.port)
       assert is_nil(new_data.ffmpeg_port)
       assert new_data.active_source == "secondary"
+      assert new_data.pending_switch == "secondary"
       assert new_data.failover_switched == false
+    end
+
+    test "restart-based switch persists only after native pipeline-ready acknowledgement" do
+      capture_update_route()
+      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
+
+      data =
+        base_data(%{
+          port: port,
+          route: failover_route("maintain-primary"),
+          active_source: "secondary",
+          pending_switch: "secondary"
+        })
+
+      assert {:keep_state, acknowledged} =
+               RouteHandler.handle_event(
+                 :info,
+                 {port, {:data, "PIPELINE_READY\n"}},
+                 :started,
+                 data
+               )
+
+      assert acknowledged.active_source == "secondary"
+      assert is_nil(acknowledged.pending_switch)
+
+      assert {"test_route", %{"active_source" => "secondary"}} in captured_update_route()
+      Port.close(port)
+    end
+
+    test "acknowledged switch retries database persistence failure" do
+      :meck.expect(Blackgate.Db, :update_route, fn _id, _params -> {:error, :temporarily_unavailable} end)
+      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
+
+      data =
+        base_data(%{
+          port: port,
+          route: failover_route("maintain-primary"),
+          pending_switch: "secondary"
+        })
+
+      assert {:keep_state, retrying} =
+               RouteHandler.handle_event(
+                 :info,
+                 {port, {:data, "SOURCE_SWITCHED:secondary\n"}},
+                 :started,
+                 data
+               )
+
+      assert retrying.active_source == "secondary"
+      assert retrying.pending_switch == "secondary"
+      assert_receive {:persist_acknowledged_switch, "secondary"}, 1_500
+
+      :meck.expect(Blackgate.Db, :update_route, fn _id, _params -> {:ok, %{}} end)
+
+      assert {:keep_state, persisted} =
+               RouteHandler.handle_event(
+                 :info,
+                 {:persist_acknowledged_switch, "secondary"},
+                 :started,
+                 retrying
+               )
+
+      assert is_nil(persisted.pending_switch)
+      Port.close(port)
+    end
+
+    test "SDI route always uses kill/respawn switch path" do
+      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
+
+      route =
+        failover_route("maintain-primary")
+        |> Map.put("destinations", [%{"schema" => "SDI", "schema_options" => %{}}])
+
+      data = base_data(%{port: port, route: route})
+
+      assert {:next_state, :reconnecting, new_data, _actions} =
+               RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
+
+      assert is_nil(new_data.port)
+      assert new_data.active_source == "secondary"
+      assert new_data.pending_switch == "secondary"
     end
   end
 
@@ -1026,7 +1132,8 @@ defmodule Blackgate.RouteHandlerTest do
     test "maintain-primary: primary INVALID -> switch to secondary" do
       data = engine_state("maintain-primary", %{primary: :invalid, secondary: :valid}, "primary")
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "secondary"
+      assert new_data.active_source == "primary"
+      assert new_data.pending_switch == "secondary"
       assert new_data.failover_switched == true
       Port.close(data.port)
     end
@@ -1034,7 +1141,8 @@ defmodule Blackgate.RouteHandlerTest do
     test "maintain-primary: primary VALID again -> switch back" do
       data = engine_state("maintain-primary", %{primary: :valid, secondary: :valid}, "secondary")
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "primary"
+      assert new_data.active_source == "secondary"
+      assert new_data.pending_switch == "primary"
       Port.close(data.port)
     end
 
@@ -1043,7 +1151,8 @@ defmodule Blackgate.RouteHandlerTest do
         engine_state("maintain-stability", %{primary: :invalid, secondary: :valid}, "primary")
 
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "secondary"
+      assert new_data.active_source == "primary"
+      assert new_data.pending_switch == "secondary"
       Port.close(data.port)
     end
 
@@ -1052,7 +1161,8 @@ defmodule Blackgate.RouteHandlerTest do
         engine_state("maintain-stability", %{primary: :valid, secondary: :invalid}, "secondary")
 
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "primary"
+      assert new_data.active_source == "secondary"
+      assert new_data.pending_switch == "primary"
       Port.close(data.port)
     end
 
@@ -1061,7 +1171,8 @@ defmodule Blackgate.RouteHandlerTest do
         engine_state("manual-switchback", %{primary: :invalid, secondary: :valid}, "primary")
 
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "secondary"
+      assert new_data.active_source == "primary"
+      assert new_data.pending_switch == "secondary"
       Port.close(data.port)
     end
 
@@ -1080,6 +1191,20 @@ defmodule Blackgate.RouteHandlerTest do
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
       assert new_data.active_source == "primary"
       refute new_data.failover_switched
+      Port.close(data.port)
+    end
+
+    test "automatic SDI failover schedules restart instead of selector command" do
+      data =
+        engine_state("maintain-primary", %{primary: :invalid, secondary: :valid}, "primary")
+
+      route = Map.put(data.route, "destinations", [%{"schema" => "SDI"}])
+
+      {:keep_state, new_data} =
+        RouteHandler.evaluate_failover_for_test(%{data | route: route})
+
+      assert new_data.pending_switch == "secondary"
+      assert_receive {:restart_for_source_switch, "secondary"}
       Port.close(data.port)
     end
 

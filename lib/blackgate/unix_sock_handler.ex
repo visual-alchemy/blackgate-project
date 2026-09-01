@@ -34,8 +34,9 @@ defmodule Blackgate.UnixSockHandler do
 
     :ok =
       trans.setopts(sock,
-        # mode: :binary,
-        # packet: :raw,
+        mode: :binary,
+        packet: :line,
+        packet_size: 1_048_576,
         # recbuf: 8192,
         # sndbuf: 8192,
         # # backlog: 2048,
@@ -49,6 +50,7 @@ defmodule Blackgate.UnixSockHandler do
     data = %{
       sock: sock,
       trans: trans,
+      socket_buffer: <<>>,
       source_stream_id: nil,
       route_id: nil,
       route_record: nil
@@ -58,13 +60,28 @@ defmodule Blackgate.UnixSockHandler do
   end
 
   @impl true
+  def handle_event(:info, {:tcp, _port, {:noeol, fragment}}, _state, data)
+      when is_binary(fragment) do
+    buffer = Map.get(data, :socket_buffer, <<>>)
+    {:keep_state, Map.put(data, :socket_buffer, buffer <> fragment)}
+  end
+
+  def handle_event(:info, {:tcp, port, {:eol, fragment}}, state, data)
+      when is_binary(fragment) do
+    buffer = Map.get(data, :socket_buffer, <<>>)
+    data = Map.put(data, :socket_buffer, <<>>)
+    handle_event(:info, {:tcp, port, buffer <> fragment}, state, data)
+  end
+
+  @impl true
   def handle_event(:info, {:tcp, _port, "route_id:" <> route_id}, _state, data) do
+    route_id = String.trim(route_id)
     Logger.info("route_id: #{route_id}")
 
     route_record =
       case Db.get_route(route_id, true) do
         {:ok, record} ->
-          Logger.info("route_record: #{inspect(record, pretty: true)}")
+          Logger.debug("Loaded route record for route #{route_id}")
           record
 
         other ->
@@ -83,7 +100,7 @@ defmodule Blackgate.UnixSockHandler do
       ) do
     # Handle potentially concatenated source + sink stats messages
     {source_json, sink_json} = split_stats_message(message)
-    
+
     # Process source stats
     if source_json do
       case Jason.decode(source_json) do
@@ -104,16 +121,18 @@ defmodule Blackgate.UnixSockHandler do
                   Logger.error("Error processing stats: #{inspect(error)}")
               end
           end
+
         _ -> :ok
       end
     end
-    
+
     # Process sink stats if present
     if sink_json do
       case Jason.decode(sink_json) do
         {:ok, stats} ->
           sink_index = stats["sink-index"] || 0
           RouteStatsRegistry.put_sink_stats(data.route_id, sink_index, stats)
+
         _ -> :ok
       end
     end
@@ -125,7 +144,7 @@ defmodule Blackgate.UnixSockHandler do
       when is_binary(route_id) do
     # Handle potentially concatenated source + sink stats messages
     {source_json, sink_json} = split_stats_message(message)
-    
+
     # Store source stats
     if source_json do
       case Jason.decode(source_json) do
@@ -140,20 +159,22 @@ defmodule Blackgate.UnixSockHandler do
             _ ->
               RouteStatsRegistry.put_stats(route_id, Map.delete(stats, "source"))
           end
+
         _ -> :ok
       end
     end
-    
+
     # Store sink stats
     if sink_json do
       case Jason.decode(sink_json) do
         {:ok, stats} ->
           sink_index = stats["sink-index"] || 0
           RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
+
         _ -> :ok
       end
     end
-    
+
     :keep_state_and_data
   end
 
@@ -180,19 +201,27 @@ defmodule Blackgate.UnixSockHandler do
   end
 
   def handle_event(:info, {:tcp, _port, "stats_source_stream_id:" <> stream_id}, _state, data) do
-    Logger.info("stats_source_stream_id: #{stream_id}")
+    stream_id = String.trim(stream_id)
+    Logger.debug("Received source stream ID metadata")
     {:keep_state, %{data | source_stream_id: stream_id}}
   end
 
-  def handle_event(type, content, state, data) do
-    msg = [
-      {"type", type},
-      {"content", content},
-      {"state", state},
-      {"data", data}
-    ]
+  # Native pipeline closes this connection during an intentional restart.
+  # Treat transport lifecycle messages as expected events, not protocol errors.
+  def handle_event(:info, {:tcp_closed, _port}, _state, _data) do
+    :keep_state_and_data
+  end
 
-    Logger.error("SocketHandler: Undefined msg: #{inspect(msg, pretty: true)}")
+  def handle_event(:info, {:tcp_error, _port, reason}, _state, _data) do
+    Logger.warning("SocketHandler: unix socket error #{inspect(reason)}")
+    :keep_state_and_data
+  end
+
+  def handle_event(type, content, state, _data) do
+    Logger.error(
+      "SocketHandler: Undefined msg type=#{inspect(type)} state=#{inspect(state)} " <>
+        "content=#{inspect(redact_content(content))}"
+    )
 
     :keep_state_and_data
   end
@@ -231,7 +260,7 @@ defmodule Blackgate.UnixSockHandler do
 
   def norm_names(name) do
     name
-    |> String.replace("-", "_")
+    |> String.replace(~r/[-.\/:]/, "_")
     |> String.downcase()
   end
 
@@ -249,4 +278,10 @@ defmodule Blackgate.UnixSockHandler do
         {String.trim(source_json), nil}
     end
   end
+
+  defp redact_content(content) when is_binary(content) do
+    Regex.replace(~r{srt://\S+}i, content, "srt://<redacted>")
+  end
+
+  defp redact_content(_content), do: "<non-binary>"
 end

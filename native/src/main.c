@@ -95,8 +95,7 @@ int main(int argc, char* argv[])
     atexit(cleanup_socket);
 
     printf("Argument %d: %s\n", argc, argv[1]);
-    send_message_to_unix_socket("route_id:");
-    send_message_to_unix_socket(argv[1]);
+    send_prefixed_message_to_unix_socket("route_id:", argv[1]);
 
     printf("Waiting for JSON input...\n");
 
@@ -113,7 +112,7 @@ int main(int argc, char* argv[])
         g_io_channel_unref(stdin_channel);
         return 1;
     }
-    printf("Received JSON: %s\n", init_line);
+    printf("Received init JSON configuration\n");
 
     cJSON *json = cJSON_Parse(init_line);
     g_free(init_line);
@@ -162,6 +161,11 @@ int main(int argc, char* argv[])
         g_io_channel_unref(stdin_channel);
         return 1;
     }
+
+    // Control-plane acknowledgement: init config parsed, pipeline created, and
+    // PLAYING transition accepted. RouteHandler uses this before persisting a
+    // source selected through restart-based failover.
+    g_print("PIPELINE_READY\n");
 
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     set_main_loop(loop);
