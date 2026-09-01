@@ -48,4 +48,5 @@ yarn-error.log*
 # === Logs ===
 *.log
 logs/.agents/
+.omo/
 docs/superpowers/skills/
