@@ -15,7 +15,7 @@
 | Category | Features |
 |----------|----------|
 | **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication, StreamID support |
-| **Input Failover** | Dual SRT sources (primary + secondary) per route with 4 modes: manual, maintain-primary, maintain-stability, and auto-switchback; live per-source health telemetry |
+| **Input Failover** | Dual SRT sources (primary + secondary) per route with 4 modes: manual, maintain-primary, maintain-stability, and manual-switchback; optional warm ingest and guarded seamless SDI switching; live per-source health telemetry |
 | **RTMP/HLS/HTTP-FLV** | Ingest RTMP push or pull HLS/FLV streams via ffmpeg sidecar with SRT loopback normalization |
 | **UDP Support** | Source and Destination for local network streaming |
 | **SDI Output** | Blackmagic DeckLink hardware output (decode + scale to SDI) |
@@ -216,7 +216,7 @@ graph TB
         subgraph "Native Streaming Engine (blackgate_pipeline)"
             P_SRC["srtsrc (Primary Input)"]
             S_SRC["srtsrc (Secondary Input / Auto-Join)"]
-            SEL["input-selector<br/>Zero-Glitch In-Process Switch"]
+            SEL["input-selector<br/>Guarded In-Process Switch"]
             TEE["tee (Distribution)"]
             SNK["srtsink / udpsink / sdisink<br/>Output Destinations"]
         end
@@ -260,6 +260,36 @@ graph TB
 
 #### Failover Decision Engine & Switch Sequence
 
+`Failover Mode`, `Auto Join`, and `Seamless SDI Failover` control different
+parts of failover:
+
+| Setting | What it controls |
+|---------|------------------|
+| **Failover Mode** | Source-selection policy: when to leave a failed source and whether to return to Primary. It does not decide whether both sources remain connected. |
+| **Auto Join** | Source lifetime. When enabled, Primary and Secondary SRT branches run simultaneously so the inactive source stays connected and warm. When disabled, only the selected source runs. |
+| **Seamless SDI Failover** | SDI switch mechanism. When enabled, Blackgate keeps the native pipeline alive, waits for a compatible target keyframe, switches the selector, and normalizes MPEG-TS timing and continuity. It requires Auto Join. |
+
+Common configurations:
+
+| Auto Join | Seamless SDI | Result |
+|-----------|--------------|--------|
+| Off | Off | Only active source receives data. Backup starts or reconnects when selected. |
+| On | Off | Both sources stay warm during normal operation, but an SDI source change still restarts the complete native pipeline. Both SRT input sessions disconnect and reconnect during that restart. |
+| On | On | Both sources stay warm and a compatible SDI source change occurs inside the running pipeline. SRT input sessions remain connected. |
+
+For SRT listener inputs, a full pipeline restart closes both listening sockets;
+encoder callers therefore reconnect when the sockets reopen. Auto Join cannot
+preserve connections across a process restart. `Keep Listening` is separate:
+it controls listener behavior after a sender disconnects, not whether failover
+uses an in-process switch.
+
+Seamless SDI mode currently requires matching encoder and MPEG-TS structure:
+codec configuration, video/audio format, program layout, and PIDs. If metadata
+is unavailable or incompatible, Blackgate rejects the in-process switch and
+uses restart fallback. A compatible switch minimizes disruption but cannot
+guarantee zero lost frames because target-keyframe arrival and downstream
+decoder buffering still affect recovery time.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -277,10 +307,17 @@ sequenceDiagram
     PS--xRH: Network Loss / Stream Invalid (0 B/s or stall)
     RH->>RH: Evaluate Health (Primary: INVALID, Secondary: VALID)
 
-    alt Route has an SDI destination
+    alt SDI route with Seamless SDI Failover enabled
+        RH->>C: Request guarded switch to Secondary
+        C->>C: Validate MPEG-TS map and wait for target keyframe
+        C->>C: Switch active pad and normalize PCR/PTS/DTS/continuity
+        C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
+        Note over PS, SS: Both SRT input sessions remain connected
+    else SDI route without Seamless SDI Failover
         RH->>RH: Persist active_source, close ports
         RH->>C: Respawn pipeline (~250ms) born on Secondary
-        Note over C: ~3-4s black on SDI, then native format re-detected
+        Note over PS, SS: Both SRT sessions disconnect and reconnect
+        Note over C: SDI recovers after reconnect, latency, and first decodable frame
     else Non-SDI route
         RH->>C: Send stdin JSON: {"command": "switch-source", "target": "secondary"}
         C->>C: Switch input-selector active-pad -> sink_1 (Secondary)
@@ -300,15 +337,13 @@ sequenceDiagram
     end
 ```
 
-**Why SDI routes restart instead of flipping**: switching the input-selector
-between feeds from *different muxers* (different PMT/PID layouts) starves the
-SDI branch's demuxer/decoder pads — the output freezes on the last frame and
-never recovers, even after switching back. Restarting the pipeline on the
-persisted source is deterministic: ~3-4s of clean black, then the new source
-in its native format. Same-muxer feeds flip instantly with brief macroblock
-artifacts until the new feed's next keyframe. Full details and expected
-timings: [`docs/failover-runbook.md`](./docs/failover-runbook.md) →
-*Switch Behavior by Route Type*.
+**Why restart fallback remains**: switching directly between feeds from
+different muxers can starve SDI demuxer/decoder pads or feed incompatible codec
+state into the decoder. Guarded Seamless SDI mode prevents that by requiring
+matching MPEG-TS maps and codec configuration, waiting for a target keyframe,
+and normalizing timestamps and continuity counters. Incompatible or unknown
+feeds use deterministic pipeline restart instead. Full test procedure:
+[`docs/failover-runbook.md`](./docs/failover-runbook.md).
 
 ### Technology Stack
 

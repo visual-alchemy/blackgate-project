@@ -20,11 +20,32 @@ Reduce or eliminate the visible SDI blackout during source failover by keeping b
 - Selector switches only when program, PMT/PCR/video PIDs, codec, and all elementary stream PID/type entries match.
 - Missing metadata, incompatible maps, missing keyframes, or missing acknowledgment use the existing restart fallback.
 - Active-source persistence remains gated by native acknowledgment.
-- Selector inactive-stream synchronization remains disabled because deployed testing showed it can stall the active SRT source when its peer is absent. Network sources preserve encoder PCR/PTS with `do-timestamp=false`; keyframe gating supplies the guarded media boundary without rewriting arrival timestamps.
+- Selector inactive-stream synchronization remains disabled because deployed testing showed it can stall the active SRT source when its peer is absent. Network sources keep `do-timestamp=false`; seamless mode normalizes internal MPEG-TS PCR/PTS/DTS and continuity counters after selection without converting network arrival time into media time.
+- Added guarded output-timeline normalization for matching MPEG-TS maps, including 33-bit timestamp wraparound and per-PID continuity-counter regeneration.
+- Manual failover mode reconnects the currently selected source after transient pipeline or network failure without changing source selection.
 
-## Remaining optional normalization work
+## SRT statistics visibility
 
-The guarded implementation provides fast switching for matching encoders. It does not rewrite incompatible PIDs, continuity counters, PCR, or PTS. Supporting seamless switching between arbitrary encoder/muxer layouts requires a demux/remux normalizer before selection; until then those pairs deliberately use restart fallback.
+Expose all receive-side statistics available from deployed GStreamer 1.24.2 independently for primary and secondary sources:
+
+- received packets (`packets-received`)
+- retransmitted packets (`packets-received-retransmitted`)
+- lost packets (`packets-received-lost`)
+- dropped packets (`packets-received-dropped`)
+- receive rate (`receive-rate-mbps`)
+- link bandwidth (`bandwidth-mbps`)
+- round-trip time (`rtt-ms`)
+- negotiated receive latency (`negotiated-latency-ms`)
+
+GStreamer does not expose live receive-buffer occupancy in bytes or packets. Do not label negotiated latency as buffer occupancy.
+
+Source Statistics exposes only decimal Video PID and Audio PID values for each input. PID fields stay `N/A` until PAT/PMT metadata is available.
+
+## Remaining remux normalization work
+
+The guarded implementation provides fast switching plus PCR/PTS/DTS and continuity normalization for matching encoders. It does not remap incompatible PIDs or program layouts. Supporting seamless switching between arbitrary encoder/muxer layouts requires a demux/remux normalizer before selection; until then those pairs deliberately use restart fallback.
+
+Normalization must establish one output timeline, rewrite PCR and audio/video PTS/DTS with 33-bit wraparound handling, regenerate output continuity counters, preserve A/V offset, switch on a target random-access frame, and mark unavoidable discontinuities. Keep the feature opt-in until independent-start, drift, reconnect, encoder-reset, and long-running hardware tests pass.
 
 ## Implementation phases
 

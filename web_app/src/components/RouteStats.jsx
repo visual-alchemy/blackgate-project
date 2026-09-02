@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Card, Statistic, Row, Col, Table, Typography, Tag, Empty, Alert, Space } from 'antd';
+import { Card, Statistic, Row, Col, Tag, Empty, Alert, Space } from 'antd';
 import {
     ArrowUpOutlined,
     ArrowDownOutlined,
@@ -11,8 +10,6 @@ import {
 } from '@ant-design/icons';
 import { useRouteStats } from '../hooks/useRouteStats';
 import HealthBadge from './HealthBadge';
-
-const { Text } = Typography;
 
 /**
  * Format bytes to human readable format
@@ -107,9 +104,17 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
         ? stats['bandwidth-mbps']
         : (caller['bandwidth-mbps'] || 0);
 
-    const packetsReceived = stats?.['packets-received'] ?? caller['packets-received'] ?? 0;
-    const packetsLost = stats?.['packets-received-lost'] ?? caller['packets-received-lost'] ?? 0;
-    const packetsDropped = stats?.['packets-received-dropped'] ?? caller['packets-received-dropped'] ?? 0;
+    const sourceMetric = (key) => {
+        const aggregate = stats?.[key];
+        const callerValue = caller?.[key];
+        return aggregate > 0 ? aggregate : (callerValue ?? aggregate ?? 0);
+    };
+
+    const packetsReceived = sourceMetric('packets-received');
+    const packetsRetransmitted = sourceMetric('packets-received-retransmitted');
+    const packetsLost = sourceMetric('packets-received-lost');
+    const packetsDropped = sourceMetric('packets-received-dropped');
+    const receiveLatency = sourceMetric('negotiated-latency-ms');
 
     const packetLoss = calculatePacketLoss(packetsReceived, packetsLost);
 
@@ -120,6 +125,9 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
     const fpsInferred = stats?.['video-framerate-inferred'] ?? false;
     const interlaceMode = stats?.['video-interlace-mode'] ?? null;
     const scanType = formatScanType(interlaceMode);
+
+    const videoPid = stats?.['video-pid'];
+    const audioPids = stats?.['audio-pids'] || [];
 
     const statisticStyle = { fontSize: 14 };
 
@@ -137,7 +145,7 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
             <Row gutter={[16, 16]}>
                 <Col xs={12} sm={8} md={6} lg={4}>
                     <Statistic
-                        title="Bitrate"
+                        title="Receive Rate"
                         value={formatMbps(bitrate)}
                         prefix={<ArrowDownOutlined style={{ color: '#52c41a' }} />}
                         valueStyle={{ color: '#52c41a', ...statisticStyle }}
@@ -145,7 +153,7 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
                 </Col>
                 <Col xs={12} sm={8} md={6} lg={4}>
                     <Statistic
-                        title="RTT"
+                        title="Round Trip Time"
                         value={`${typeof rtt === 'number' ? rtt.toFixed(2) : rtt} ms`}
                         prefix={<ClockCircleOutlined style={{ color: '#1890ff' }} />}
                         valueStyle={{ color: '#1890ff', ...statisticStyle }}
@@ -176,16 +184,44 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
                 </Col>
                 <Col xs={12} sm={8} md={6} lg={4}>
                     <Statistic
-                        title="Bandwidth"
+                        title="Link Bandwidth"
                         value={`${typeof bandwidth === 'number' ? bandwidth.toFixed(1) : bandwidth} Mbps`}
                         valueStyle={{ color: '#13c2c2', ...statisticStyle }}
                     />
                 </Col>
                 <Col xs={12} sm={8} md={6} lg={4}>
                     <Statistic
-                        title="Dropped"
+                        title="Dropped Packets"
                         value={packetsDropped}
                         valueStyle={{ color: packetsDropped > 0 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Received Packets"
+                        value={packetsReceived}
+                        valueStyle={{ color: '#1677ff', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Retransmitted Packets"
+                        value={packetsRetransmitted}
+                        valueStyle={{ color: packetsRetransmitted > 0 ? '#fa8c16' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Lost Packets"
+                        value={packetsLost}
+                        valueStyle={{ color: packetsLost > 0 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Receive Latency"
+                        value={`${receiveLatency} ms`}
+                        valueStyle={{ color: '#722ed1', ...statisticStyle }}
                     />
                 </Col>
                 <Col xs={12} sm={8} md={6} lg={4}>
@@ -209,6 +245,20 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
                         title="Scan"
                         value={scanType.label}
                         formatter={(val) => <Tag color={scanType.color}>{val}</Tag>}
+                        valueStyle={statisticStyle}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Video PID"
+                        value={videoPid > 0 ? videoPid : 'N/A'}
+                        valueStyle={statisticStyle}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Audio PID"
+                        value={audioPids.length > 0 ? audioPids.join(', ') : 'N/A'}
                         valueStyle={statisticStyle}
                     />
                 </Col>

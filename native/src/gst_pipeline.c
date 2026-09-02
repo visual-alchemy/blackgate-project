@@ -10,6 +10,7 @@
 #include <stdarg.h>
 
 #include "unix_socket.h"
+#include "ts_normalizer.h"
 
 #define MAX_SINKS 32
 
@@ -912,6 +913,9 @@ static gboolean seamless_sdi_enabled = FALSE;
 static gint selected_source_index = 0;
 static gint pending_source_index = -1;
 static GMutex seamless_switch_mutex;
+static BgTsNormalizer ts_timeline_normalizer;
+static GMutex ts_timeline_mutex;
+static GQuark source_index_quark = 0;
 
 // Thumbnail capture state
 static GstElement *thumbnail_appsink = NULL;
@@ -926,8 +930,14 @@ static gboolean thumbnail_thread_started = FALSE;
 
 // Video stream types in MPEG-TS PMT
 #define STREAM_TYPE_MPEG2_VIDEO 0x02
+#define STREAM_TYPE_MPEG1_AUDIO 0x03
+#define STREAM_TYPE_MPEG2_AUDIO 0x04
+#define STREAM_TYPE_AAC_ADTS 0x0F
+#define STREAM_TYPE_AAC_LATM 0x11
 #define STREAM_TYPE_H264 0x1B
 #define STREAM_TYPE_HEVC 0x24
+#define STREAM_TYPE_AC3 0x81
+#define STREAM_TYPE_EAC3 0x87
 #define MAX_PROGRAM_STREAMS 16
 
 typedef struct {
@@ -971,6 +981,8 @@ static VideoInfo video_info = {0, 0, 0, 1, FALSE, FALSE, FALSE, 0, 0, 0, PTHREAD
 // Forward declarations for MPEG-TS parsing
 static void parse_pat(const guint8 *data, gsize size);
 static void parse_pmt(const guint8 *data, gsize size);
+static gboolean source_maps_compatible_unlocked(void);
+static gboolean source_descriptions_ready_unlocked(void);
 
 // Forward declarations for thumbnail
 static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id);
@@ -979,6 +991,8 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
 static void parse_h264_sps(const guint8 *data, gsize size);
 static void parse_mpeg2_sequence(const guint8 *data, gsize size);
 static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
+static GstPadProbeReturn timeline_probe_callback(GstPad *pad, GstPadProbeInfo *info,
+                                                 gpointer user_data);
 static GstPadProbeReturn source_ts_probe_callback(GstPad *pad, GstPadProbeInfo *info,
                                                   gpointer user_data);
 
@@ -989,6 +1003,40 @@ static void send_json_to_socket(cJSON *root)
     if (json_str) {
         send_message_to_unix_socket(json_str);
         free(json_str);
+    }
+}
+
+static gboolean mpegts_stream_is_audio(guint8 stream_type)
+{
+    return stream_type == STREAM_TYPE_MPEG1_AUDIO ||
+           stream_type == STREAM_TYPE_MPEG2_AUDIO ||
+           stream_type == STREAM_TYPE_AAC_ADTS ||
+           stream_type == STREAM_TYPE_AAC_LATM ||
+           stream_type == STREAM_TYPE_AC3 ||
+           stream_type == STREAM_TYPE_EAC3;
+}
+
+static void add_mpegts_source_stats(cJSON *root, const char *tag)
+{
+    if (!root || !dual_ingest_active) return;
+
+    gint source_index = g_strcmp0(tag, "secondary") == 0 ? 1 : 0;
+    SourceTsInfo snapshot;
+
+    g_mutex_lock(&seamless_switch_mutex);
+    snapshot = source_ts_info[source_index];
+    g_mutex_unlock(&seamless_switch_mutex);
+
+    if (!snapshot.pat_valid || !snapshot.pmt_valid) return;
+
+    if (snapshot.video_pid > 0) {
+        cJSON_AddNumberToObject(root, "video-pid", snapshot.video_pid);
+    }
+
+    cJSON *audio_pids = cJSON_AddArrayToObject(root, "audio-pids");
+    for (guint i = 0; i < snapshot.stream_count; i++) {
+        if (!mpegts_stream_is_audio(snapshot.stream_types[i])) continue;
+        cJSON_AddItemToArray(audio_pids, cJSON_CreateNumber(snapshot.stream_pids[i]));
     }
 }
 
@@ -1130,6 +1178,8 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
     if (stats) {
         gst_structure_free(stats);
     }
+
+    add_mpegts_source_stats(root, tag);
 
     return root;
 }
@@ -1920,6 +1970,12 @@ static GstPadProbeReturn source_ts_probe_callback(GstPad *pad, GstPadProbeInfo *
     GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
     if (!buffer) return GST_PAD_PROBE_OK;
 
+    if (G_UNLIKELY(source_index_quark == 0)) {
+        source_index_quark = g_quark_from_static_string("blackgate-source-index");
+    }
+    gst_mini_object_set_qdata(GST_MINI_OBJECT_CAST(buffer), source_index_quark,
+                              GINT_TO_POINTER(source_index + 1), NULL);
+
     GstMapInfo map;
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) return GST_PAD_PROBE_OK;
 
@@ -1956,6 +2012,51 @@ static GstPadProbeReturn source_ts_probe_callback(GstPad *pad, GstPadProbeInfo *
     gst_buffer_unmap(buffer, &map);
     reject_pending_switch_if_incompatible();
     if (keyframe) complete_pending_switch_on_keyframe(source_index);
+    return GST_PAD_PROBE_OK;
+}
+
+static GstPadProbeReturn timeline_probe_callback(GstPad *pad, GstPadProbeInfo *probe_info,
+                                                 gpointer user_data)
+{
+    (void)pad;
+    (void)user_data;
+
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(probe_info);
+    if (!buffer) return GST_PAD_PROBE_OK;
+
+    gint source_index = -1;
+    if (source_index_quark != 0) {
+        gpointer tagged = gst_mini_object_get_qdata(GST_MINI_OBJECT_CAST(buffer),
+                                                    source_index_quark);
+        if (tagged) source_index = GPOINTER_TO_INT(tagged) - 1;
+    }
+    if (source_index < 0 || source_index > 1) {
+        g_mutex_lock(&seamless_switch_mutex);
+        source_index = selected_source_index;
+        g_mutex_unlock(&seamless_switch_mutex);
+    }
+
+    buffer = gst_buffer_make_writable(buffer);
+    if (!buffer) return GST_PAD_PROBE_DROP;
+    GST_PAD_PROBE_INFO_DATA(probe_info) = buffer;
+
+    GstMapInfo map;
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READWRITE)) return GST_PAD_PROBE_OK;
+
+    BgTsNormalizeResult result;
+    g_mutex_lock(&ts_timeline_mutex);
+    gboolean normalized = bg_ts_normalize(&ts_timeline_normalizer, map.data, map.size,
+                                           source_index, &result);
+    g_mutex_unlock(&ts_timeline_mutex);
+    gst_buffer_unmap(buffer, &map);
+
+    if (normalized && result.source_changed) {
+        g_print("TS_TIMELINE_NORMALIZED:%s offset-90k=%" G_GUINT64_FORMAT
+                " continuity-rewritten=%u\n",
+                source_index == 1 ? "secondary" : "primary",
+                result.offset_90k, result.continuity_rewritten);
+    }
+
     return GST_PAD_PROBE_OK;
 }
 
@@ -2592,6 +2693,9 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     selected_source_index = start_on_secondary ? 1 : 0;
     pending_source_index = -1;
     g_mutex_unlock(&seamless_switch_mutex);
+    g_mutex_lock(&ts_timeline_mutex);
+    bg_ts_normalizer_reset(&ts_timeline_normalizer);
+    g_mutex_unlock(&ts_timeline_mutex);
 
     pipeline = gst_pipeline_new("test-pipeline");
     tee = gst_element_factory_make("tee", "tee");
@@ -2661,12 +2765,13 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         GstPad *primary_src_pad = gst_element_get_static_pad(primary_source_element, "src");
         GstPad *secondary_src_pad = gst_element_get_static_pad(secondary_source_element, "src");
 
-        if (seamless_sdi_enabled) {
-            gst_pad_add_probe(primary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
-                              source_ts_probe_callback, GINT_TO_POINTER(0), NULL);
-            gst_pad_add_probe(secondary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
-                              source_ts_probe_callback, GINT_TO_POINTER(1), NULL);
-        }
+        // Parse both transport streams for per-source diagnostics and
+        // compatibility status. Seamless mode also uses these probes for its
+        // guarded keyframe switch; non-seamless routes only consume metadata.
+        gst_pad_add_probe(primary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                          source_ts_probe_callback, GINT_TO_POINTER(0), NULL);
+        gst_pad_add_probe(secondary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                          source_ts_probe_callback, GINT_TO_POINTER(1), NULL);
 
         if (gst_pad_link(primary_src_pad, primary_sink_pad) != GST_PAD_LINK_OK) {
             g_printerr("DUAL-INGEST: failed to link primary source → selector sink_0\n");
@@ -2719,6 +2824,11 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     // Add buffer probe on tee sink pad to parse MPEG-TS packets
     GstPad *tee_sink_pad = gst_element_get_static_pad(tee, "sink");
     if (tee_sink_pad) {
+        if (seamless_sdi_enabled) {
+            gst_pad_add_probe(tee_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                              timeline_probe_callback, NULL, NULL);
+            g_print("MPEG-TS: Installed PCR/PTS/continuity normalizer after selector\n");
+        }
         gst_pad_add_probe(tee_sink_pad, GST_PAD_PROBE_TYPE_BUFFER, ts_probe_callback, NULL, NULL);
         g_print("MPEG-TS: Installed buffer probe on tee sink pad for video metadata extraction\n");
         gst_object_unref(tee_sink_pad);

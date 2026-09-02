@@ -178,6 +178,21 @@ defmodule Blackgate.UnixSockHandlerTest do
     UnixSockHandler.stats_to_metrics(stats, data)
   end
 
+  test "stats_to_metrics ignores scalar values inside arrays" do
+    stats = %{
+      "audio-pids" => [201, 257],
+      "callers" => [%{"rtt-ms" => 1.5}]
+    }
+
+    data = %{
+      route_id: "test_route",
+      route_record: %{"name" => "test"},
+      source_stream_id: "test_stream"
+    }
+
+    assert :ok = UnixSockHandler.stats_to_metrics(stats, data)
+  end
+
   test "norm_names normalizes metric names" do
     assert "test_metric" = UnixSockHandler.norm_names("test-metric")
     assert "test_metric" = UnixSockHandler.norm_names("TEST_METRIC")

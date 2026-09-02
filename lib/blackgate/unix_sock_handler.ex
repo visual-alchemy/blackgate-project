@@ -232,18 +232,17 @@ defmodule Blackgate.UnixSockHandler do
     :ok
   end
 
-  def stats_to_metrics(stats, data) do
-    stats
-    |> Map.keys()
-    |> Enum.map(fn key ->
+  def stats_to_metrics(stats, data) when is_map(stats) do
+    Enum.each(stats, fn {key, value} ->
       cond do
-        is_list(stats[key]) ->
-          Enum.each(stats[key], fn item ->
-            stats_to_metrics(item, data)
+        is_list(value) ->
+          Enum.each(value, fn
+            item when is_map(item) -> stats_to_metrics(item, data)
+            _scalar -> :ok
           end)
 
-        is_map(stats[key]) ->
-          stats_to_metrics(stats[key], data)
+        is_map(value) ->
+          stats_to_metrics(value, data)
 
         true ->
           tags = %{
@@ -253,10 +252,12 @@ defmodule Blackgate.UnixSockHandler do
             source_stream_id: data.source_stream_id
           }
 
-          Metrics.event(norm_names(key), stats[key], tags)
+          Metrics.event(norm_names(key), value, tags)
       end
     end)
   end
+
+  def stats_to_metrics(_non_map, _data), do: :ok
 
   def norm_names(name) do
     name

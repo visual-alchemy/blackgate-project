@@ -1241,27 +1241,26 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  # Failover-aware restart. "manual" mode leaves switching to the operator: the
-  # route is stopped instead of auto-reconnecting to a known-dead source.
-  # All other modes compute the next source and reconnect. Persistence happens
-  # only after the replacement native pipeline starts successfully.
+  # Failover-aware restart. "manual" mode leaves source selection to the
+  # operator, but still reconnects the currently selected source after a
+  # transient pipeline/network failure. All other modes compute the next source
+  # and reconnect. Persistence happens only after the replacement native
+  # pipeline starts successfully.
   defp failover_restart(data) do
     mode = Map.get(data.route, "failover_mode", "manual")
 
     if mode == "manual" do
-      Blackgate.set_route_status(data.id, "stopped")
-
       Blackgate.EventLog.log(
-        :critical,
-        "failover_manual_stop",
-        "Source failed in manual failover mode, route stopped (operator action required)",
+        :warning,
+        "failover_manual_reconnect",
+        "Selected source disconnected in manual failover mode; reconnecting without switching source",
         %{
           route_id: data.id,
           route_name: get_in(data, [:route, "name"]) || data.id
         }
       )
 
-      {:stop, :normal, data}
+      enter_reconnecting(%{data | pending_switch: nil, pending_switch_token: nil}, 250)
     else
       next =
         choose_next_source(data.active_source, data.failover_switched, mode, data.route)

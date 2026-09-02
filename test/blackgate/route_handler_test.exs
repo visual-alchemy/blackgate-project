@@ -726,7 +726,7 @@ defmodule Blackgate.RouteHandlerTest do
 
     # Closed Port terms still satisfy is_port/1. Regression: exit recovery must
     # clear the dead term instead of treating it as a live dual-ingest pipeline.
-    test "mode=manual native exit clears dead port and stops by policy" do
+    test "mode=manual native exit reconnects selected source without switching" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -734,10 +734,12 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :stop
+      assert elem(res, 0) == :next_state
+      assert elem(res, 1) == :reconnecting
 
       new_data = elem(res, 2)
       assert new_data.active_source == "primary"
+      assert is_nil(new_data.pending_switch)
       assert is_nil(new_data.port)
 
       Port.close(port)

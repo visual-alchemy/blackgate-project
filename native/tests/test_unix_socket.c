@@ -12,9 +12,11 @@
 #include <unistd.h>
 
 #include "../include/gst_pipeline.h"
+#include "../include/ts_normalizer.h"
 #include "../include/unix_socket.h"
 
 #define TS_PACKET_SIZE 188
+#define TS_TIMESTAMP_MASK ((1ULL << 33) - 1)
 
 typedef struct {
     int server_fd;
@@ -275,6 +277,128 @@ static GstBuffer *make_ts_buffer(gboolean include_keyframe, GstClockTime pts,
     return buffer;
 }
 
+static void write_test_timestamp(guint8 *bytes, guint64 value)
+{
+    value &= TS_TIMESTAMP_MASK;
+    bytes[0] = 0x20 | (((value >> 30) & 0x07) << 1) | 0x01;
+    bytes[1] = (value >> 22) & 0xFF;
+    bytes[2] = (((value >> 15) & 0x7F) << 1) | 0x01;
+    bytes[3] = (value >> 7) & 0xFF;
+    bytes[4] = ((value & 0x7F) << 1) | 0x01;
+}
+
+static void write_test_pcr(guint8 *bytes, guint64 value)
+{
+    value &= TS_TIMESTAMP_MASK;
+    bytes[0] = (value >> 25) & 0xFF;
+    bytes[1] = (value >> 17) & 0xFF;
+    bytes[2] = (value >> 9) & 0xFF;
+    bytes[3] = (value >> 1) & 0xFF;
+    bytes[4] = ((value & 0x01) << 7) | 0x7E;
+    bytes[5] = 0;
+}
+
+static void make_timed_packet(guint8 packet[TS_PACKET_SIZE], guint16 pid,
+                              guint8 continuity, guint64 pcr, guint64 pts)
+{
+    memset(packet, 0xFF, TS_PACKET_SIZE);
+    packet[0] = 0x47;
+    packet[1] = 0x40 | ((pid >> 8) & 0x1F);
+    packet[2] = pid & 0xFF;
+    packet[3] = 0x30 | (continuity & 0x0F);
+    packet[4] = 7;
+    packet[5] = 0x10;
+    write_test_pcr(packet + 6, pcr);
+
+    guint8 *pes = packet + 12;
+    pes[0] = 0x00;
+    pes[1] = 0x00;
+    pes[2] = 0x01;
+    pes[3] = 0xE0;
+    pes[4] = 0x00;
+    pes[5] = 0x00;
+    pes[6] = 0x80;
+    pes[7] = 0x80;
+    pes[8] = 0x05;
+    write_test_timestamp(pes + 9, pts);
+}
+
+static void test_ts_normalizer_aligns_switch_timestamps_and_continuity(void **state)
+{
+    (void)state;
+    BgTsNormalizer normalizer;
+    BgTsNormalizeResult result;
+    guint8 packet[TS_PACKET_SIZE];
+    guint64 value = 0;
+
+    bg_ts_normalizer_reset(&normalizer);
+
+    make_timed_packet(packet, 0x0101, 7, 900000, 900000);
+    assert_true(bg_ts_normalize(&normalizer, packet, sizeof(packet), 0, &result));
+    assert_false(result.source_changed);
+    assert_true(bg_ts_packet_get_pcr_90k(packet, &value));
+    assert_int_equal(value, 900000);
+    assert_true(bg_ts_packet_get_pts_90k(packet, &value));
+    assert_int_equal(value, 900000);
+    assert_int_equal(packet[3] & 0x0F, 7);
+
+    make_timed_packet(packet, 0x0101, 8, 903600, 903600);
+    assert_true(bg_ts_normalize(&normalizer, packet, sizeof(packet), 0, &result));
+
+    make_timed_packet(packet, 0x0101, 2, 9000000, 9000000);
+    assert_true(bg_ts_normalize(&normalizer, packet, sizeof(packet), 1, &result));
+    assert_true(result.source_changed);
+    assert_true(result.timestamps_rewritten);
+    assert_int_equal(result.continuity_rewritten, 1);
+    assert_true(bg_ts_packet_get_pcr_90k(packet, &value));
+    assert_int_equal(value, 907200);
+    assert_true(bg_ts_packet_get_pts_90k(packet, &value));
+    assert_int_equal(value, 907200);
+    assert_int_equal(packet[3] & 0x0F, 9);
+}
+
+static void test_ts_normalizer_handles_33_bit_wraparound(void **state)
+{
+    (void)state;
+    BgTsNormalizer normalizer;
+    BgTsNormalizeResult result;
+    guint8 packet[TS_PACKET_SIZE];
+    guint64 value = 0;
+
+    bg_ts_normalizer_reset(&normalizer);
+
+    guint64 near_wrap = TS_TIMESTAMP_MASK - 1799;
+    make_timed_packet(packet, 0x0101, 14, near_wrap, near_wrap);
+    assert_true(bg_ts_normalize(&normalizer, packet, sizeof(packet), 0, &result));
+
+    make_timed_packet(packet, 0x0101, 1, 450000, 450000);
+    assert_true(bg_ts_normalize(&normalizer, packet, sizeof(packet), 1, &result));
+    assert_true(result.source_changed);
+    assert_true(bg_ts_packet_get_pcr_90k(packet, &value));
+    assert_int_equal(value, 1800);
+    assert_true(bg_ts_packet_get_pts_90k(packet, &value));
+    assert_int_equal(value, 1800);
+    assert_int_equal(packet[3] & 0x0F, 15);
+}
+
+static void test_ts_normalizer_handles_prefixed_packet_alignment(void **state)
+{
+    (void)state;
+    BgTsNormalizer normalizer;
+    BgTsNormalizeResult result;
+    guint8 buffer[5 + TS_PACKET_SIZE];
+    guint64 value = 0;
+
+    memset(buffer, 0, 5);
+    make_timed_packet(buffer + 5, 0x0101, 3, 123456, 123456);
+    bg_ts_normalizer_reset(&normalizer);
+
+    assert_true(bg_ts_normalize(&normalizer, buffer, sizeof(buffer), 0, &result));
+    assert_true(bg_ts_packet_get_pcr_90k(buffer + 5, &value));
+    assert_int_equal(value, 123456);
+    assert_int_equal(buffer[5 + 3] & 0x0F, 3);
+}
+
 static gboolean selector_is_on(GstElement *selector, const char *pad_name)
 {
     GstPad *active = NULL;
@@ -382,6 +506,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(
             test_seamless_switch_waits_for_compatible_target_keyframe,
             setup_socket_fixture, teardown_socket_fixture),
+        cmocka_unit_test(test_ts_normalizer_aligns_switch_timestamps_and_continuity),
+        cmocka_unit_test(test_ts_normalizer_handles_33_bit_wraparound),
+        cmocka_unit_test(test_ts_normalizer_handles_prefixed_packet_alignment),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
