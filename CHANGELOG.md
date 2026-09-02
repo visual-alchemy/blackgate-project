@@ -8,22 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Guarded Seamless SDI Failover**: Matching dual-SRT inputs can remain warm and switch inside the running native pipeline. Blackgate validates MPEG-TS program/PID layout and codec configuration, waits for a target video keyframe, acknowledges the selector change, and retains deterministic pipeline-restart fallback for incompatible or incomplete streams. (`0faa825`)
+- **MPEG-TS Timeline Normalization**: Seamless SDI mode rewrites PCR, PTS, and DTS onto a shared 90 kHz output timeline, handles 33-bit wraparound, and regenerates per-PID continuity counters across source changes. (`0faa825`)
+- **Expanded Source Statistics**: Source cards expose receive rate, link bandwidth, RTT, receive latency, received/retransmitted/lost/dropped packets, resolution, frame rate, scan mode, and decimal Video/Audio PID values for each failover input. (`0faa825`)
+
 ### Changed
-- **SDI Routes Switch via Pipeline Restart**: Routes with SDI destinations no longer use the in-process input-selector flip on source switch — flipping between feeds from different muxers starves the SDI branch's demuxer/decoder pads and freezes output permanently. Switching now persists `active_source`, tears the pipeline down, and respawns it on the new source (~3-4s of clean black, mode re-detected). Non-SDI routes keep the instant in-process switch. (`a601904`)
-- **Fast Respawn for Intentional Switches**: Manual and auto-failover source switches respawn the pipeline after 250ms instead of waiting the 10s reconnect backoff (which remains in place for crash/watchdog recovery). (`a601904`)
-- **Secondary Source Overlay Mirrors the Pair**: When a pipeline is born on the secondary source, primary/secondary are swapped rather than duplicated — previously both slots dialed the secondary feed (double connection) and later switches landed on the wrong source. (`a601904`)
+- **SDI Switch Policy**: SDI routes retain restart-based switching by default. Enabling both Auto Join and Seamless SDI Failover activates guarded in-process switching for compatible inputs; a rejected or timed-out switch automatically returns to restart fallback. (`0faa825`)
+- **Network Timestamp Policy**: SRT and UDP sources preserve encoder timing with `do-timestamp=false`; seamless mode performs explicit post-selector MPEG-TS timeline normalization instead of deriving media time from network arrival. (`ce0d898`, `0faa825`)
+- **Failover Configuration Documentation**: README now distinguishes Failover Mode, Auto Join, Seamless SDI Failover, and Keep Listening, including why full pipeline restart forces listener-side encoders to reconnect. (`0faa825`)
 
 ### Fixed
-- **SDI Auto-Detect Re-Applies on Source Format Change**: A buffer probe on the SDI video queue re-runs DeckLink mode matching and capsfilter/interlace-element configuration whenever the flowing decoded format changes (semantic `WxH@fps` key, NTSC-fractional normalized), instead of locking to whatever the first frame declared. (`905686d`)
-- **SDI Decoder Pad Migration**: New decodebin pads from program/muxer changes are re-linked into the SDI output chain instead of starving. (`fd0d404`)
-- **Missing Route IDs Return 404, Not 500**: `Db.get_route/2` maps Khepri's `node_not_found` to `{:ok, nil}` (the bang version raised), making the show endpoint's 404 clause reachable; stale UI polls no longer error-spam. (`336a9e7`)
-- **Idempotent Route Start**: `start_route/1` returns `{:ok, pid}` when the route process is already running instead of leaking `{:error, {:already_started, pid}}` as an HTTP 500. (`5024042`)
-- **Fresh Ubuntu 24.04 Installs Build the Native Engine**: `make install` now includes `libssl-dev` (required by srt's pkg-config) and `gstreamer1.0-libav` (decoders for SDI/thumbnail paths) — previously `native/build/` stayed empty and routes exit-127'd. (`509a5a3`)
+- **GStreamer SRT Listener Callback ABI**: Corrected `srtsrc::caller-connecting` callback return type and arguments for deployed GStreamer 1.24, avoiding undefined behavior and rejected connections. (`ce0d898`)
+- **Native Port Recovery**: Route recovery clears dead Port terms and ignores delayed output from replaced Ports instead of attempting commands through a closed native process. (`ce0d898`)
+- **Acknowledged Active-Source State**: Persisted source selection is honored during initialization and updated only after native switch or replacement-pipeline acknowledgement. (`ce0d898`)
+- **Auto Join State Handling**: With Auto Join disabled, the inactive child is locked at `NULL`; switching starts the target before selector movement and stops the old source only after movement. (`ce0d898`)
+- **Unix-Socket Framing and Writes**: Native messages use serialized, newline-delimited, full-write transport; the Ranch receiver accumulates split lines with a bounded packet size. (`ce0d898`)
+- **Fresh Docker Release Builds**: Docker no longer depends on an ignored local `deps/` directory and fetches Mix dependencies inside the image build. (`ce0d898`)
+- **Failover Validation and UI Refresh**: Backend and form validation reject malformed failover/SRT settings, non-2xx authenticated requests reject correctly, and active route details continue polling through automatic failover. (`ce0d898`)
+- **Secret-Safe Logging**: SRT URIs, passphrases, tokens, authorization values, Stream IDs, route records, and FFmpeg source URLs are filtered or redacted from production logs. (`ce0d898`)
+- **Manual-Mode Recovery**: Manual failover reconnects the currently selected source after transient pipeline or network failure without silently changing source selection. (`0faa825`)
+- **Scalar-Array Metrics Export**: Metrics traversal now recurses only into map members of JSON arrays, preventing Video/Audio PID arrays from generating repeated `%BadMapError{}` log entries. (`0faa825`)
 
-### Known Issues
-- SDI branch teardown/rebuild for fully seamless switching is implemented but **dormant** (not wired) — under live streams the teardown path stalls and has segfaulted on DeckLink task lifetimes. See `switch_source()` in `gst_pipeline.c` for the status note.
-- Unix-socket stats framing: long stats JSON lines split across TCP reads produce occasional `Undefined msg` log noise and dropped stats cycles (video unaffected). Line-buffer accumulation in `UnixSockHandler` is the planned fix.
-- Fast client reconnects (~15s) after an abrupt SRT sender kill are expected: SRT dead-peer window + client-side reconnect backoff, not a gateway defect.
+### Known Limitations
+- Guarded seamless switching requires matching codec configuration and MPEG-TS program/PID layout. Arbitrary encoder or muxer layouts deliberately use restart fallback; PID remapping and demux/remux normalization are not implemented.
+- A compatible seamless cut can briefly freeze while waiting for the target keyframe and downstream decoder recovery. Hardware testing observed approximately 500 ms with the current matching encoder pair.
+- Abrupt sender termination can delay reconnection through the SRT dead-peer window plus sender-side retry backoff. This behavior remains transport/client dependent.
 
 ---
 
