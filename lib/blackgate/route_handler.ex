@@ -1628,11 +1628,30 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
+  # Bind the SRT socket to a specific local source IP (NIC binding) in caller or
+  # rendezvous mode. The UI exposes this as "bind-address" (an interface's IPv4);
+  # the native srtsrc/srtsink element maps its "localaddress" property to the
+  # local bind, distinct from the URI host. Listener mode already binds via the
+  # URI host, so the bind is ignored there.
+  defp maybe_add_srt_bind(props, opts) do
+    mode = Map.get(opts, "mode", "")
+
+    case Map.get(opts, "bind-address") do
+      ip when ip not in [nil, ""] and mode in ["caller", "rendezvous"] ->
+        Map.put(props, "localaddress", ip)
+
+      _ ->
+        props
+    end
+  end
+
   def sink_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
-    props = %{
-      "type" => "srtsink",
-      "uri" => build_srt_uri(opts)
-    }
+    props =
+      %{
+        "type" => "srtsink",
+        "uri" => build_srt_uri(opts)
+      }
+      |> maybe_add_srt_bind(opts)
 
     remaining_props =
       opts
@@ -1643,7 +1662,8 @@ defmodule Blackgate.RouteHandler do
         "passphrase",
         "pbkeylen",
         "poll-timeout",
-        "streamid"
+        "streamid",
+        "bind-address"
       ])
       |> Enum.filter(fn {key, _} ->
         key in ["latency", "sndbuf", "rcvbuf", "oheadbw", "maxbw"]
@@ -1817,10 +1837,12 @@ defmodule Blackgate.RouteHandler do
   # ===========================================================================
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
-    props = %{
-      "type" => "srtsrc",
-      "uri" => build_srt_uri(opts)
-    }
+    props =
+      %{
+        "type" => "srtsrc",
+        "uri" => build_srt_uri(opts)
+      }
+      |> maybe_add_srt_bind(opts)
 
     remaining_props =
       opts
@@ -1830,7 +1852,8 @@ defmodule Blackgate.RouteHandler do
         "mode",
         "passphrase",
         "pbkeylen",
-        "poll-timeout"
+        "poll-timeout",
+        "bind-address"
       ])
       |> Enum.filter(fn {key, _} ->
         key in ["latency", "auto-reconnect", "keep-listening", "rcvbuf", "lossmaxttl", "oheadbw"]

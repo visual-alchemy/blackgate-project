@@ -45,6 +45,34 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                 </Radio.Group>
               </Form.Item>
 
+              <Form.Item noStyle dependencies={[[...prefix, 'mode']]}>
+                {({ getFieldValue }) => {
+                  const srtMode = getFieldValue([...prefix, 'mode']);
+                  if (srtMode !== 'caller' && srtMode !== 'rendezvous') return null;
+                  return (
+                    <Form.Item
+                      label="Bind Interface"
+                      name={[...prefix, 'bind-address']}
+                      extra="Bind the SRT socket to a specific network interface (source IP). Useful for dual-NIC / multi-ISP routing. Leave default to let the OS choose."
+                    >
+                      <Select
+                        allowClear
+                        placeholder="Default (any interface)"
+                        options={[
+                          { label: 'Default (any interface)', value: '' },
+                          ...interfaces
+                            .filter(iface => iface.up && iface.address)
+                            .map(iface => ({
+                              label: `${iface.name} (${iface.address})`,
+                              value: iface.address
+                            }))
+                        ]}
+                      />
+                    </Form.Item>
+                  );
+                }}
+              </Form.Item>
+
               <Form.Item
                 label="Local Address"
                 name={[...prefix, 'localaddress']}

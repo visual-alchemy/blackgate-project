@@ -283,6 +283,34 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         </Radio.Group>
                                                     </Form.Item>
 
+                                                    <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                                                        {({ getFieldValue }) => {
+                                                            const srtMode = getFieldValue(['schema_options', 'mode']);
+                                                            if (srtMode !== 'caller' && srtMode !== 'rendezvous') return null;
+                                                            return (
+                                                                <Form.Item
+                                                                    label="Bind Interface"
+                                                                    name={['schema_options', 'bind-address']}
+                                                                    extra="Bind the SRT socket to a specific network interface (source IP). Useful for dual-NIC / multi-ISP routing. Leave default to let the OS choose."
+                                                                >
+                                                                    <Select
+                                                                        allowClear
+                                                                        placeholder="Default (any interface)"
+                                                                        options={[
+                                                                            { label: 'Default (any interface)', value: '' },
+                                                                            ...interfaces
+                                                                                .filter(iface => iface.up && iface.address)
+                                                                                .map(iface => ({
+                                                                                    label: `${iface.name} (${iface.address})`,
+                                                                                    value: iface.address
+                                                                                }))
+                                                                        ]}
+                                                                    />
+                                                                </Form.Item>
+                                                            );
+                                                        }}
+                                                    </Form.Item>
+
                                                     <Form.Item
                                                         label="Latency"
                                                         name={['schema_options', 'latency']}
@@ -504,7 +532,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         }
                                     </Form.Item>
 
-                                    {/* SDI specific options (DeckLink Quad 2) */}
+                                    {/* SDI specific options (DeckLink Duo 2) */}
                                     <Form.Item noStyle dependencies={['schema']}>
                                         {({ getFieldValue }) =>
                                             getFieldValue('schema') === 'SDI' && (
@@ -513,19 +541,15 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         label="SDI Output Port"
                                                         name={['schema_options', 'device_number']}
                                                         required
-                                                        extra="DeckLink Quad 2 port number. Each card provides 8 SDI channels (0-7)."
+                                                        extra="DeckLink Duo 2 port number. This card provides 4 SDI channels (0-3)."
                                                     >
                                                         <Select
                                                             placeholder="Select SDI port"
                                                             options={[
                                                                 { label: 'SDI 1', value: 0 },
-                                                                { label: 'SDI 2', value: 4 },
+                                                                { label: 'SDI 2', value: 2 },
                                                                 { label: 'SDI 3', value: 1 },
-                                                                { label: 'SDI 4', value: 5 },
-                                                                { label: 'SDI 5', value: 2 },
-                                                                { label: 'SDI 6', value: 6 },
-                                                                { label: 'SDI 7', value: 3 },
-                                                                { label: 'SDI 8', value: 7 },
+                                                                { label: 'SDI 4', value: 3 },
                                                             ].map(opt => ({
                                                                 ...opt,
                                                                 label: sdiPortUsage[opt.value]

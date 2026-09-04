@@ -2,23 +2,10 @@ import { useState, useEffect } from 'react';
 import { Popover, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, message, Tooltip } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons';
 import { destinationsApi, routesApi } from '../../utils/api';
+import { DEVICE_TO_SDI, SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
 import { useNavigate } from 'react-router-dom';
 
 const { Text } = Typography;
-
-const DEVICE_TO_SDI = { 0: 1, 4: 2, 1: 3, 5: 4, 2: 5, 6: 6, 3: 7, 7: 8 };
-const SDI_TO_DEVICE = { 1: 0, 2: 4, 3: 1, 4: 5, 5: 2, 6: 6, 7: 3, 8: 7 };
-
-const SDI_PORT_OPTIONS = [
-  { label: 'SDI 1', value: 0 },
-  { label: 'SDI 2', value: 4 },
-  { label: 'SDI 3', value: 1 },
-  { label: 'SDI 4', value: 5 },
-  { label: 'SDI 5', value: 2 },
-  { label: 'SDI 6', value: 6 },
-  { label: 'SDI 7', value: 3 },
-  { label: 'SDI 8', value: 7 },
-];
 
 const VIDEO_MODE_MAP = {
   0: 'Auto',
