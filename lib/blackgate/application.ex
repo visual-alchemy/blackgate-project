@@ -49,9 +49,6 @@ defmodule Blackgate.Application do
       {Registry,
        keys: :unique, name: Blackgate.Registry.MsgHandlers, partitions: runtime_schedulers},
       BlackgateWeb.Telemetry,
-      # Blackgate.Repo,
-      # {Ecto.Migrator,
-      #  repos: Application.fetch_env!(:blackgate, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: Blackgate.PubSub, partitions: runtime_schedulers},
       BlackgateWeb.Endpoint,
       Blackgate.Metrics.Connection

@@ -8,7 +8,6 @@
 import Config
 
 config :blackgate,
-  ecto_repos: [Blackgate.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
 # Configures the endpoint

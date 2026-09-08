@@ -42,17 +42,6 @@ if config_env() != :test do
       System.get_env("API_AUTH_PASSWORD") || raise("API_AUTH_PASSWORD is not set"),
     license_server_url: System.get_env("LICENSE_SERVER_URL", "http://localhost:3000")
 
-  # database_path =
-  #   System.get_env("DATABASE_PATH") ||
-  #     raise """
-  #     environment variable DATABASE_PATH is missing.
-  #     For example: /etc/blackgate/blackgate.db
-  #     """
-
-  # config :blackgate, Blackgate.Repo,
-  #   database: database_path,
-  #   pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
-
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
   # want to use a different value for prod and you most likely don't want
