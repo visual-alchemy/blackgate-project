@@ -9,7 +9,7 @@ defmodule BlackgateWeb.DestinationController do
     {:ok, destinations} = Db.get_all_destinations(route_id)
 
     destinations =
-      Enum.reduce(destinations, [], fn {["destinations", id], route}, acc ->
+      Enum.reduce(destinations, [], fn {["routes", _route_id, "destinations", id], route}, acc ->
         [Map.put(route, "id", id) | acc]
       end)
 
