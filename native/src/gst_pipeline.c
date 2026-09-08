@@ -2509,10 +2509,23 @@ static GstPadProbeReturn drop_thumbnail_pad_probe(GstPad *pad, GstPadProbeInfo *
     return GST_PAD_PROBE_DROP;
 }
 
+// Keyframe gate for thumbnail: only pass IDR (non-delta-unit) frames so the
+// preview JPEG is always a clean keyframe, never a macroblocked P/B frame.
+static GstPadProbeReturn thumbnail_keyframe_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    (void)user_data;
+    GstBuffer *buffer = gst_pad_probe_info_get_buffer(info);
+    if (buffer && GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT)) {
+        return GST_PAD_PROBE_DROP;
+    }
+    return GST_PAD_PROBE_OK;
+}
+
 static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer data)
 {
     (void)decodebin;
-    GstElement *videoconvert = (GstElement *)data;
+    GstElement *deinterlace = (GstElement *)data;
 
     GstCaps *caps = gst_pad_get_current_caps(pad);
     if (!caps) caps = gst_pad_query_caps(pad, NULL);
@@ -2554,11 +2567,14 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
         return;
     }
 
-    GstPad *sink_pad = gst_element_get_static_pad(videoconvert, "sink");
+    // Keyframe gate: drop P/B frames so preview is always a clean IDR frame
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, thumbnail_keyframe_probe, NULL, NULL);
+
+    GstPad *sink_pad = gst_element_get_static_pad(deinterlace, "sink");
     if (!gst_pad_is_linked(sink_pad)) {
         GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
         if (ret == GST_PAD_LINK_OK) {
-            g_print("Thumbnail: Linked video pad to videoconvert\n");
+            g_print("Thumbnail: Linked video pad to deinterlace\n");
         } else {
             g_printerr("Thumbnail: Failed to link video pad: %d\n", ret);
         }
@@ -2625,16 +2641,18 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 {
     GstElement *queue       = gst_element_factory_make("queue",         "thumbnail_queue");
     GstElement *decodebin   = gst_element_factory_make("decodebin",     "thumbnail_decodebin");
+    GstElement *deinterlace = gst_element_factory_make("deinterlace",   "thumbnail_deinterlace");
     GstElement *convert     = gst_element_factory_make("videoconvert",  "thumbnail_convert");
     GstElement *scale       = gst_element_factory_make("videoscale",    "thumbnail_scale");
     GstElement *capsfilter  = gst_element_factory_make("capsfilter",    "thumbnail_capsfilter");
     GstElement *jpegenc     = gst_element_factory_make("jpegenc",       "thumbnail_jpegenc");
     GstElement *appsink     = gst_element_factory_make("appsink",       "thumbnail_appsink");
 
-    if (!queue || !decodebin || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
+    if (!queue || !decodebin || !deinterlace || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
         g_printerr("Thumbnail: One or more elements unavailable — skipping thumbnail branch\n");
         if (queue)      gst_object_unref(queue);
         if (decodebin)  gst_object_unref(decodebin);
+        if (deinterlace) gst_object_unref(deinterlace);
         if (convert)    gst_object_unref(convert);
         if (scale)      gst_object_unref(scale);
         if (capsfilter) gst_object_unref(capsfilter);
@@ -2659,7 +2677,7 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
     g_object_set(capsfilter, "caps", caps, NULL);
     gst_caps_unref(caps);
 
-    g_object_set(jpegenc, "quality", 75, NULL);
+    g_object_set(jpegenc, "quality", 85, NULL);
 
     g_object_set(appsink,
         "emit-signals", FALSE,
@@ -2668,16 +2686,16 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         "sync",         FALSE,
         NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), queue, decodebin, convert, scale, capsfilter, jpegenc, appsink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), queue, decodebin, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
 
-    g_signal_connect(decodebin, "pad-added", G_CALLBACK(on_thumbnail_pad_added), convert);
+    g_signal_connect(decodebin, "pad-added", G_CALLBACK(on_thumbnail_pad_added), deinterlace);
 
     if (!gst_element_link(tee, queue) || !gst_element_link(queue, decodebin)) {
         g_printerr("Thumbnail: Failed to link tee → queue → decodebin\n");
         return;
     }
 
-    if (!gst_element_link_many(convert, scale, capsfilter, jpegenc, appsink, NULL)) {
+    if (!gst_element_link_many(deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
         g_printerr("Thumbnail: Failed to link video chain\n");
         return;
     }
