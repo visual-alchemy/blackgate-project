@@ -2,7 +2,7 @@ defmodule Blackgate.License do
   @moduledoc """
   License verification module for Blackgate.
 
-  Validates license keys using RSA public key cryptography.
+  Validates license keys against a remote license server over HTTPS.
   Supports trial mode (30 days, 2 routes) for unlicensed installations.
   """
 
@@ -37,6 +37,9 @@ defmodule Blackgate.License do
     license = get_license()
 
     cond do
+      license.status == :revoked ->
+        {:error, "License has been revoked. Please contact support."}
+
       license.expired ->
         {:error, "License expired. Please activate a valid license key."}
 
@@ -131,7 +134,7 @@ defmodule Blackgate.License do
         Logger.info("License: Activated for #{payload["client_name"]} (#{payload["plan_tier"]})")
         {:reply, {:ok, license_data}, state}
 
-      {:error, reason} ->
+      {:error, _class, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
@@ -196,15 +199,15 @@ defmodule Blackgate.License do
           
         response.status in [401, 403, 404] ->
           error_msg = parsed_body["error"] || "Verification failed"
-          {:error, error_msg}
+          {:error, :revoked, error_msg}
           
         true ->
-          {:error, "Unexpected response from license server"}
+          {:error, :unreachable, "Unexpected response from license server"}
       end
     rescue
       e ->
         Logger.error("Failed to connect to license server: #{inspect(e)}")
-        {:error, "Could not reach license server for verification. Are you online?"}
+        {:error, :unreachable, "Could not reach license server for verification. Are you online?"}
     end
   end
 
@@ -216,10 +219,57 @@ defmodule Blackgate.License do
         :khepri.put(["license", "data"], payload)
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
-        
-      {:error, reason} ->
-        Logger.warning("License: Background verification failed (#{reason}). Keeping cached license active.")
+        reset_heartbeat_failures()
+
+      {:error, :revoked, reason} ->
+        Logger.warning("License: Server rejected license (#{reason}). Invalidating.")
+        invalidate_license(reason)
+
+      {:error, :unreachable, reason} ->
+        failures = register_heartbeat_failure()
+
+        if failures >= max_heartbeat_failures() do
+          Logger.warning(
+            "License: Unreachable for #{failures} consecutive heartbeats (~#{offline_grace_days()} days). Invalidating."
+          )
+
+          invalidate_license(reason)
+        else
+          Logger.warning(
+            "License: Background verification failed (#{reason}). " <>
+              "Keeping cached license active (failure #{failures}/#{max_heartbeat_failures()})."
+          )
+        end
     end
+  end
+
+  defp invalidate_license(reason) do
+    :khepri.delete(["license", "data"])
+    reset_heartbeat_failures()
+    :ets.insert(@table_name, {:license, %{status: :revoked, expired: true, reason: reason}})
+  end
+
+  defp register_heartbeat_failure do
+    count =
+      case :ets.lookup(@table_name, :license_failures) do
+        [{:license_failures, n}] -> n + 1
+        [] -> 1
+      end
+
+    :ets.insert(@table_name, {:license_failures, count})
+    count
+  end
+
+  defp reset_heartbeat_failures do
+    :ets.delete(@table_name, :license_failures)
+  end
+
+  defp offline_grace_days do
+    Application.get_env(:blackgate, :offline_grace_days, 30)
+  end
+
+  defp max_heartbeat_failures do
+    max(div(offline_grace_days() * 24 * 60 * 60 * 1000, @heartbeat_interval), 1)
   end
 
   defp build_license_data(payload) do
