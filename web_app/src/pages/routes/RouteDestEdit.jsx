@@ -10,6 +10,7 @@ import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, routesApi, networkApi } from '../../utils/api';
+import { SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
 import React from 'react';
 
 const { Title } = Typography;
@@ -532,7 +533,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         }
                                     </Form.Item>
 
-                                    {/* SDI specific options (DeckLink Duo 2) */}
+                                    {/* SDI specific options (DeckLink Quad 2) */}
                                     <Form.Item noStyle dependencies={['schema']}>
                                         {({ getFieldValue }) =>
                                             getFieldValue('schema') === 'SDI' && (
@@ -541,16 +542,11 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         label="SDI Output Port"
                                                         name={['schema_options', 'device_number']}
                                                         required
-                                                        extra="DeckLink Duo 2 port number. This card provides 4 SDI channels (0-3)."
+                                                        extra="DeckLink Quad 2 port number. This card provides 8 SDI channels (0-7)."
                                                     >
                                                         <Select
                                                             placeholder="Select SDI port"
-                                                            options={[
-                                                                { label: 'SDI 1', value: 0 },
-                                                                { label: 'SDI 2', value: 2 },
-                                                                { label: 'SDI 3', value: 1 },
-                                                                { label: 'SDI 4', value: 3 },
-                                                            ].map(opt => ({
+                                                            options={SDI_PORT_OPTIONS.map(opt => ({
                                                                 ...opt,
                                                                 label: sdiPortUsage[opt.value]
                                                                     ? `${opt.label} (used by ${sdiPortUsage[opt.value]})`
@@ -634,4 +630,4 @@ RouteDestEdit.propTypes = {
     onChange: PropTypes.func,
 };
 
-export default RouteDestEdit; 
+export default RouteDestEdit;

@@ -68,6 +68,21 @@ static void assert_received_frame(SocketFixture *fixture, const char *expected)
     close(peer);
 }
 
+static cJSON *receive_json_frame(int peer)
+{
+    char buffer[4096] = {0};
+    size_t used = 0;
+    while (used < sizeof(buffer) - 1) {
+        ssize_t received = recv(peer, buffer + used, sizeof(buffer) - 1 - used, 0);
+        assert_true(received > 0);
+        used += (size_t)received;
+        if (memchr(buffer, '\n', used)) break;
+    }
+    cJSON *json = cJSON_Parse(buffer);
+    assert_non_null(json);
+    return json;
+}
+
 static void test_init_unix_socket(void **state)
 {
     (void)state;
@@ -121,6 +136,56 @@ static void test_create_pipeline(void **state)
     assert_non_null(pipeline);
 
     cleanup_pipeline(pipeline);
+    cJSON_Delete(json);
+}
+
+static void test_source_probe_reports_stats_without_element_stats(void **state)
+{
+    SocketFixture *fixture = *state;
+    init_unix_socket(fixture->socket_path);
+
+    const char *json_str =
+        "{\"source\":{\"type\":\"appsrc\"},\"sinks\":[{\"type\":\"fakesink\"}]}";
+    cJSON *json = cJSON_Parse(json_str);
+    assert_non_null(json);
+
+    GstElement *pipeline = create_pipeline(json, "udp_stats_route");
+    assert_non_null(pipeline);
+    GstElement *source = gst_bin_get_by_name(GST_BIN(pipeline), "source");
+    assert_non_null(source);
+
+    assert_true(gst_element_set_state(pipeline, GST_STATE_PLAYING) != GST_STATE_CHANGE_FAILURE);
+    gst_element_get_state(pipeline, NULL, NULL, 100 * GST_MSECOND);
+
+    GstBuffer *buffer = gst_buffer_new_allocate(NULL, 1316, NULL);
+    assert_non_null(buffer);
+    assert_int_equal(gst_app_src_push_buffer(GST_APP_SRC(source), buffer), GST_FLOW_OK);
+
+    int peer = accept(fixture->server_fd, NULL, NULL);
+    assert_true(peer >= 0);
+
+    cJSON *stats = NULL;
+    for (guint i = 0; i < 3; i++) {
+        cJSON *candidate = receive_json_frame(peer);
+        cJSON *total_bytes =
+            cJSON_GetObjectItemCaseSensitive(candidate, "total-bytes-received");
+        if (cJSON_IsNumber(total_bytes) && total_bytes->valuedouble >= 1316.0) {
+            stats = candidate;
+            break;
+        }
+        cJSON_Delete(candidate);
+    }
+    assert_non_null(stats);
+    cJSON *packets = cJSON_GetObjectItemCaseSensitive(stats, "packets-received");
+    cJSON *rate = cJSON_GetObjectItemCaseSensitive(stats, "receive-rate-mbps");
+    assert_true(cJSON_IsNumber(packets));
+    assert_true(packets->valuedouble >= 1.0);
+    assert_true(cJSON_IsNumber(rate));
+    assert_true(rate->valuedouble > 0.0);
+    cJSON_Delete(stats);
+    gst_object_unref(source);
+    cleanup_pipeline(pipeline);
+    close(peer);
     cJSON_Delete(json);
 }
 
@@ -496,6 +561,8 @@ int main(void)
                                         teardown_socket_fixture),
         cmocka_unit_test_setup_teardown(test_create_pipeline, setup_socket_fixture,
                                         teardown_socket_fixture),
+        cmocka_unit_test_setup_teardown(test_source_probe_reports_stats_without_element_stats,
+                                        setup_socket_fixture, teardown_socket_fixture),
         cmocka_unit_test_setup_teardown(test_dual_ingest_initial_primary_locks_secondary,
                                         setup_socket_fixture, teardown_socket_fixture),
         cmocka_unit_test_setup_teardown(test_dual_ingest_initial_secondary_starts_secondary,

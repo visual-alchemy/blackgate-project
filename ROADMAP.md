@@ -139,3 +139,26 @@
 - [x] True auto-detect: match SDI output mode to input source resolution/framerate (deferred dynamic linking on decoded caps)
 - [ ] Test with Docker deployment (requires host DeckLink driver + device passthrough)
 - [ ] Test 4+ simultaneous SDI outputs from different routes
+
+---
+
+## 💰 Commercialization / Licensing (Sell Blackgate to Clients)
+
+### 18. License Hardening — blockers before first sale
+- [ ] **#1 Bound offline grace period** — currently INFINITE (`license.ex:220-221` logs "Keeping cached license active", never expires offline → revocation can't bite an air-gapped box). Add configurable grace (e.g. 30 days offline → deactivate).
+- [ ] **#2 Enforce node-lock server-side** — client currently trusts server response; `license_key → machine_id` binding must be authoritative on the server (server not in this repo).
+- [ ] **#3 Stable `machine_id`** — currently first MAC from `ip link` (`machine_id.ex:46-66`), fragile on multi-NIC / USB NIC reorder. Store a generated node ID at first boot instead.
+- [ ] **#4 Remove default creds** — `admin/password123` hardcoded in Makefile `start` + systemd unit. Per-client provisioning + firstboot secret generation.
+- [ ] **#5 Replace dev license URL** — `LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app` → production license server.
+- [ ] **#6 Fix stale comment** — `license.ex:5` claims "RSA public key cryptography" but real impl is online HTTP validation (`verify_license_with_server`). Document actual model.
+
+### 19. Deployment Model — decide before first sale
+- [ ] **Fork 1:** software-only vs hardware appliance (iso-builder produces the appliance ISO — recommended path)
+- [ ] **Fork 2:** subscription vs perpetual (license `expires_at` supports both: `null` = lifetime)
+- [ ] **Fork 3:** internet-connected vs air-gapped (validation is online-only today → air-gapped = 30-day trial only)
+
+### 20. Client Delivery & Support Pipeline
+- [ ] Ship via iso-builder appliance, not repo clone / git-pull
+- [ ] Real license server (not Vercel dev) + backend per `license.ex:15` Supabase comment
+- [ ] Support access: read-only SSH + Tailscale (respect AGENTS.md remote read-only rule)
+- [ ] Signed-release update path riding the license heartbeat channel

@@ -1,12 +1,17 @@
+# systemd unit template for the blackgate dev/release daemon.
+# NOT installed directly — run `make systemd-install`, which substitutes
+# @USER@ (running user) and @DIR@ (repo checkout path) and installs the
+# result to /etc/systemd/system/blackgate.service.
+
 [Unit]
 Description=Blackgate SRT Gateway
 After=network.target
 
 [Service]
 Type=exec
-User=woi
-Group=woi
-WorkingDirectory=/home/woi/Downloads/blackgate-project
+User=@USER@
+Group=@USER@
+WorkingDirectory=@DIR@
 Environment=PHX_SERVER=true
 Environment=PORT=4000
 Environment=PHX_HOST=0.0.0.0
@@ -15,8 +20,8 @@ Environment=API_AUTH_PASSWORD=password123
 Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
 Environment=RELEASE_COOKIE=blackgate_production_cookie
 Environment=GST_PLUGIN_FEATURE_RANK=vah264dec:0,vah265dec:0
-ExecStart=/home/woi/Downloads/blackgate-project/_build/prod/rel/blackgate/bin/blackgate start
-ExecStop=/home/woi/Downloads/blackgate-project/_build/prod/rel/blackgate/bin/blackgate stop
+ExecStart=@DIR@/_build/prod/rel/blackgate/bin/blackgate start
+ExecStop=@DIR@/_build/prod/rel/blackgate/bin/blackgate stop
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

@@ -990,6 +990,14 @@ typedef struct {
     guint8 stream_types[MAX_PROGRAM_STREAMS];
     guint8 es_tail[4];
     guint es_tail_len;
+
+    // Source-pad counters are transport-neutral. SRT exposes equivalent
+    // values through its `stats` property; udpsrc does not.
+    guint64 bytes_received_total;
+    guint64 packets_received_total;
+    gint64 first_buffer_at_us;
+    guint64 last_report_bytes;
+    gint64 last_report_at_us;
 } SourceTsInfo;
 
 static SourceTsInfo source_ts_info[2];
@@ -1049,9 +1057,59 @@ static gboolean mpegts_stream_is_audio(guint8 stream_type)
            stream_type == STREAM_TYPE_EAC3;
 }
 
+static void add_source_probe_stats(cJSON *root, const char *tag)
+{
+    if (!root) return;
+
+    gint source_index = g_strcmp0(tag, "secondary") == 0 ? 1 : 0;
+    gint64 now_us = g_get_monotonic_time();
+    guint64 bytes_total = 0;
+    guint64 packets_total = 0;
+    guint64 bytes_since_last_report = 0;
+    gdouble receive_rate_mbps = 0.0;
+
+    g_mutex_lock(&seamless_switch_mutex);
+    SourceTsInfo *stream_info = &source_ts_info[source_index];
+    bytes_total = stream_info->bytes_received_total;
+    packets_total = stream_info->packets_received_total;
+
+    gint64 sample_started_at_us = stream_info->last_report_at_us;
+    guint64 sample_started_bytes = stream_info->last_report_bytes;
+    if (sample_started_at_us == 0) {
+        sample_started_at_us = stream_info->first_buffer_at_us;
+        sample_started_bytes = 0;
+    }
+
+    if (sample_started_at_us > 0 && now_us > sample_started_at_us &&
+        bytes_total >= sample_started_bytes) {
+        bytes_since_last_report = bytes_total - sample_started_bytes;
+        receive_rate_mbps =
+            ((gdouble)bytes_since_last_report * 8.0) / (now_us - sample_started_at_us);
+    }
+
+    stream_info->last_report_bytes = bytes_total;
+    stream_info->last_report_at_us = now_us;
+    g_mutex_unlock(&seamless_switch_mutex);
+
+    cJSON_AddNumberToObject(root, "total-bytes-received", (double)bytes_total);
+    cJSON_AddNumberToObject(root, "bytes-received", (double)bytes_since_last_report);
+    cJSON_AddNumberToObject(root, "packets-received", (double)packets_total);
+    cJSON_AddNumberToObject(root, "packets-received-lost", 0);
+    cJSON_AddNumberToObject(root, "packets-received-dropped", 0);
+    cJSON_AddNumberToObject(root, "packets-received-retransmitted", 0);
+    cJSON_AddNumberToObject(root, "rtt-ms", 0.0);
+    cJSON_AddNumberToObject(root, "receive-rate-mbps", receive_rate_mbps);
+    cJSON_AddNumberToObject(root, "bandwidth-mbps", 0.0);
+    cJSON_AddNumberToObject(root, "negotiated-latency-ms", 0);
+    cJSON_AddNumberToObject(root, "connected-callers", 0);
+    cJSON_AddArrayToObject(root, "callers");
+}
+
 static void add_mpegts_source_stats(cJSON *root, const char *tag)
 {
-    if (!root || !dual_ingest_active) return;
+    // Every MPEG-TS source populates slot 0 (and dual ingest also populates
+    // slot 1).  PID diagnostics must therefore not depend on dual ingest.
+    if (!root) return;
 
     gint source_index = g_strcmp0(tag, "secondary") == 0 ? 1 : 0;
     SourceTsInfo snapshot;
@@ -1202,10 +1260,10 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
             }
         }
     } else {
-        // Provide default source stats fields when SRT stats are unavailable
-        cJSON_AddNumberToObject(root, "total-bytes-received", 0);
-        cJSON_AddNumberToObject(root, "connected-callers", 0);
-        cJSON_AddArrayToObject(root, "callers");
+        // udpsrc has no `stats` property. The probe sees every source buffer,
+        // so its counters provide route health, watchdog, and UI telemetry
+        // without inventing SRT caller or RTT data.
+        add_source_probe_stats(root, tag);
     }
 
     if (stats) {
@@ -2021,6 +2079,13 @@ static GstPadProbeReturn source_ts_probe_callback(GstPad *pad, GstPadProbeInfo *
 
     g_mutex_lock(&seamless_switch_mutex);
     SourceTsInfo *stream_info = &source_ts_info[source_index];
+    gint64 now_us = g_get_monotonic_time();
+    stream_info->bytes_received_total += map.size;
+    stream_info->packets_received_total++;
+    if (stream_info->first_buffer_at_us == 0) {
+        stream_info->first_buffer_at_us = now_us;
+    }
+
     for (gsize offset = first_packet; offset + TS_PACKET_SIZE <= map.size;
          offset += TS_PACKET_SIZE) {
         const guint8 *packet = map.data + offset;
@@ -2830,6 +2895,21 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         // SINGLE-SOURCE (legacy): source → tee
         // =================================================================
         gst_bin_add_many(GST_BIN(pipeline), primary_source_element, tee, NULL);
+
+        // Keep source-level MPEG-TS metadata available for normal routes.
+        // Dual-ingest installs this probe on both sources above; historically
+        // single-source routes had no equivalent probe, so their PID stats
+        // remained N/A even when the stream carried a valid PAT/PMT.
+        GstPad *primary_src_pad = gst_element_get_static_pad(primary_source_element, "src");
+        if (!primary_src_pad) {
+            g_printerr("SINGLE-SOURCE: failed to get primary source src pad for PID probe\n");
+            gst_object_unref(pipeline);
+            return NULL;
+        }
+        gst_pad_add_probe(primary_src_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                          source_ts_probe_callback, GINT_TO_POINTER(0), NULL);
+        gst_object_unref(primary_src_pad);
+
         if (!gst_element_link(primary_source_element, tee)) {
             g_printerr("Elements could not be linked.\n");
             gst_object_unref(pipeline);

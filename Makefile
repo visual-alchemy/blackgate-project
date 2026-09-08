@@ -244,3 +244,63 @@ docker_start:
 
 docker_clean:
 	docker compose down && docker compose rm -f blackgate
+
+# =============================================================================
+# REPRODUCIBILITY HELPERS (systemd unit + DeckLink SDI plugin)
+# =============================================================================
+
+USER := $(shell id -un)
+GST_VERSION := $(shell gst-inspect-1.0 --version 2>/dev/null | awk '{print $$3}')
+GST_MULTIARCH := $(shell gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)
+GST_PLUGIN_LIB_DIR := /usr/lib/$(GST_MULTIARCH)/gstreamer-1.0
+DECKLINK_BUILD_DIR := /tmp/blackgate-decklink-build
+
+.PHONY: systemd-install
+systemd-install:
+	@echo "Generating blackgate.service for user '$(USER)' in $(CURDIR)..."
+	@sed -e "s|@DIR@|$(CURDIR)|g" -e "s|@USER@|$(USER)|g" blackgate.service > /tmp/blackgate.service
+	@echo "Installing /etc/systemd/system/blackgate.service..."
+	@sudo install -m 644 /tmp/blackgate.service /etc/systemd/system/blackgate.service
+	@rm -f /tmp/blackgate.service
+	@sudo systemctl daemon-reload
+	@sudo systemctl enable --now blackgate
+	@echo "Done. Manage with: systemctl status|restart|stop blackgate"
+
+.PHONY: systemd-uninstall
+systemd-uninstall:
+	@sudo systemctl disable --now blackgate || true
+	@sudo rm -f /etc/systemd/system/blackgate.service
+	@sudo systemctl daemon-reload
+	@echo "Removed blackgate systemd unit."
+
+.PHONY: install-decklink
+install-decklink:
+	@echo "=============================================="
+	@echo "DeckLink GStreamer plugin (SDI input/output)"
+	@echo "=============================================="
+	@if ! ls /dev/blackmagic/io* >/dev/null 2>&1; then \
+		echo "ERROR: Blackmagic Desktop Video driver not found (/dev/blackmagic/*)."; \
+		echo "  The driver is proprietary and cannot be installed from this repo."; \
+		echo "  Install it first, then rerun this target:"; \
+		echo "    https://www.blackmagicdesign.com/support/download"; \
+		exit 1; \
+	fi
+	@echo "Driver OK. System GStreamer version: $(GST_VERSION)."
+	@echo "Installing build deps (meson, ninja, gst dev headers)..."
+	@sudo apt-get install -y meson ninja-build libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+	@echo "Cloning gst-plugins-bad @ $(GST_VERSION) (shallow)..."
+	@rm -rf $(DECKLINK_BUILD_DIR)
+	@git clone --depth 1 --branch $(GST_VERSION) https://gitlab.freedesktop.org/gstreamer/gstreamer.git $(DECKLINK_BUILD_DIR)
+	@echo "Building decklink plugin only (a few minutes)..."
+	@cd $(DECKLINK_BUILD_DIR)/subprojects/gst-plugins-bad && \
+		meson setup builddir -Ddecklink=enabled -Dauto_features=disabled --prefix=/usr && \
+		ninja -C builddir sys/decklink/libgstdecklink.so
+	@echo "Installing libgstdecklink.so -> $(GST_PLUGIN_LIB_DIR)/"
+	@sudo cp $(DECKLINK_BUILD_DIR)/subprojects/gst-plugins-bad/builddir/sys/decklink/libgstdecklink.so $(GST_PLUGIN_LIB_DIR)/
+	@sudo ldconfig
+	@rm -rf $(DECKLINK_BUILD_DIR)
+	@if gst-inspect-1.0 decklinkvideosink >/dev/null 2>&1; then \
+		echo "OK: decklinksrc / decklinkvideosink / decklinkaudiosink available."; \
+	else \
+		echo "WARNING: installed but gst-inspect-1.0 did not find it — retry in a fresh shell or check ldconfig."; \
+	fi
