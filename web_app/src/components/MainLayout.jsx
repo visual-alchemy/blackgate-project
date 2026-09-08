@@ -181,11 +181,14 @@ const MainLayout = ({ children }) => {
       icon: <AlertOutlined />,
       label: 'Events',
     },
-    {
-      key: ROUTES.SYSTEM_NODES,
-      icon: <ApiOutlined />,
-      label: 'Nodes',
-    },
+    // "Nodes" hidden from sidebar (multi-node cluster view not needed for
+    // single-gateway deployments). Route + component + backend kept intact —
+    // reachable directly via /system/nodes. Uncomment to restore the menu item.
+    // {
+    //   key: ROUTES.SYSTEM_NODES,
+    //   icon: <ApiOutlined />,
+    //   label: 'Nodes',
+    // },
     {
       key: ROUTES.LICENSE,
       icon: <SafetyCertificateOutlined />,
