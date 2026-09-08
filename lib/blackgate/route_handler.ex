@@ -892,6 +892,8 @@ defmodule Blackgate.RouteHandler do
       secondary_source_configured?(Map.get(route_map, "secondary_source"))
   end
 
+  def failover_active?(_), do: false
+
   defp secondary_source_configured?(secondary) when is_map(secondary) and map_size(secondary) > 0,
     do: true
 
