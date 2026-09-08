@@ -25,6 +25,41 @@ static void on_sdi_tsdemux_pad_added(GstElement *src, GstPad *new_pad, gpointer 
 static void on_sdi_decodebin_video_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 
+// =============================================================================
+// Decoder policy + interlace-mode helpers
+// =============================================================================
+
+// interlace-mode values: "progressive", "interleaved", "interlaced"/"fields",
+// "mixed" (what VA-API h264dec emits for field-coded H.264). Anything other
+// than "progressive" carries interlaced fields → treat as interlaced.
+static gboolean caps_interlace_is_interlaced(const gchar *ims)
+{
+    if (ims == NULL || ims[0] == '\0') return FALSE;
+    return g_strcmp0(ims, "progressive") != 0;
+}
+
+// vah264dec ranks above avdec_h264 (257 vs 256) and emits interlace-mode=
+// "mixed" for interlaced H.264. Downstream videoconvert/videoscale/videorate
+// cannot convert "mixed"→"interleaved" → GST_FLOW_NOT_NEGOTIATED crash loop
+// on interlaced broadcast sources. avdec_h264 emits "interleaved" (works).
+// Demote VA-API decoders to GST_RANK_NONE; also overrides any
+// GST_PLUGIN_FEATURE_RANK env boost (runs after gst_init registry init).
+void blackgate_apply_decoder_policy(void)
+{
+    const char *hw_decoders[] = { "vah264dec", "vah265dec" };
+
+    for (size_t i = 0; i < G_N_ELEMENTS(hw_decoders); i++) {
+        GstElementFactory *factory = gst_element_factory_find(hw_decoders[i]);
+        if (factory) {
+            gst_plugin_feature_set_rank(GST_PLUGIN_FEATURE(factory), GST_RANK_NONE);
+            g_print("Decoder policy: demoted %s to GST_RANK_NONE "
+                    "(software decode for reliable interlaced handling)\n",
+                    hw_decoders[i]);
+            gst_object_unref(factory);
+        }
+    }
+}
+
 // SDI Audio Health Monitor — tracks last audio buffer time per device
 // Only prints a warning when audio stops flowing (not every buffer)
 #define SDI_AUDIO_HEALTH_INTERVAL_SEC 10
@@ -178,7 +213,7 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
     gst_structure_get_int(s, "height", &height);
     gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
     const gchar *ims = gst_structure_get_string(s, "interlace-mode");
-    if (ims && g_strcmp0(ims, "interleaved") == 0) interlaced = TRUE;
+    interlaced = caps_interlace_is_interlaced(ims);
     gst_caps_unref(nc);
 
     if (width <= 0 || height <= 0 || fps_num <= 0) return;
@@ -313,7 +348,7 @@ static GstPadProbeReturn sdi_caps_reapply_probe(GstPad *pad, GstPadProbeInfo *in
     gst_structure_get_int(s, "height", &height);
     gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
     const gchar *ims = gst_structure_get_string(s, "interlace-mode");
-    if (ims && g_strcmp0(ims, "interleaved") == 0) interlaced = TRUE;
+    interlaced = caps_interlace_is_interlaced(ims);
     gst_caps_unref(nc);
 
     if (width <= 0 || height <= 0 || fps_num <= 0) {
@@ -500,9 +535,7 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
 
     const gchar *interlace_mode_str = gst_structure_get_string(s, "interlace-mode");
-    if (interlace_mode_str && g_strcmp0(interlace_mode_str, "interleaved") == 0) {
-        interlaced = TRUE;
-    }
+    interlaced = caps_interlace_is_interlaced(interlace_mode_str);
 
     gst_caps_unref(caps);
 
@@ -2431,10 +2464,7 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
         gst_structure_get_fraction(str, "framerate", &fps_num, &fps_den);
 
         const gchar *interlace_mode_str = gst_structure_get_string(str, "interlace-mode");
-        gboolean interlaced = FALSE;
-        if (interlace_mode_str && g_strcmp0(interlace_mode_str, "interleaved") == 0) {
-            interlaced = TRUE;
-        }
+        gboolean interlaced = caps_interlace_is_interlaced(interlace_mode_str);
 
         pthread_mutex_lock(&video_info.mutex);
         if (width > 0 && height > 0) {

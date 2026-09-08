@@ -123,6 +123,7 @@ int main(int argc, char* argv[])
     }
 
     gst_init(NULL, NULL);
+    blackgate_apply_decoder_policy();
 
     GstElement *pipeline = create_pipeline(json, argv[1]);
     if (!pipeline) {
