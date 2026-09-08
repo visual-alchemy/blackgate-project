@@ -1,16 +1,17 @@
 defmodule BlackgateWeb.SystemController do
   use BlackgateWeb, :controller
 
+  alias Blackgate.Db
   alias Blackgate.ProcessMonitor
   alias Blackgate.Helpers
 
   def list_pipelines(conn, _params) do
-    pipelines = ProcessMonitor.list_pipeline_processes()
+    pipelines = ProcessMonitor.list_pipeline_processes() |> add_route_names()
     json(conn, pipelines)
   end
 
   def list_pipelines_detailed(conn, _params) do
-    pipelines = ProcessMonitor.list_pipeline_processes_detailed()
+    pipelines = ProcessMonitor.list_pipeline_processes_detailed() |> add_route_names()
     json(conn, pipelines)
   end
 
@@ -30,4 +31,25 @@ defmodule BlackgateWeb.SystemController do
         |> json(%{error: "Failed to kill process: #{inspect(error)}"})
     end
   end
+
+  defp add_route_names(pipelines) when is_list(pipelines) do
+    route_names =
+      case Db.get_all_routes(false) do
+        {:ok, routes} ->
+          Map.new(routes, fn route ->
+            route_id = route["id"]
+            {route_id, route["name"] || route_id}
+          end)
+
+        _ ->
+          %{}
+      end
+
+    Enum.map(pipelines, fn pipeline ->
+      route_id = Map.get(pipeline, :route_id)
+      Map.put(pipeline, :route_name, Map.get(route_names, route_id))
+    end)
+  end
+
+  defp add_route_names(other), do: other
 end

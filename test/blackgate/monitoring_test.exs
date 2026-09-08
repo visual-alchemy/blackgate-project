@@ -59,6 +59,7 @@ defmodule Blackgate.MonitoringTest do
       assert is_map(process)
       assert Map.has_key?(process, :pid)
       assert Map.has_key?(process, :cpu)
+      assert Map.has_key?(process, :cpu_average)
       assert Map.has_key?(process, :memory)
       assert Map.has_key?(process, :memory_percent)
       assert Map.has_key?(process, :memory_bytes)
@@ -67,6 +68,7 @@ defmodule Blackgate.MonitoringTest do
       assert Map.has_key?(process, :user)
       assert Map.has_key?(process, :start_time)
       assert Map.has_key?(process, :command)
+      assert Map.has_key?(process, :route_id)
     end
   end
 
@@ -78,6 +80,7 @@ defmodule Blackgate.MonitoringTest do
       assert is_map(process)
       assert Map.has_key?(process, :pid)
       assert Map.has_key?(process, :cpu)
+      assert Map.has_key?(process, :cpu_average)
       assert Map.has_key?(process, :memory_percent)
       assert Map.has_key?(process, :memory_bytes)
       assert Map.has_key?(process, :virtual_memory)
@@ -90,6 +93,7 @@ defmodule Blackgate.MonitoringTest do
       assert Map.has_key?(process, :user)
       assert Map.has_key?(process, :start_time)
       assert Map.has_key?(process, :command)
+      assert Map.has_key?(process, :route_id)
     end
   end
 
