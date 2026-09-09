@@ -533,7 +533,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         }
                                     </Form.Item>
 
-                                    {/* SDI specific options (DeckLink Quad 2) */}
+                                    {/* SDI specific options (DeckLink Duo 2) */}
                                     <Form.Item noStyle dependencies={['schema']}>
                                         {({ getFieldValue }) =>
                                             getFieldValue('schema') === 'SDI' && (
@@ -542,7 +542,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         label="SDI Output Port"
                                                         name={['schema_options', 'device_number']}
                                                         required
-                                                        extra="DeckLink Quad 2 port number. This card provides 8 SDI channels (0-7)."
+                                                        extra="DeckLink Duo 2 port number. This card provides 4 SDI channels (0-3)."
                                                     >
                                                         <Select
                                                             placeholder="Select SDI port"
