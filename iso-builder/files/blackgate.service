@@ -17,8 +17,13 @@ Environment=API_AUTH_PASSWORD=password123
 Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
 Environment=HOME=/opt/blackgate
 
+# Remove stale /tmp/hydra_unix_sock before start (Ranch unix-socket listener
+# bind fails or orphans if a leftover socket file from a previous run remains).
+ExecStartPre=-/bin/rm -f /tmp/hydra_unix_sock
 ExecStart=/opt/blackgate/bin/blackgate start
 ExecStop=/opt/blackgate/bin/blackgate stop
+# Clean up the socket after stop so no stale file survives to the next start.
+ExecStopPost=-/bin/rm -f /tmp/hydra_unix_sock
 
 Restart=always
 RestartSec=5
