@@ -200,7 +200,7 @@ const Dashboard = () => {
     };
 
     fetchStats();
-    const id = setInterval(fetchStats, 30000);
+    const id = setInterval(fetchStats, 5000);
     return () => clearInterval(id);
   }, []);
 

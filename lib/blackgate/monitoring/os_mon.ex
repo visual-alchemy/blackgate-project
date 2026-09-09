@@ -18,9 +18,9 @@ defmodule Blackgate.Monitoring.OsMon do
     }
   end
 
-  @spec cpu_util() :: float() | {:error, term()}
+  @spec cpu_util() :: float() | {:error, term()} | nil
   def cpu_util do
-    :cpu_sup.util()
+    Blackgate.Monitoring.CpuSampler.get()
   end
 
   @spec swap_usage() :: float() | nil

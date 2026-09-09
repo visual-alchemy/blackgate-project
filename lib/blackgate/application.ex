@@ -44,6 +44,7 @@ defmodule Blackgate.Application do
       Blackgate.EventLog,
       Blackgate.ErlSysMon,
       Blackgate.License,
+      Blackgate.Monitoring.CpuSampler,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},
       {Registry,
