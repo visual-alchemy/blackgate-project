@@ -46,6 +46,15 @@ static gboolean caps_interlace_is_interlaced(const gchar *ims)
 // GST_PLUGIN_FEATURE_RANK env boost (runs after gst_init registry init).
 void blackgate_apply_decoder_policy(void)
 {
+    // BLACKGATE_HW_DECODE=1 leaves VA-API decoders at default rank (see the
+    // interlace-mode="mixed" caveat in the comment above before enabling).
+    const char *hw_override = g_getenv("BLACKGATE_HW_DECODE");
+    if (hw_override != NULL && g_strcmp0(hw_override, "1") == 0) {
+        g_print("Decoder policy: hardware decode ENABLED (BLACKGATE_HW_DECODE=1) — "
+                "vah264dec/vah265dec left at default rank\n");
+        return;
+    }
+
     const char *hw_decoders[] = { "vah264dec", "vah265dec" };
 
     for (size_t i = 0; i < G_N_ELEMENTS(hw_decoders); i++) {
@@ -151,6 +160,7 @@ typedef struct {
     GstElement *pipeline;
     GstElement *vqueue;
     GstElement *vconvert;
+    GstElement *vcapssetter;
     GstElement *vrate;
     GstElement *vscale;
     GstElement *vcaps;
@@ -170,6 +180,7 @@ typedef struct {
 static SdiAutoDetectCtx *s_sdi_auto_ctx[8]     = {0};
 static GstPad          *s_sdi_vq_sink_pad[8]   = {0};
 static GstElement      *s_sdi_vinterlace[8]    = {0};
+static GstElement      *s_sdi_vcapssetter[8]   = {0};
 static char             s_sdi_applied_caps[8][256] = {{0}};
 
 // SDI branch registry per sink slot. switch_source() rebuilds branches through
@@ -195,6 +206,30 @@ static GstElement *s_sdi_branch_aq[8]       = {NULL};
 static void sdi_branch_track(int slot, int device_num, GstElement *first, ...);
 static void sdi_branch_untrack(int slot, GstElement *elem);
 
+// Relabel interlace-mode "mixed"→"interleaved" for the VA-API vah264dec path.
+// vah264dec labels any field-coded H.264 as "mixed" (a catch-all, not a true
+// mixed-progressive signal), but downstream videoconvert cannot convert
+// "mixed"→"interleaved" (GST_FLOW_NOT_NEGOTIATED). capssetter OVERWRITES the
+// caps field (unlike capsfilter which intersects), so the relabel is lossless
+// when the buffer is actually field-interleaved — which it is for standard
+// broadcast interlace. Only active for "mixed"; otherwise passthrough
+// (caps=NULL) so progressive and software-decode "interleaved" inputs are
+// untouched.
+static void sdi_set_capssetter(int slot, const gchar *ims)
+{
+    if (slot < 0 || slot >= 8) return;
+    GstElement *css = s_sdi_vcapssetter[slot];
+    if (!css) return;
+    if (ims && g_strcmp0(ims, "mixed") == 0) {
+        GstCaps *c = gst_caps_from_string("video/x-raw,interlace-mode=interleaved");
+        g_object_set(css, "caps", c, NULL);
+        gst_caps_unref(c);
+        g_print("SDI: capssetter slot %d relabel mixed→interleaved\n", slot);
+    } else {
+        g_object_set(css, "caps", NULL, NULL);
+    }
+}
+
 // Re-run mode matching + capsfilter/interlace-element application for a slot
 // from the caps currently flowing into vqueue. Also updates decklinkvideosink
 // mode and sdi_detected_mode[].
@@ -214,6 +249,7 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
     gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
     const gchar *ims = gst_structure_get_string(s, "interlace-mode");
     interlaced = caps_interlace_is_interlaced(ims);
+    sdi_set_capssetter(slot, ims);
     gst_caps_unref(nc);
 
     if (width <= 0 || height <= 0 || fps_num <= 0) return;
@@ -536,6 +572,7 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
 
     const gchar *interlace_mode_str = gst_structure_get_string(s, "interlace-mode");
     interlaced = caps_interlace_is_interlaced(interlace_mode_str);
+    sdi_set_capssetter(ctx->sink_index, interlace_mode_str);
 
     gst_caps_unref(caps);
 
@@ -667,11 +704,11 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     gboolean video_link_ok;
     if (need_interlace_element && vinterlace) {
         video_link_ok = gst_element_link_many(
-            ctx->vqueue, ctx->vconvert, ctx->vrate, ctx->vscale,
+            ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
             vinterlace, ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
     } else {
         video_link_ok = gst_element_link_many(
-            ctx->vqueue, ctx->vconvert, ctx->vrate, ctx->vscale,
+            ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
             ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
     }
 
@@ -692,7 +729,7 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
             gst_caps_unref(out_caps);
 
             video_link_ok = gst_element_link_many(
-                ctx->vqueue, ctx->vconvert, ctx->vrate, ctx->vscale,
+                ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
                 ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
 
             if (!video_link_ok) {
@@ -854,6 +891,7 @@ static void teardown_sdi_branch(int slot)
     }
     s_sdi_auto_ctx[slot] = NULL;
     s_sdi_vinterlace[slot] = NULL;
+    s_sdi_vcapssetter[slot] = NULL;
     s_sdi_applied_caps[slot][0] = '\0';
     s_sdi_branch_identity[slot] = NULL;
     s_sdi_branch_vsink[slot] = NULL;
@@ -2522,10 +2560,10 @@ static GstPadProbeReturn thumbnail_keyframe_probe(GstPad *pad, GstPadProbeInfo *
     return GST_PAD_PROBE_OK;
 }
 
-static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer data)
+static void on_thumbnail_tsdemux_pad_added(GstElement *tsdemux, GstPad *pad, gpointer data)
 {
-    (void)decodebin;
-    GstElement *deinterlace = (GstElement *)data;
+    (void)tsdemux;
+    GstElement *h264parse = (GstElement *)data;
 
     GstCaps *caps = gst_pad_get_current_caps(pad);
     if (!caps) caps = gst_pad_query_caps(pad, NULL);
@@ -2533,50 +2571,25 @@ static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer 
 
     GstStructure *str = gst_caps_get_structure(caps, 0);
     const gchar *name = gst_structure_get_name(str);
-
-    if (g_str_has_prefix(name, "video/")) {
-        gint width = 0, height = 0;
-        gint fps_num = 0, fps_den = 1;
-        gst_structure_get_int(str, "width", &width);
-        gst_structure_get_int(str, "height", &height);
-        gst_structure_get_fraction(str, "framerate", &fps_num, &fps_den);
-
-        const gchar *interlace_mode_str = gst_structure_get_string(str, "interlace-mode");
-        gboolean interlaced = caps_interlace_is_interlaced(interlace_mode_str);
-
-        pthread_mutex_lock(&video_info.mutex);
-        if (width > 0 && height > 0) {
-            video_info.width = width;
-            video_info.height = height;
-        }
-        if (fps_num > 0 && fps_den > 0) {
-            video_info.fps_num = fps_num;
-            video_info.fps_den = fps_den;
-            video_info.fps_inferred = FALSE; // We have decoded/negotiated caps!
-        }
-        video_info.interlaced = interlaced;
-        video_info.info_valid = TRUE;
-        pthread_mutex_unlock(&video_info.mutex);
-    }
-
     gst_caps_unref(caps);
 
-    if (!g_str_has_prefix(name, "video/")) {
-        // Drop any non-video pads (audio, etc) to prevent GST_FLOW_NOT_LINKED
+    // Only H264 is decoded for the thumbnail. Drop everything else (audio AND
+    // non-H264 video such as H265/MPEG2) so those pads never stay unlinked:
+    // an unlinked pad returns GST_FLOW_NOT_LINKED, which propagates up to the
+    // tee and tears down the WHOLE pipeline. Non-H264 routes just lose the
+    // preview; the main sink branch (decodebin) still decodes them normally.
+    if (g_strcmp0(name, "video/x-h264") != 0) {
         gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
         return;
     }
 
-    // Keyframe gate: drop P/B frames so preview is always a clean IDR frame
-    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, thumbnail_keyframe_probe, NULL, NULL);
-
-    GstPad *sink_pad = gst_element_get_static_pad(deinterlace, "sink");
+    GstPad *sink_pad = gst_element_get_static_pad(h264parse, "sink");
     if (!gst_pad_is_linked(sink_pad)) {
         GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
         if (ret == GST_PAD_LINK_OK) {
-            g_print("Thumbnail: Linked video pad to deinterlace\n");
+            g_print("Thumbnail: Linked video pad to h264parse\n");
         } else {
-            g_printerr("Thumbnail: Failed to link video pad: %d\n", ret);
+            g_printerr("Thumbnail: Failed to link video pad to h264parse: %d\n", ret);
         }
     }
     if (sink_pad) gst_object_unref(sink_pad);
@@ -2640,7 +2653,9 @@ static void *thumbnail_worker(void *arg)
 static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id)
 {
     GstElement *queue       = gst_element_factory_make("queue",         "thumbnail_queue");
-    GstElement *decodebin   = gst_element_factory_make("decodebin",     "thumbnail_decodebin");
+    GstElement *tsdemux     = gst_element_factory_make("tsdemux",       "thumbnail_tsdemux");
+    GstElement *h264parse   = gst_element_factory_make("h264parse",     "thumbnail_h264parse");
+    GstElement *avdec       = gst_element_factory_make("avdec_h264",    "thumbnail_avdec_h264");
     GstElement *deinterlace = gst_element_factory_make("deinterlace",   "thumbnail_deinterlace");
     GstElement *convert     = gst_element_factory_make("videoconvert",  "thumbnail_convert");
     GstElement *scale       = gst_element_factory_make("videoscale",    "thumbnail_scale");
@@ -2648,16 +2663,18 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
     GstElement *jpegenc     = gst_element_factory_make("jpegenc",       "thumbnail_jpegenc");
     GstElement *appsink     = gst_element_factory_make("appsink",       "thumbnail_appsink");
 
-    if (!queue || !decodebin || !deinterlace || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
+    if (!queue || !tsdemux || !h264parse || !avdec || !deinterlace || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
         g_printerr("Thumbnail: One or more elements unavailable — skipping thumbnail branch\n");
-        if (queue)      gst_object_unref(queue);
-        if (decodebin)  gst_object_unref(decodebin);
+        if (queue)       gst_object_unref(queue);
+        if (tsdemux)     gst_object_unref(tsdemux);
+        if (h264parse)   gst_object_unref(h264parse);
+        if (avdec)       gst_object_unref(avdec);
         if (deinterlace) gst_object_unref(deinterlace);
-        if (convert)    gst_object_unref(convert);
-        if (scale)      gst_object_unref(scale);
-        if (capsfilter) gst_object_unref(capsfilter);
-        if (jpegenc)    gst_object_unref(jpegenc);
-        if (appsink)    gst_object_unref(appsink);
+        if (convert)     gst_object_unref(convert);
+        if (scale)       gst_object_unref(scale);
+        if (capsfilter)  gst_object_unref(capsfilter);
+        if (jpegenc)     gst_object_unref(jpegenc);
+        if (appsink)     gst_object_unref(appsink);
         return;
     }
 
@@ -2686,16 +2703,24 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         "sync",         FALSE,
         NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), queue, decodebin, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, h264parse, avdec, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
 
-    g_signal_connect(decodebin, "pad-added", G_CALLBACK(on_thumbnail_pad_added), deinterlace);
+    // Keyframe gate on the COMPRESSED side (h264parse output): drop P/B access
+    // units BEFORE they reach the software decoder, so only IDR frames are
+    // decoded. This cuts thumbnail decode CPU from continuous 25fps down to a
+    // keyframe every ~2s, while still producing a clean IDR-only preview.
+    GstPad *parse_src = gst_element_get_static_pad(h264parse, "src");
+    gst_pad_add_probe(parse_src, GST_PAD_PROBE_TYPE_BUFFER, thumbnail_keyframe_probe, NULL, NULL);
+    gst_object_unref(parse_src);
 
-    if (!gst_element_link(tee, queue) || !gst_element_link(queue, decodebin)) {
-        g_printerr("Thumbnail: Failed to link tee → queue → decodebin\n");
+    g_signal_connect(tsdemux, "pad-added", G_CALLBACK(on_thumbnail_tsdemux_pad_added), h264parse);
+
+    if (!gst_element_link(tee, queue) || !gst_element_link(queue, tsdemux)) {
+        g_printerr("Thumbnail: Failed to link tee → queue → tsdemux\n");
         return;
     }
 
-    if (!gst_element_link_many(deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
+    if (!gst_element_link_many(h264parse, avdec, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
         g_printerr("Thumbnail: Failed to link video chain\n");
         return;
     }
@@ -3063,6 +3088,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *vconvert    = gst_element_factory_make("videoconvert",      NULL);
         GstElement *vrate       = gst_element_factory_make("videorate",         NULL);
         GstElement *vscale      = gst_element_factory_make("videoscale",        NULL);
+        // Relabels VA-API "mixed"→"interleaved" before videoconvert (see sdi_set_capssetter).
+        GstElement *vcapssetter = gst_element_factory_make("capssetter",        NULL);
         // In auto-detect mode, vinterlace is created dynamically by the callback if needed.
         GstElement *vinterlace  = NULL;
         GstElement *vcaps       = gst_element_factory_make("capsfilter",        NULL);
@@ -3077,7 +3104,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         GstElement *acaps       = gst_element_factory_make("capsfilter",        NULL);
         GstElement *audiosink   = gst_element_factory_make("decklinkaudiosink", NULL);
 
-        if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vrate ||
+        if (!queue || !tsdemux || !vdecodebin || !vqueue || !vconvert || !vcapssetter || !vrate ||
             !vscale || !vcaps || !videosink ||
             !adecodebin || !aqueue || !aconvert || !amix || !aresample || !arate || !acaps || !audiosink) {
             g_printerr("SDI sink %d: Failed to create one or more elements\n", sink_index);
@@ -3088,6 +3115,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             if (vconvert)   gst_object_unref(vconvert);
             if (vrate)      gst_object_unref(vrate);
             if (vscale)     gst_object_unref(vscale);
+            if (vcapssetter) gst_object_unref(vcapssetter);
             if (vinterlace) gst_object_unref(vinterlace);
             if (vcaps)      gst_object_unref(vcaps);
             if (videosink)  gst_object_unref(videosink);
@@ -3200,7 +3228,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
         s_sdi_branch_aq[sink_index]       = aqueue;
         sdi_branch_track(sink_index, device_number,
                          queue, tsdemux,
-                         vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
+                         vdecodebin, vqueue, vcapssetter, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
                          adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
                          NULL);
 
@@ -3225,7 +3253,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             // Add elements to pipeline (video chain elements are added but NOT linked)
             gst_bin_add_many(GST_BIN(pipeline),
                              queue, tsdemux,
-                             vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
+                             vdecodebin, vqueue, vcapssetter, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
                              adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
                              NULL);
 
@@ -3257,6 +3285,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             auto_ctx->pipeline     = pipeline;
             auto_ctx->vqueue       = vqueue;
             auto_ctx->vconvert     = vconvert;
+            auto_ctx->vcapssetter  = vcapssetter;
             auto_ctx->vrate        = vrate;
             auto_ctx->vscale       = vscale;
             auto_ctx->vcaps        = vcaps;
@@ -3276,6 +3305,7 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                     s_sdi_vq_sink_pad[sink_index] = NULL;
                 }
                 s_sdi_vinterlace[sink_index] = NULL;
+                s_sdi_vcapssetter[sink_index] = vcapssetter;
                 s_sdi_applied_caps[sink_index][0] = '\0';
                 s_sdi_auto_ctx[sink_index] = auto_ctx;
             }
@@ -3337,19 +3367,28 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             g_object_set(vcaps, "caps", caps, NULL);
             gst_caps_unref(caps);
 
+            // Manual mode knows interlaced statically: relabel VA-API "mixed"→
+            // "interleaved" before videoconvert (no-op for software decode which
+            // already emits "interleaved").
+            if (interlaced) {
+                GstCaps *rlc = gst_caps_from_string("video/x-raw,interlace-mode=interleaved");
+                g_object_set(vcapssetter, "caps", rlc, NULL);
+                gst_caps_unref(rlc);
+            }
+
             // Set DeckLink mode
             gst_util_set_object_arg(G_OBJECT(videosink), "mode", video_mode_str);
 
             // --- Add all elements to pipeline ---
             gst_bin_add_many(GST_BIN(pipeline),
                              queue, tsdemux,
-                             vdecodebin, vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
+                             vdecodebin, vqueue, vcapssetter, vconvert, vrate, vscale, vcaps, vid_identity, videosink,
                              adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
                              NULL);
 
             // --- Link static chains downstream of decodebin ---
             // Video: vqueue → videoconvert → videorate → videoscale → capsfilter → identity(sync) → decklinkvideosink
-            gboolean video_link_ok = gst_element_link_many(vqueue, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL);
+            gboolean video_link_ok = gst_element_link_many(vqueue, vcapssetter, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL);
             if (!video_link_ok) {
                 g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
                 return FALSE;
