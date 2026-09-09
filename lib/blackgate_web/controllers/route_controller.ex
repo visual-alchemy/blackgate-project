@@ -81,6 +81,7 @@ defmodule BlackgateWeb.RouteController do
 
   def update(conn, %{"id" => id, "route" => route_params}) do
     was_running = route_is_running?(id)
+    route_params = normalize_failover_params(route_params)
 
     with {:ok, existing_route} <- Db.get_route(id, true),
          merged_route when is_map(merged_route) <- Map.merge(existing_route || %{}, route_params),
@@ -99,6 +100,15 @@ defmodule BlackgateWeb.RouteController do
     |> put_status(:unprocessable_entity)
     |> json(%{error: "Invalid route configuration", details: errors})
   end
+
+  # Disabling failover must also clear seamless_sdi_failover: the flag is a
+  # sub-feature of failover, and the Map.merge with the existing route would
+  # otherwise carry a stale true forward and fail validation.
+  defp normalize_failover_params(%{"failover_enabled" => false} = params) do
+    Map.put(params, "seamless_sdi_failover", false)
+  end
+
+  defp normalize_failover_params(params), do: params
 
   def delete(conn, %{"id" => id}) do
     with [:ok, :ok] <- Db.delete_route(id) do

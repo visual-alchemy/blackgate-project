@@ -84,6 +84,14 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       form.setFieldValue('auto_join', true);
     }
 
+    // Disabling failover must also clear the seamless SDI flag. The field is
+    // hidden (unmounted) but antd preserves its value, so it still ships in the
+    // payload and the backend rejects it ("seamless SDI failover requires
+    // failover to be enabled").
+    if (changedValues.failover_enabled === false) {
+      form.setFieldValue('seamless_sdi_failover', false);
+    }
+
     // Auto-fill Local Address when mode is set to listener or rendezvous
     if (changedValues?.schema_options?.mode) {
       const mode = changedValues.schema_options.mode;
