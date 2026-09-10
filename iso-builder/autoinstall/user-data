@@ -7,6 +7,17 @@ autoinstall:
   keyboard:
     layout: us
 
+  # Install from media only. Mirror failure must never block appliance setup.
+  apt:
+    geoip: false
+    mirror-selection:
+      # Force Subiquity's documented offline fallback. This appliance carries
+      # every required package on the ISO and must not upgrade from a LAN.
+      primary:
+        - uri: "http://127.0.0.1:9/ubuntu"
+          arches: [amd64]
+    fallback: offline-install
+
   # ─── Disk layout — auto LVM, use entire first disk ─────────────────
   storage:
     layout:
@@ -23,24 +34,6 @@ autoinstall:
   ssh:
     install-server: true
     allow-pw: true
-
-  # ─── Packages to install (bare-metal runtime dependencies) ─────────
-  packages:
-    - curl
-    - net-tools
-    - htop
-    - ca-certificates
-    - libssl3
-    - libncurses6
-    - libgstreamer1.0-0
-    - gstreamer1.0-plugins-good
-    - gstreamer1.0-plugins-bad
-    - libsrt-openssl-dev
-    - libcjson-dev
-    - libglib2.0-dev
-    - build-essential
-    - pkg-config
-    - iproute2
 
   # ─── Disable snaps ──────────────────────────────────────────────────
   snaps: []
@@ -65,10 +58,23 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.sh /target/opt/blackgate/
+    - cp /cdrom/blackgate/desktopvideo_16.0.1a2_amd64.deb /target/opt/blackgate/
+    - cp /cdrom/blackgate/decklink-profile-config /target/opt/blackgate/
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
+    - cp -a /cdrom/blackgate/offline-repo /target/opt/blackgate/
+
+    # Install runtime and DKMS dependencies exclusively from bundled media.
+    - mkdir -p /target/etc/apt/blackgate-empty-sources.list.d
+    - |
+      cat > /target/etc/apt/sources.list.d/blackgate-offline.list << 'EOF'
+      deb [trusted=yes] file:/opt/blackgate/offline-repo ./
+      EOF
+    - curtin in-target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/blackgate-offline.list -o Dir::Etc::sourceparts=/etc/apt/blackgate-empty-sources.list.d update
+    - curtin in-target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/blackgate-offline.list -o Dir::Etc::sourceparts=/etc/apt/blackgate-empty-sources.list.d --no-install-recommends -y install build-essential dkms gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-tools libcjson1 libgl1 net-tools linux-headers-generic /opt/blackgate/desktopvideo_16.0.1a2_amd64.deb
 
     # Set permissions
     - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
+    - chmod +x /target/opt/blackgate/decklink-profile-config
     - chmod +x /target/etc/update-motd.d/99-blackgate
     - chown -R 1000:1000 /target/opt/blackgate
     - chown -R 1000:1000 /target/var/lib/blackgate

@@ -4,6 +4,12 @@ defmodule Blackgate.Db do
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
+    :global.trans({__MODULE__, :route_creation}, fn ->
+      create_route_with_license(data, id)
+    end)
+  end
+
+  defp create_route_with_license(data, id) do
     id = if id, do: id, else: UUID.uuid1()
 
     update = %{
@@ -12,10 +18,14 @@ defmodule Blackgate.Db do
       "updated_at" => now()
     }
 
-    with :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
+    with {:ok, :allowed} <- Blackgate.License.can_create_route?(),
+         :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
          {:ok, result} <- get_route(id) do
       {:ok, result}
     else
+      {:error, _reason} = error ->
+        error
+
       other ->
         Logger.error("Failed to create route: #{inspect(other)}")
         {:error, other}

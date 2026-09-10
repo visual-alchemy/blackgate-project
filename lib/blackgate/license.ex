@@ -68,6 +68,39 @@ defmodule Blackgate.License do
     end
   end
 
+  @doc "Check if persisting a new route is allowed"
+  @spec can_create_route?() ::
+          {:ok, :allowed} | {:error, {:route_creation_not_allowed, String.t()}}
+  def can_create_route? do
+    license = get_license()
+
+    cond do
+      license.status == :revoked ->
+        {:error,
+         {:route_creation_not_allowed, "License has been revoked. Please contact support."}}
+
+      license.expired ->
+        {:error,
+         {:route_creation_not_allowed, "License expired. Please activate a valid license key."}}
+
+      license.status == :trial ->
+        if count_saved_routes() >= @trial_max_routes do
+          {:error,
+           {:route_creation_not_allowed,
+            "Trial route limit reached (#{@trial_max_routes}). Activate a license for more routes."}}
+        else
+          {:ok, :allowed}
+        end
+
+      license.status == :licensed ->
+        {:ok, :allowed}
+
+      true ->
+        {:error,
+         {:route_creation_not_allowed, "No valid license. Please activate a license key."}}
+    end
+  end
+
   @doc "Get the current license information"
   @spec get_license() :: map()
   def get_license do
@@ -174,7 +207,7 @@ defmodule Blackgate.License do
     headers = [
       {"content-type", "application/json"}
     ]
-    
+
     body = %{
       license_key: license_key,
       machine_id: Blackgate.MachineId.get()
@@ -351,5 +384,11 @@ defmodule Blackgate.License do
         0
     end
   end
-end
 
+  defp count_saved_routes do
+    case Blackgate.Db.get_all_routes() do
+      {:ok, routes} -> length(routes)
+      _ -> 0
+    end
+  end
+end

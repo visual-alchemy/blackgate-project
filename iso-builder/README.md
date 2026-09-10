@@ -1,32 +1,51 @@
-# Blackgate Server (Docker Appliance)
+# Blackgate Server Appliance
 
-Builds a bootable **Ubuntu 22.04 (Jammy) Server** ISO appliance that natively auto-starts Blackgate securely inside a Docker container using host networking.
+Builds a bootable **Ubuntu 24.04 (Noble) Server** ISO appliance containing the
+native Blackgate OTP release, Blackmagic Desktop Video 16.0.1 driver, and
+headless DeckLink Duo 2 connector-profile configuration.
 
 ## How to Build
 
-### Option 1: GitHub Actions (Recommended)
+### Build locally
 
-Push a version tag to trigger an automatic build:
+Required host tools: `apt-get`, `dpkg-scanpackages`, `dosfstools`, `rsync`, and
+`g++`. When `xorriso` is absent, builder stages private copy automatically.
+
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+./build.sh
 ```
 
-### Option 2: Build Locally (requires Linux with Docker)
+Default inputs are discovered next to the project directory. Override them when
+needed:
+
 ```bash
-chmod +x build.sh
-VERSION=1.0.0 ./build.sh
+BLACKGATE_SOURCE_ISO=/path/to/ubuntu-24.04.4-live-server-amd64.iso \
+BLACKGATE_DESKTOPVIDEO_DEB=/path/to/desktopvideo_16.0.1a2_amd64.deb \
+./build.sh
 ```
 
-Output: `output/blackgate-1.0.0-amd64.iso`
+Output: `output/blackgate-installer-amd64.iso`
+
+First build downloads Ubuntu dependency closure into
+`cache/offline-packages/`. Generated installer then installs Ubuntu,
+GStreamer, DKMS, matching kernel headers, Desktop Video, and Blackgate without
+Internet access. The installer forces Ubuntu's offline fallback even when a LAN
+cable with Internet is connected. Later builds reuse package cache.
 
 ## What's Inside the ISO
 | Component | Details |
 |-----------|---------|
-| **OS** | Ubuntu 22.04 (Jammy) CLI |
-| **Engine** | `docker` + `docker compose` running `blackgate/app:latest` |
-| **SSH** | Enabled, root login disabled |
-| **Boot** | `docker load` & `docker compose up` run automatically |
+| **OS** | Ubuntu 24.04 (Noble) CLI; offline autoinstall |
+| **Engine** | Native Elixir/OTP release + C/GStreamer pipeline |
+| **Packages** | Local APT repository with runtime and DKMS dependency closure |
+| **DeckLink** | Desktop Video 16.0.1; first boot rebuilds DKMS for installed kernel, then activates Duo 2 `2dhd` |
+| **SSH** | Enabled |
+| **Boot** | systemd starts Blackgate after first-boot provisioning |
+
+With `2dhd`, four GStreamer devices drive four independent outputs. Duo 2
+enumeration order is `device 0 → SDI 1`, `device 1 → SDI 3`,
+`device 2 → SDI 2`, and `device 3 → SDI 4`. Frontend mapping presents ports in
+physical SDI 1–4 order.
 
 ## Default Credentials
 | Service | User | Password |
@@ -37,16 +56,9 @@ Output: `output/blackgate-1.0.0-amd64.iso`
 > ⚠️ **Change these after first login!**
 
 ## Managing Blackgate on the Appliance
-Blackgate runs via Docker Compose in `/opt/blackgate`.
+Blackgate runs as a systemd service from `/opt/blackgate`.
 ```bash
-cd /opt/blackgate
-
-# View live logs
-docker compose logs -f
-
-# Restart Blackgate
-docker compose restart
-
-# Stop Blackgate
-docker compose down
+sudo journalctl -u blackgate -f
+sudo systemctl restart blackgate
+sudo systemctl stop blackgate
 ```

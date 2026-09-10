@@ -51,10 +51,19 @@ defmodule BlackgateWeb.RouteController do
   def create(conn, %{"route" => route_params}) do
     case RouteValidator.validate(route_params) do
       :ok ->
-        with {:ok, route} <- Db.create_route(route_params) do
-          conn
-          |> put_status(:created)
-          |> data(route)
+        case Db.create_route(route_params) do
+          {:ok, route} ->
+            conn
+            |> put_status(:created)
+            |> data(route)
+
+          {:error, {:route_creation_not_allowed, reason}} ->
+            route_creation_limit_error(conn, reason)
+
+          {:error, reason} ->
+            conn
+            |> put_status(:internal_server_error)
+            |> json(%{error: "Failed to create route: #{inspect(reason)}"})
         end
 
       {:error, errors} ->
@@ -99,6 +108,12 @@ defmodule BlackgateWeb.RouteController do
     conn
     |> put_status(:unprocessable_entity)
     |> json(%{error: "Invalid route configuration", details: errors})
+  end
+
+  defp route_creation_limit_error(conn, reason) do
+    conn
+    |> put_status(:payment_required)
+    |> json(%{error: reason})
   end
 
   # Disabling failover must also clear seamless_sdi_failover: the flag is a
@@ -276,18 +291,27 @@ defmodule BlackgateWeb.RouteController do
         |> Map.put("name", "#{route["name"]} (Copy)")
         |> Map.put("status", "stopped")
 
-      with {:ok, new_route} <- Db.create_route(clone_data) do
-        # Clone each destination
-        Enum.each(destinations, fn dest ->
-          dest_data = Map.drop(dest, ["id", "route_id", "created_at", "updated_at"])
-          Db.create_destination(new_route["id"], dest_data)
-        end)
+      case Db.create_route(clone_data) do
+        {:ok, new_route} ->
+          # Clone each destination
+          Enum.each(destinations, fn dest ->
+            dest_data = Map.drop(dest, ["id", "route_id", "created_at", "updated_at"])
+            Db.create_destination(new_route["id"], dest_data)
+          end)
 
-        {:ok, full_route} = Db.get_route(new_route["id"], true)
+          {:ok, full_route} = Db.get_route(new_route["id"], true)
 
-        conn
-        |> put_status(:created)
-        |> data(full_route)
+          conn
+          |> put_status(:created)
+          |> data(full_route)
+
+        {:error, {:route_creation_not_allowed, reason}} ->
+          route_creation_limit_error(conn, reason)
+
+        {:error, reason} ->
+          conn
+          |> put_status(:internal_server_error)
+          |> json(%{error: "Failed to clone route: #{inspect(reason)}"})
       end
     end
   end

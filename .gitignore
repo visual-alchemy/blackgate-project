@@ -49,6 +49,9 @@ yarn-error.log*
 # === Tool Output (graphify code analysis cache) ===
 graphify-out/
 
+# === Appliance Builder Cache ===
+/iso-builder/cache/
+
 # === Logs ===
 *.log
 logs/.agents/

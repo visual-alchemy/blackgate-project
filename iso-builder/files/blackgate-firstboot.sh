@@ -26,6 +26,75 @@ chown -R blackgate:blackgate /opt/blackgate
 mkdir -p /var/lib/blackgate/khepri
 chown -R blackgate:blackgate /var/lib/blackgate
 
+# ─── Install Blackmagic Desktop Video driver ───────────────────────────
+DRIVER_DEB="/opt/blackgate/desktopvideo_16.0.1a2_amd64.deb"
+if [ -f "$DRIVER_DEB" ]; then
+    if dpkg-query -W -f='${Status}' desktopvideo 2>/dev/null | grep -q 'install ok installed'; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Desktop Video 16.0.1 already installed"
+    else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Installing Desktop Video 16.0.1..."
+        OFFLINE_LIST="/etc/apt/sources.list.d/blackgate-offline.list"
+        OFFLINE_PARTS="/etc/apt/blackgate-empty-sources.list.d"
+        if [ ! -f "$OFFLINE_LIST" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Offline APT repository unavailable"
+            exit 1
+        fi
+        apt-get \
+            -o Dir::Etc::sourcelist="$OFFLINE_LIST" \
+            -o Dir::Etc::sourceparts="$OFFLINE_PARTS" \
+            update
+        apt-get \
+            -o Dir::Etc::sourcelist="$OFFLINE_LIST" \
+            -o Dir::Etc::sourceparts="$OFFLINE_PARTS" \
+            --no-install-recommends \
+            install -y "$DRIVER_DEB"
+    fi
+
+    # Curtin can install Desktop Video before the target's final kernel is
+    # booted. Build DKMS again for the actual running kernel before modprobe.
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Building Desktop Video DKMS for $(uname -r)..."
+    dkms autoinstall -k "$(uname -r)"
+    depmod -a "$(uname -r)"
+    systemctl enable --now DesktopVideoHelper.service || true
+    modprobe blackmagic_io
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Desktop Video package missing"
+    exit 1
+fi
+
+# ─── Configure DeckLink Duo 2 connector mapping ────────────────────────
+PROFILE_TOOL_STAGED="/opt/blackgate/decklink-profile-config"
+PROFILE_TOOL="/opt/blackgate/bin/decklink-profile-config"
+install -m 0755 "$PROFILE_TOOL_STAGED" "$PROFILE_TOOL"
+
+for i in {1..30}; do
+    if compgen -G "/dev/blackmagic/io*" > /dev/null; then
+        break
+    fi
+    sleep 1
+done
+
+if ! compgen -G "/dev/blackmagic/io*" > /dev/null; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: DeckLink device nodes unavailable"
+    exit 1
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Setting DeckLink profile to 2dhd..."
+profile_configured=false
+for i in {1..30}; do
+    if "$PROFILE_TOOL" two-sub-devices-half; then
+        profile_configured=true
+        break
+    fi
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] DeckLink SDK not ready; retrying ($i/30)..."
+    sleep 1
+done
+
+if [ "$profile_configured" != true ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Could not activate DeckLink 2dhd profile"
+    exit 1
+fi
+
 # ─── Configure kernel socket buffers for high-bitrate SRT ───────────────
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Configuring sysctl socket buffers..."
 cat <<EOF > /etc/sysctl.d/90-blackgate.conf
