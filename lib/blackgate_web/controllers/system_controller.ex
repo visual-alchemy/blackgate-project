@@ -4,6 +4,33 @@ defmodule BlackgateWeb.SystemController do
   alias Blackgate.Db
   alias Blackgate.ProcessMonitor
   alias Blackgate.Helpers
+  alias Blackgate.SystemControl
+
+  def status(conn, _params), do: json(conn, %{data: SystemControl.status()})
+
+  def report(conn, _params) do
+    filename =
+      "blackgate-system-report-#{Calendar.strftime(DateTime.utc_now(), "%Y%m%d-%H%M%S")}.txt"
+
+    conn
+    |> put_resp_content_type("text/plain")
+    |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
+    |> send_resp(200, SystemControl.report())
+  end
+
+  def perform_action(conn, %{"action" => action}) do
+    case SystemControl.action(action) do
+      {:ok, message} ->
+        conn
+        |> put_status(:accepted)
+        |> json(%{message: message, action: action})
+
+      {:error, message} ->
+        conn
+        |> put_status(:service_unavailable)
+        |> json(%{error: "System action unavailable: #{message}"})
+    end
+  end
 
   def list_pipelines(conn, _params) do
     pipelines = ProcessMonitor.list_pipeline_processes() |> add_route_names()

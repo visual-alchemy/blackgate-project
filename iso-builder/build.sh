@@ -91,6 +91,8 @@ REQUIRED=(
     "files/blackgate-firstboot.sh"
     "files/blackgate-firstboot.service"
     "files/99-blackgate-motd.sh"
+    "files/blackgate-system-action"
+    "files/blackgate-system-action.sudoers"
 )
 for f in "${REQUIRED[@]}"; do
     if [ ! -f "$SCRIPT_DIR/$f" ]; then
@@ -192,7 +194,9 @@ for f in \
     blackgate.service \
     blackgate-firstboot.sh \
     blackgate-firstboot.service \
-    99-blackgate-motd.sh; do
+    99-blackgate-motd.sh \
+    blackgate-system-action \
+    blackgate-system-action.sudoers; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
 done

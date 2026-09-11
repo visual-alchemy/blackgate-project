@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  restart-blackgate)
+    exec /usr/bin/systemd-run --quiet --collect --unit=blackgate-dashboard-restart \
+      --on-active=3s /usr/bin/systemctl restart blackgate.service
+    ;;
+  reboot)
+    exec /usr/bin/systemd-run --quiet --collect --unit=blackgate-dashboard-reboot \
+      --on-active=10s /usr/bin/systemctl reboot
+    ;;
+  *)
+    echo "Unsupported Blackgate system action" >&2
+    exit 64
+    ;;
+esac

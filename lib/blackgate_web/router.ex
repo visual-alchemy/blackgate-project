@@ -56,6 +56,9 @@ defmodule BlackgateWeb.Router do
     get "/system/pipelines", SystemController, :list_pipelines
     get "/system/pipelines/detailed", SystemController, :list_pipelines_detailed
     post "/system/pipelines/:pid/kill", SystemController, :kill_pipeline
+    get "/system/status", SystemController, :status
+    get "/system/report", SystemController, :report
+    post "/system/actions/:action", SystemController, :perform_action
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show

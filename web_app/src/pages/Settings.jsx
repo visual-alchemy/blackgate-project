@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined } from '@ant-design/icons';
-import { backupApi, networkApi, authApi } from '../utils/api';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined, PoweroffOutlined, FileTextOutlined } from '@ant-design/icons';
+import { backupApi, networkApi, authApi, systemApi } from '../utils/api';
 import { logout } from '../utils/auth';
 
 const { Title } = Typography;
@@ -14,6 +14,11 @@ const Settings = () => {
   const [isImportingRoutes, setIsImportingRoutes] = useState(false);
   const [interfaces, setInterfaces] = useState([]);
   const [loadingInterfaces, setLoadingInterfaces] = useState(false);
+  const [systemStatus, setSystemStatus] = useState(null);
+  const [loadingSystemStatus, setLoadingSystemStatus] = useState(false);
+  const [systemAction, setSystemAction] = useState(null);
+  const [rebootConfirmation, setRebootConfirmation] = useState('');
+  const [performingSystemAction, setPerformingSystemAction] = useState(false);
   const fileInputRef = useRef(null);
   const routesFileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
@@ -42,6 +47,68 @@ const Settings = () => {
       fetchInterfaces();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'system') fetchSystemStatus();
+  }, [activeTab]);
+
+  const fetchSystemStatus = async () => {
+    setLoadingSystemStatus(true);
+    try {
+      const response = await systemApi.getStatus();
+      setSystemStatus(response.data);
+    } catch (_error) {
+      messageApi.error({ content: 'Failed to fetch gateway status', duration: 5 });
+    } finally {
+      setLoadingSystemStatus(false);
+    }
+  };
+
+  const formatBytes = (value) => {
+    if (!value && value !== 0) return '-';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = value;
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+    return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  };
+
+  const formatUptime = (seconds) => {
+    const days = Math.floor((seconds || 0) / 86400);
+    const hours = Math.floor(((seconds || 0) % 86400) / 3600);
+    const minutes = Math.floor(((seconds || 0) % 3600) / 60);
+    return `${days ? `${days}d ` : ''}${hours}h ${minutes}m`;
+  };
+
+  const handleSystemAction = async () => {
+    const action = systemAction;
+    if (!action) return;
+    setPerformingSystemAction(true);
+    try {
+      const result = await systemApi.action(action);
+      messageApi.success({ content: result.message || 'System action scheduled', duration: 5 });
+      setSystemAction(null);
+      setRebootConfirmation('');
+    } catch (error) {
+      messageApi.error({ content: error.message || 'System action failed', duration: 6 });
+    } finally {
+      setPerformingSystemAction(false);
+    }
+  };
+
+  const handleSystemReport = async () => {
+    try {
+      const blob = await systemApi.downloadReport();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'blackgate-system-report.txt';
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      messageApi.error({ content: error.message || 'Could not download report', duration: 5 });
+    }
+  };
 
   const fetchInterfaces = async () => {
     setLoadingInterfaces(true);
@@ -572,6 +639,51 @@ const Settings = () => {
     );
   };
 
+  const SystemTabContent = () => {
+    const status = systemStatus;
+    return (
+      <div>
+        <Card
+          title="Gateway Status"
+          extra={<Button icon={<ReloadOutlined />} onClick={fetchSystemStatus} loading={loadingSystemStatus}>Refresh</Button>}
+          style={{ marginBottom: '16px' }}
+        >
+          {loadingSystemStatus && !status ? <Spin /> : (
+            <Table
+              size="small"
+              pagination={false}
+              showHeader={false}
+              rowKey="label"
+              dataSource={[
+                { label: 'Hostname', value: status?.hostname || '-' },
+                { label: 'Operating system', value: status?.os || '-' },
+                { label: 'Kernel', value: status?.kernel || '-' },
+                { label: 'Blackgate service', value: <Tag color={status?.blackgate_service === 'active' ? 'green' : 'red'}>{status?.blackgate_service || 'unknown'}</Tag> },
+                { label: 'Uptime', value: formatUptime(status?.uptime_seconds) },
+                { label: 'Memory', value: `${formatBytes(status?.memory?.used_bytes)} / ${formatBytes(status?.memory?.total_bytes)}` },
+                { label: 'Root disk', value: `${formatBytes(status?.disk?.used_bytes)} used, ${formatBytes(status?.disk?.available_bytes)} free (${status?.disk?.percent || '-'})` },
+                { label: 'DeckLink nodes', value: status?.decklink_nodes ?? '-' },
+                { label: 'Release version', value: status?.version || '-' },
+              ]}
+              columns={[{ dataIndex: 'label', width: '35%', render: (value) => <strong>{value}</strong> }, { dataIndex: 'value' }]}
+            />
+          )}
+        </Card>
+
+        <Card title="Maintenance">
+          <Space wrap>
+            <Button icon={<FileTextOutlined />} onClick={handleSystemReport}>Download System Report</Button>
+            <Button onClick={() => setSystemAction('restart-blackgate')}>Restart Blackgate</Button>
+            <Button danger icon={<PoweroffOutlined />} onClick={() => setSystemAction('reboot')}>Reboot Gateway</Button>
+          </Space>
+          <p style={{ marginTop: '16px', color: 'rgba(255, 255, 255, 0.45)' }}>
+            Restart pauses routes briefly. Reboot stops all routes and disconnects this dashboard.
+          </p>
+        </Card>
+      </div>
+    );
+  };
+
   const items = [
     {
       key: 'backup',
@@ -593,12 +705,34 @@ const Settings = () => {
       label: 'Users',
       children: <UsersTabContent />,
     },
+    {
+      key: 'system',
+      label: 'System',
+      children: <SystemTabContent />,
+    },
   ];
 
   return (
     <div>
       {contextHolder}
       {modalContextHolder}
+      <Modal
+        open={Boolean(systemAction)}
+        title={systemAction === 'reboot' ? 'Reboot Gateway' : 'Restart Blackgate'}
+        okText={systemAction === 'reboot' ? 'Schedule Reboot' : 'Restart Now'}
+        okButtonProps={{ danger: systemAction === 'reboot', disabled: systemAction === 'reboot' && rebootConfirmation !== 'REBOOT', loading: performingSystemAction }}
+        cancelButtonProps={{ disabled: performingSystemAction }}
+        onCancel={() => { if (!performingSystemAction) { setSystemAction(null); setRebootConfirmation(''); } }}
+        onOk={handleSystemAction}
+      >
+        {systemAction === 'reboot' ? (
+          <>
+            <p>All routes stop. Dashboard disconnects. Gateway reboots in 10 seconds.</p>
+            <p>Type <strong>REBOOT</strong> to confirm.</p>
+            <Input value={rebootConfirmation} onChange={(event) => setRebootConfirmation(event.target.value)} autoComplete="off" />
+          </>
+        ) : <p>All active routes pause briefly while Blackgate service restarts.</p>}
+      </Modal>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
 
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -618,4 +752,4 @@ const Settings = () => {
   );
 };
 
-export default Settings; 
+export default Settings;

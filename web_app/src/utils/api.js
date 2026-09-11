@@ -45,6 +45,28 @@ export const systemPipelinesApi = {
   },
 };
 
+export const systemApi = {
+  getStatus: async () => {
+    const response = await authFetch('/api/system/status');
+    return response.json();
+  },
+
+  action: async (action) => {
+    const response = await authFetch(`/api/system/actions/${action}`, {
+      method: 'POST',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'System action failed');
+    return data;
+  },
+
+  downloadReport: async () => {
+    const response = await authFetch('/api/system/report');
+    if (!response.ok) throw new Error('Could not create system report');
+    return response.blob();
+  },
+};
+
 // Nodes API
 export const nodesApi = {
   // Get all nodes

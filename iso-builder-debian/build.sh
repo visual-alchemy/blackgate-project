@@ -95,6 +95,8 @@ cp "$SCRIPT_DIR/files/blackgate-firstboot.sh" "$EXTRACT_DIR/blackgate/"
 cp "$SCRIPT_DIR/files/blackgate-firstboot.service" "$EXTRACT_DIR/blackgate/"
 cp "$SCRIPT_DIR/files/blackgate.service" "$EXTRACT_DIR/blackgate/"
 cp "$SCRIPT_DIR/files/99-blackgate-login-info.sh" "$EXTRACT_DIR/blackgate/"
+cp "$SCRIPT_DIR/files/blackgate-system-action" "$EXTRACT_DIR/blackgate/"
+cp "$SCRIPT_DIR/files/blackgate-system-action.sudoers" "$EXTRACT_DIR/blackgate/"
 find "$CACHE_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -t "$EXTRACT_DIR/blackgate/offline-repo" {} +
 
 (

@@ -52,6 +52,7 @@ autoinstall:
     - mkdir -p /target/opt/blackgate
     - mkdir -p /target/var/lib/blackgate/khepri
     - mkdir -p /target/etc/update-motd.d
+    - mkdir -p /target/usr/local/libexec /target/etc/sudoers.d
 
     # Copy Blackgate files from ISO to installed system
     - cp /cdrom/blackgate/blackgate-release.tar.gz /target/opt/blackgate/
@@ -61,6 +62,8 @@ autoinstall:
     - cp /cdrom/blackgate/desktopvideo_16.0.1a2_amd64.deb /target/opt/blackgate/
     - cp /cdrom/blackgate/decklink-profile-config /target/opt/blackgate/
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
+    - cp /cdrom/blackgate/blackgate-system-action /target/usr/local/libexec/blackgate-system-action
+    - cp /cdrom/blackgate/blackgate-system-action.sudoers /target/etc/sudoers.d/blackgate-system-action
     - cp -a /cdrom/blackgate/offline-repo /target/opt/blackgate/
 
     # Install runtime and DKMS dependencies exclusively from bundled media.
@@ -76,6 +79,8 @@ autoinstall:
     - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
     - chmod +x /target/opt/blackgate/decklink-profile-config
     - chmod +x /target/etc/update-motd.d/99-blackgate
+    - chmod 0750 /target/usr/local/libexec/blackgate-system-action
+    - chmod 0440 /target/etc/sudoers.d/blackgate-system-action
     - chown -R 1000:1000 /target/opt/blackgate
     - chown -R 1000:1000 /target/var/lib/blackgate
 
