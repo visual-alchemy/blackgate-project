@@ -14,7 +14,8 @@ defmodule Blackgate.SystemControl do
       disk: disk(),
       decklink_nodes: decklink_nodes(),
       blackgate_service: command("/usr/bin/systemctl", ["is-active", "blackgate.service"]),
-      version: to_string(Application.spec(:blackgate, :vsn) || "unknown")
+      version: release_version(),
+      update_status: update_status()
     }
   end
 
@@ -28,6 +29,28 @@ defmodule Blackgate.SystemControl do
   end
 
   def action(_action), do: {:error, "Unsupported system action"}
+
+  def updates do
+    case File.ls("/opt/blackgate/incoming") do
+      {:ok, files} ->
+        {:ok, files |> Enum.filter(&String.ends_with?(&1, ".bgupdate")) |> Enum.sort()}
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      error ->
+        error
+    end
+  end
+
+  def deploy(version) when is_binary(version) do
+    case System.cmd("/usr/bin/sudo", ["-n", @helper, "deploy", version], stderr_to_stdout: true) do
+      {output, 0} -> {:ok, String.trim(output)}
+      {output, _} -> {:error, String.trim(output)}
+    end
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
 
   def report do
     status()
@@ -120,6 +143,20 @@ defmodule Blackgate.SystemControl do
     case File.ls("/dev/blackmagic") do
       {:ok, entries} -> Enum.count(entries, &String.starts_with?(&1, "io"))
       _ -> 0
+    end
+  end
+
+  defp release_version do
+    case File.read_link("/opt/blackgate/current") do
+      {:ok, target} -> Path.basename(target)
+      _ -> to_string(Application.spec(:blackgate, :vsn) || "unknown")
+    end
+  end
+
+  defp update_status do
+    case File.read("/run/blackgate-update-status") do
+      {:ok, status} -> String.trim(status)
+      _ -> "idle"
     end
   end
 end

@@ -1,0 +1,19 @@
+#!/bin/sh
+# One-time Ubuntu appliance migration. Run as root with old/new version and release tarball.
+set -eu
+OLD_VERSION="${1:?usage: blackgate-update-bootstrap OLD_VERSION NEW_VERSION RELEASE_TARBALL}"
+NEW_VERSION="${2:?usage: blackgate-update-bootstrap OLD_VERSION NEW_VERSION RELEASE_TARBALL}"
+RELEASE_TARBALL="${3:?usage: blackgate-update-bootstrap OLD_VERSION NEW_VERSION RELEASE_TARBALL}"
+ROOT=/opt/blackgate
+LEGACY="/opt/blackgate.legacy-$OLD_VERSION"
+systemctl stop blackgate.service
+mv "$ROOT" "$LEGACY"
+mkdir -p "$ROOT/releases" "$ROOT/incoming" "$ROOT/backups"
+mv "$LEGACY" "$ROOT/releases/$OLD_VERSION"
+mkdir -p "$ROOT/releases/$NEW_VERSION"
+tar xzf "$RELEASE_TARBALL" -C "$ROOT/releases/$NEW_VERSION" --strip-components=1
+ln -s "releases/$NEW_VERSION" "$ROOT/current"
+chown -R blackgate:blackgate "$ROOT"
+sed -i 's#^WorkingDirectory=/opt/blackgate$#WorkingDirectory=/opt/blackgate/current#; s#/opt/blackgate/bin/blackgate#/opt/blackgate/current/bin/blackgate#g' /etc/systemd/system/blackgate.service
+systemctl daemon-reload
+systemctl start blackgate.service

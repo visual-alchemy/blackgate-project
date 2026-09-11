@@ -56,7 +56,8 @@ physical SDI 1–4 order.
 > ⚠️ **Change these after first login!**
 
 ## Managing Blackgate on the Appliance
-Blackgate runs as a systemd service from `/opt/blackgate`.
+Blackgate runs as a systemd service from `/opt/blackgate/current`. Future
+signed dashboard updates are installed beneath `/opt/blackgate/releases/`.
 ```bash
 sudo journalctl -u blackgate -f
 sudo systemctl restart blackgate

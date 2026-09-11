@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=exec
 User=blackgate
 Group=blackgate
-WorkingDirectory=/opt/blackgate
+WorkingDirectory=/opt/blackgate/current
 
 Environment=PHX_SERVER=true
 Environment=PORT=4000
@@ -15,14 +15,14 @@ Environment=PHX_HOST=0.0.0.0
 Environment=API_AUTH_USERNAME=admin
 Environment=API_AUTH_PASSWORD=password123
 Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
-Environment=HOME=/opt/blackgate
+Environment=HOME=/opt/blackgate/current
 Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
 
 # Remove stale /tmp/hydra_unix_sock before start (Ranch unix-socket listener
 # bind fails or orphans if a leftover socket file from a previous run remains).
 ExecStartPre=-/bin/rm -f /tmp/hydra_unix_sock
-ExecStart=/opt/blackgate/bin/blackgate start
-ExecStop=/opt/blackgate/bin/blackgate stop
+ExecStart=/opt/blackgate/current/bin/blackgate start
+ExecStop=/opt/blackgate/current/bin/blackgate stop
 # Clean up the socket after stop so no stale file survives to the next start.
 ExecStopPost=-/bin/rm -f /tmp/hydra_unix_sock
 

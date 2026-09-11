@@ -203,11 +203,15 @@ const MainLayout = ({ children }) => {
 
   // Get the first letter of the username for the avatar
   const getAvatarText = () => {
-    if (user) {
-      return user.charAt(0).toUpperCase();
+    const username = typeof user === 'string' ? user : user?.username;
+
+    if (username) {
+      return username.charAt(0).toUpperCase();
     }
     return 'U';
   };
+
+  const displayName = typeof user === 'string' ? user : user?.username || 'admin';
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -376,7 +380,7 @@ const MainLayout = ({ children }) => {
                       fontSize: '14px',
                       fontWeight: '500',
                     }}>
-                      {user || 'admin'}
+                      {displayName}
                     </span>
                     <small style={{
                       color: 'rgba(255, 255, 255, 0.45)',

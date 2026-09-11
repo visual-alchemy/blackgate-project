@@ -1,2 +1,2 @@
 # Blackgate dashboard may schedule only these fixed appliance actions.
-blackgate ALL=(root) NOPASSWD: /usr/local/libexec/blackgate-system-action restart-blackgate, /usr/local/libexec/blackgate-system-action reboot
+blackgate ALL=(root) NOPASSWD: /usr/local/libexec/blackgate-system-action restart-blackgate, /usr/local/libexec/blackgate-system-action reboot, /usr/local/libexec/blackgate-system-action deploy *

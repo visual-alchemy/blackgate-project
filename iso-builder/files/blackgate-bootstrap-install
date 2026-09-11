@@ -1,0 +1,19 @@
+#!/bin/sh
+# One-time migration for pre-updater Ubuntu appliances. Run as root from an
+# unpacked bootstrap bundle: blackgate-bootstrap-install OLD_VERSION NEW_VERSION
+set -eu
+
+[ "$(id -u)" = 0 ] || { echo "Run as root" >&2; exit 1; }
+OLD_VERSION="${1:?usage: blackgate-bootstrap-install OLD_VERSION NEW_VERSION}"
+NEW_VERSION="${2:?usage: blackgate-bootstrap-install OLD_VERSION NEW_VERSION}"
+printf '%s' "$OLD_VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || exit 64
+printf '%s' "$NEW_VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || exit 64
+
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+install -d -o root -g root -m 0755 /usr/local/libexec /etc/blackgate
+install -o root -g root -m 0750 "$DIR/blackgate-system-action" /usr/local/libexec/blackgate-system-action
+install -o root -g root -m 0750 "$DIR/blackgate-updater" /usr/local/libexec/blackgate-updater
+install -o root -g root -m 0440 "$DIR/blackgate-system-action.sudoers" /etc/sudoers.d/blackgate-system-action
+install -o root -g root -m 0644 "$DIR/blackgate-update-public.pem" /etc/blackgate/update-public-key.pem
+visudo -cf /etc/sudoers.d/blackgate-system-action
+exec "$DIR/blackgate-update-bootstrap" "$OLD_VERSION" "$NEW_VERSION" "$DIR/blackgate-release.tar.gz"

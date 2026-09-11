@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+ROOT=/opt/blackgate
+INCOMING="$ROOT/incoming"
+RELEASES="$ROOT/releases"
+CURRENT="$ROOT/current"
+KEY=/etc/blackgate/update-public-key.pem
+STATUS=/run/blackgate-update-status
+status() { echo "$1" > "$STATUS"; }
+fail() { status "failed: $1"; echo "$1" >&2; exit 1; }
+[ "${1:-}" = deploy ] || fail "unsupported command"
+VERSION="${2:-}"
+echo "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || fail "invalid version"
+PACKAGE="$INCOMING/$VERSION.bgupdate"
+[ -f "$PACKAGE" ] && [ -f "$KEY" ] || fail "package or verification key missing"
+WORK="$(mktemp -d /var/tmp/blackgate-update.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+tar tzf "$PACKAGE" | grep -qx manifest.txt || fail "manifest missing"
+tar tzf "$PACKAGE" | grep -qx manifest.sig || fail "signature missing"
+tar tzf "$PACKAGE" | grep -qx blackgate-release.tar.gz || fail "release missing"
+tar xzf "$PACKAGE" -C "$WORK" manifest.txt manifest.sig blackgate-release.tar.gz || fail "archive extraction failed"
+openssl pkeyutl -verify -pubin -inkey "$KEY" -rawin -in "$WORK/manifest.txt" -sigfile "$WORK/manifest.sig" >/dev/null 2>&1 || fail "signature verification failed"
+PRODUCT="$(awk -F= '$1=="product" {print $2}' "$WORK/manifest.txt")"
+MANIFEST_VERSION="$(awk -F= '$1=="version" {print $2}' "$WORK/manifest.txt")"
+PLATFORM="$(awk -F= '$1=="platform" {print $2}' "$WORK/manifest.txt")"
+EXPECTED_SHA="$(awk -F= '$1=="release_sha256" {print $2}' "$WORK/manifest.txt")"
+[ "$PRODUCT" = blackgate ] && [ "$MANIFEST_VERSION" = "$VERSION" ] && [ "$PLATFORM" = ubuntu-24.04-amd64 ] || fail "manifest rejected"
+echo "$EXPECTED_SHA  $WORK/blackgate-release.tar.gz" | sha256sum -c - >/dev/null 2>&1 || fail "release checksum failed"
+[ ! -e "$RELEASES/$VERSION" ] || fail "version already installed"
+status "deploying: $VERSION"
+mkdir -p "$RELEASES/$VERSION"
+tar xzf "$WORK/blackgate-release.tar.gz" -C "$RELEASES/$VERSION" --strip-components=1 || fail "release extraction failed"
+chown -R blackgate:blackgate "$RELEASES/$VERSION"
+PREVIOUS="$(readlink "$CURRENT")"
+ln -s "releases/$VERSION" "$ROOT/current.next"
+mv -Tf "$ROOT/current.next" "$CURRENT"
+systemctl restart blackgate.service
+sleep 8
+if systemctl is-active --quiet blackgate.service; then status "deployed: $VERSION"; exit 0; fi
+ln -s "$PREVIOUS" "$ROOT/current.next"
+mv -Tf "$ROOT/current.next" "$CURRENT"
+systemctl restart blackgate.service || true
+fail "new release failed; rolled back"

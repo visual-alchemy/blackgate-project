@@ -12,9 +12,12 @@ gpasswd -d blackgate sudo 2>/dev/null || true
 
 # ─── Extract Elixir release ─────────────────────────────────────────────
 RELEASE_TARBALL="/opt/blackgate/blackgate-release.tar.gz"
+RELEASE_VERSION="1.0.0"
 if [ -f "$RELEASE_TARBALL" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extracting Blackgate release..."
-    tar xzf "$RELEASE_TARBALL" -C /opt/blackgate/ --strip-components=1
+    mkdir -p "/opt/blackgate/releases/$RELEASE_VERSION" /opt/blackgate/incoming /opt/blackgate/backups
+    tar xzf "$RELEASE_TARBALL" -C "/opt/blackgate/releases/$RELEASE_VERSION" --strip-components=1
+    ln -sfn "releases/$RELEASE_VERSION" /opt/blackgate/current
     rm -f "$RELEASE_TARBALL"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Release extracted successfully"
 else
@@ -22,7 +25,7 @@ else
 fi
 
 # ─── Set ownership ──────────────────────────────────────────────────────
-chown -R blackgate:blackgate /opt/blackgate
+chown -R blackgate:blackgate /opt/blackgate/releases /opt/blackgate/incoming /opt/blackgate/backups
 mkdir -p /var/lib/blackgate/khepri
 chown -R blackgate:blackgate /var/lib/blackgate
 

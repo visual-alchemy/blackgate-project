@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined, PoweroffOutlined, FileTextOutlined } from '@ant-design/icons';
-import { backupApi, networkApi, authApi, systemApi } from '../utils/api';
-import { logout } from '../utils/auth';
+import { backupApi, networkApi, authApi, systemApi, usersApi } from '../utils/api';
+import { logout, getUser } from '../utils/auth';
 
 const { Title } = Typography;
 
@@ -19,6 +19,14 @@ const Settings = () => {
   const [systemAction, setSystemAction] = useState(null);
   const [rebootConfirmation, setRebootConfirmation] = useState('');
   const [performingSystemAction, setPerformingSystemAction] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [updates, setUpdates] = useState([]);
+  const [selectedUpdate, setSelectedUpdate] = useState('');
+  const [uploadingUpdate, setUploadingUpdate] = useState(false);
+  const updateFileRef = useRef(null);
+  const currentUser = getUser();
+  const isAdmin = currentUser?.role === 'admin';
   const fileInputRef = useRef(null);
   const routesFileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
@@ -51,6 +59,22 @@ const Settings = () => {
   useEffect(() => {
     if (activeTab === 'system') fetchSystemStatus();
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'users' && isAdmin) fetchUsers();
+  }, [activeTab, isAdmin]);
+
+  const fetchUsers = async () => {
+    setLoadingUsers(true);
+    try {
+      const response = await usersApi.list();
+      setUsers(response.data || []);
+    } catch (error) {
+      messageApi.error({ content: error.message || 'Could not load users', duration: 5 });
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
 
   const fetchSystemStatus = async () => {
     setLoadingSystemStatus(true);
@@ -85,7 +109,9 @@ const Settings = () => {
     if (!action) return;
     setPerformingSystemAction(true);
     try {
-      const result = await systemApi.action(action);
+      const result = action.startsWith('deploy:')
+        ? await systemApi.deployUpdate(action.slice(7))
+        : await systemApi.action(action);
       messageApi.success({ content: result.message || 'System action scheduled', duration: 5 });
       setSystemAction(null);
       setRebootConfirmation('');
@@ -107,6 +133,28 @@ const Settings = () => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       messageApi.error({ content: error.message || 'Could not download report', duration: 5 });
+    }
+  };
+
+  const fetchUpdates = async () => {
+    if (!isAdmin) return;
+    const result = await systemApi.listUpdates();
+    setUpdates(result.data || []);
+  };
+
+  const uploadUpdate = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploadingUpdate(true);
+    try {
+      await systemApi.uploadUpdate(file);
+      await fetchUpdates();
+      messageApi.success({ content: 'Update package uploaded', duration: 3 });
+    } catch (error) {
+      messageApi.error({ content: error.message || 'Update upload failed', duration: 5 });
+    } finally {
+      setUploadingUpdate(false);
+      event.target.value = '';
     }
   };
 
@@ -523,7 +571,9 @@ const Settings = () => {
   // Users tab content
   const UsersTabContent = () => {
     const [form] = Form.useForm();
+    const [createForm] = Form.useForm();
     const [isUpdating, setIsUpdating] = useState(false);
+    const [isCreating, setIsCreating] = useState(false);
 
     const onFinish = async (values) => {
       setIsUpdating(true);
@@ -635,6 +685,33 @@ const Settings = () => {
             </Form.Item>
           </Form>
         </Card>
+        {isAdmin && (
+          <Card title="Dashboard Users" style={{ marginTop: '16px' }} extra={<Button icon={<ReloadOutlined />} onClick={fetchUsers} loading={loadingUsers}>Refresh</Button>}>
+            <Form form={createForm} layout="inline" onFinish={async (values) => {
+              setIsCreating(true);
+              try {
+                await usersApi.create(values);
+                createForm.resetFields();
+                messageApi.success({ content: 'User created', duration: 3 });
+                fetchUsers();
+              } catch (error) {
+                messageApi.error({ content: error.message || 'Could not create user', duration: 5 });
+              } finally {
+                setIsCreating(false);
+              }
+            }} style={{ marginBottom: '20px' }}>
+              <Form.Item name="username" rules={[{ required: true }, { min: 3 }]}><Input placeholder="Username" /></Form.Item>
+              <Form.Item name="password" rules={[{ required: true }, { min: 12, message: 'Minimum 12 characters' }]}><Input.Password placeholder="Password" /></Form.Item>
+              <Form.Item name="role" initialValue="operator"><select style={{ height: 32 }}><option value="operator">Operator</option><option value="admin">Admin</option></select></Form.Item>
+              <Form.Item><Button type="primary" htmlType="submit" loading={isCreating}>Add User</Button></Form.Item>
+            </Form>
+            <Table size="small" rowKey="id" loading={loadingUsers} pagination={false} dataSource={users} columns={[
+              { title: 'Username', dataIndex: 'username' },
+              { title: 'Role', dataIndex: 'role', render: (role) => <Tag color={role === 'admin' ? 'gold' : 'blue'}>{role}</Tag> },
+              { title: 'Status', dataIndex: 'enabled', render: (enabled) => <Tag color={enabled ? 'green' : 'red'}>{enabled ? 'Enabled' : 'Disabled'}</Tag> },
+            ]} />
+          </Card>
+        )}
       </div>
     );
   };
@@ -664,6 +741,7 @@ const Settings = () => {
                 { label: 'Root disk', value: `${formatBytes(status?.disk?.used_bytes)} used, ${formatBytes(status?.disk?.available_bytes)} free (${status?.disk?.percent || '-'})` },
                 { label: 'DeckLink nodes', value: status?.decklink_nodes ?? '-' },
                 { label: 'Release version', value: status?.version || '-' },
+                { label: 'Update status', value: status?.update_status || 'idle' },
               ]}
               columns={[{ dataIndex: 'label', width: '35%', render: (value) => <strong>{value}</strong> }, { dataIndex: 'value' }]}
             />
@@ -674,12 +752,25 @@ const Settings = () => {
           <Space wrap>
             <Button icon={<FileTextOutlined />} onClick={handleSystemReport}>Download System Report</Button>
             <Button onClick={() => setSystemAction('restart-blackgate')}>Restart Blackgate</Button>
-            <Button danger icon={<PoweroffOutlined />} onClick={() => setSystemAction('reboot')}>Reboot Gateway</Button>
+            {isAdmin && <Button danger icon={<PoweroffOutlined />} onClick={() => setSystemAction('reboot')}>Reboot Gateway</Button>}
           </Space>
           <p style={{ marginTop: '16px', color: 'rgba(255, 255, 255, 0.45)' }}>
             Restart pauses routes briefly. Reboot stops all routes and disconnects this dashboard.
           </p>
         </Card>
+        {isAdmin && <Card title="Software Updates" style={{ marginTop: '16px' }}>
+          <input ref={updateFileRef} type="file" accept=".bgupdate" style={{ display: 'none' }} onChange={uploadUpdate} />
+          <Space wrap>
+            <Button onClick={() => updateFileRef.current?.click()} loading={uploadingUpdate}>Upload Update Package</Button>
+            <Button icon={<ReloadOutlined />} onClick={fetchUpdates}>Refresh Versions</Button>
+            <select value={selectedUpdate} onChange={(event) => setSelectedUpdate(event.target.value)} style={{ height: 32, minWidth: 220 }}>
+              <option value="">Select available version</option>
+              {updates.map((file) => <option key={file} value={file.replace(/\.bgupdate$/, '')}>{file.replace(/\.bgupdate$/, '')}</option>)}
+            </select>
+            <Button type="primary" disabled={!selectedUpdate} onClick={() => setSystemAction(`deploy:${selectedUpdate}`)}>Deploy Version</Button>
+            <span title="Description: Deploy one of the available software versions. This will restart the unit.">?</span>
+          </Space>
+        </Card>}
       </div>
     );
   };
@@ -718,14 +809,14 @@ const Settings = () => {
       {modalContextHolder}
       <Modal
         open={Boolean(systemAction)}
-        title={systemAction === 'reboot' ? 'Reboot Gateway' : 'Restart Blackgate'}
-        okText={systemAction === 'reboot' ? 'Schedule Reboot' : 'Restart Now'}
-        okButtonProps={{ danger: systemAction === 'reboot', disabled: systemAction === 'reboot' && rebootConfirmation !== 'REBOOT', loading: performingSystemAction }}
+        title={systemAction === 'reboot' ? 'Reboot Gateway' : systemAction?.startsWith('deploy:') ? 'Deploy Version' : 'Restart Blackgate'}
+        okText={systemAction === 'reboot' ? 'Schedule Reboot' : systemAction?.startsWith('deploy:') ? 'Deploy Version' : 'Restart Now'}
+        okButtonProps={{ danger: systemAction === 'reboot', disabled: (systemAction === 'reboot' && rebootConfirmation !== 'REBOOT') || (systemAction?.startsWith('deploy:') && rebootConfirmation !== `DEPLOY ${systemAction.slice(7)}`), loading: performingSystemAction }}
         cancelButtonProps={{ disabled: performingSystemAction }}
         onCancel={() => { if (!performingSystemAction) { setSystemAction(null); setRebootConfirmation(''); } }}
         onOk={handleSystemAction}
       >
-        {systemAction === 'reboot' ? (
+        {systemAction?.startsWith('deploy:') ? <><p>Deploy one of the available software versions. This will restart the unit.</p><p>Type <strong>{`DEPLOY ${systemAction.slice(7)}`}</strong> to confirm.</p><Input value={rebootConfirmation} onChange={(event) => setRebootConfirmation(event.target.value)} autoComplete="off" /></> : systemAction === 'reboot' ? (
           <>
             <p>All routes stop. Dashboard disconnects. Gateway reboots in 10 seconds.</p>
             <p>Type <strong>REBOOT</strong> to confirm.</p>

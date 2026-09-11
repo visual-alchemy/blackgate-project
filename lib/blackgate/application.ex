@@ -18,6 +18,7 @@ defmodule Blackgate.Application do
 
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
+    unix_socket = System.get_env("BLACKGATE_UNIX_SOCKET", "/tmp/hydra_unix_sock")
     Logger.info("Runtime schedulers: #{runtime_schedulers}")
 
     {:ok, ranch_listener} =
@@ -28,7 +29,7 @@ defmodule Blackgate.Application do
           max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS") || "75000"),
           num_acceptors: String.to_integer(System.get_env("NUM_ACCEPTORS") || "100"),
           socket_opts: [
-            ip: {:local, "/tmp/hydra_unix_sock"},
+            ip: {:local, unix_socket},
             port: 0,
             keepalive: true
           ]

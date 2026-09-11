@@ -22,6 +22,13 @@ export const authApi = {
   }
 };
 
+export const usersApi = {
+  list: async () => (await authFetch('/api/users')).json(),
+  create: async (user) => (await authFetch('/api/users', { method: 'POST', body: JSON.stringify(user) })).json(),
+  update: async (id, user) => (await authFetch(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(user) })).json(),
+  delete: async (id) => (await authFetch(`/api/users/${id}`, { method: 'DELETE' })).json(),
+};
+
 // System Pipelines API
 export const systemPipelinesApi = {
   // Get all pipeline processes
@@ -65,6 +72,18 @@ export const systemApi = {
     if (!response.ok) throw new Error('Could not create system report');
     return response.blob();
   },
+
+  listUpdates: async () => (await authFetch('/api/system/updates')).json(),
+  uploadUpdate: async (file) => {
+    const response = await authFetch(`/api/system/updates?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file,
+    });
+    return response.json();
+  },
+  deployUpdate: async (version) =>
+    (await authFetch(`/api/system/updates/${encodeURIComponent(version)}/deploy`, { method: 'POST' })).json(),
 };
 
 // Nodes API

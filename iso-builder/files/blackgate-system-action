@@ -10,6 +10,12 @@ case "${1:-}" in
     exec /usr/bin/systemd-run --quiet --collect --unit=blackgate-dashboard-reboot \
       --on-active=10s /usr/bin/systemctl reboot
     ;;
+  deploy)
+    version="${2:-}"
+    printf '%s' "$version" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || exit 64
+    exec /usr/bin/systemd-run --quiet --collect --unit=blackgate-dashboard-deploy \
+      --on-active=2s /usr/local/libexec/blackgate-updater deploy "$version"
+    ;;
   *)
     echo "Unsupported Blackgate system action" >&2
     exit 64

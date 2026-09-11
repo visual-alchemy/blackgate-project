@@ -1,6 +1,8 @@
 defmodule BlackgateWeb.Router do
   use BlackgateWeb, :router
 
+  alias Blackgate.Accounts
+
   pipeline :browser do
     plug(:accepts, ["html"])
   end
@@ -18,6 +20,10 @@ defmodule BlackgateWeb.Router do
     plug :check_auth
   end
 
+  pipeline :admin do
+    plug :require_admin
+  end
+
   scope "/health", BlackgateWeb do
     get "/", HealthController, :index
   end
@@ -26,7 +32,21 @@ defmodule BlackgateWeb.Router do
     pipe_through :api
 
     post "/login", AuthController, :login
+  end
+
+  scope "/api", BlackgateWeb do
+    pipe_through [:api, :auth]
+
     put "/auth/credentials", AuthController, :update_credentials
+  end
+
+  scope "/api", BlackgateWeb do
+    pipe_through [:api, :auth, :admin]
+
+    resources "/users", UserController, only: [:index, :create, :update, :delete]
+    get "/system/updates", UpdateController, :index
+    post "/system/updates", UpdateController, :upload
+    post "/system/updates/:version/deploy", UpdateController, :deploy
   end
 
   scope "/api", BlackgateWeb do
@@ -104,14 +124,14 @@ defmodule BlackgateWeb.Router do
             |> Phoenix.Controller.json(%{error: "Unauthorized"})
             |> halt()
 
-          {:ok, _value} ->
-            conn
+          {:ok, %{"id" => id}} ->
+            case Accounts.session_user(id) do
+              {:ok, user} -> Plug.Conn.assign(conn, :current_user, user)
+              _ -> unauthorized(conn)
+            end
 
           _ ->
-            conn
-            |> put_status(403)
-            |> Phoenix.Controller.json(%{error: "Unauthorized"})
-            |> halt()
+            unauthorized(conn)
         end
 
       _ ->
@@ -120,5 +140,23 @@ defmodule BlackgateWeb.Router do
         |> Phoenix.Controller.json(%{error: "Authorization header missing"})
         |> halt()
     end
+  end
+
+  defp require_admin(conn, _opts) do
+    if get_in(conn.assigns, [:current_user, "role"]) == "admin" do
+      conn
+    else
+      conn
+      |> put_status(403)
+      |> Phoenix.Controller.json(%{error: "Admin role required"})
+      |> halt()
+    end
+  end
+
+  defp unauthorized(conn) do
+    conn
+    |> put_status(403)
+    |> Phoenix.Controller.json(%{error: "Unauthorized"})
+    |> halt()
   end
 end

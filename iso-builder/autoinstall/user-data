@@ -63,7 +63,10 @@ autoinstall:
     - cp /cdrom/blackgate/decklink-profile-config /target/opt/blackgate/
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
     - cp /cdrom/blackgate/blackgate-system-action /target/usr/local/libexec/blackgate-system-action
+    - cp /cdrom/blackgate/blackgate-updater /target/usr/local/libexec/blackgate-updater
     - cp /cdrom/blackgate/blackgate-system-action.sudoers /target/etc/sudoers.d/blackgate-system-action
+    - mkdir -p /target/etc/blackgate
+    - cp /cdrom/blackgate/blackgate-update-public.pem /target/etc/blackgate/update-public-key.pem
     - cp -a /cdrom/blackgate/offline-repo /target/opt/blackgate/
 
     # Install runtime and DKMS dependencies exclusively from bundled media.
@@ -80,7 +83,9 @@ autoinstall:
     - chmod +x /target/opt/blackgate/decklink-profile-config
     - chmod +x /target/etc/update-motd.d/99-blackgate
     - chmod 0750 /target/usr/local/libexec/blackgate-system-action
+    - chmod 0750 /target/usr/local/libexec/blackgate-updater
     - chmod 0440 /target/etc/sudoers.d/blackgate-system-action
+    - chmod 0644 /target/etc/blackgate/update-public-key.pem
     - chown -R 1000:1000 /target/opt/blackgate
     - chown -R 1000:1000 /target/var/lib/blackgate
 

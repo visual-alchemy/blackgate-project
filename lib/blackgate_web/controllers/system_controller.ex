@@ -19,16 +19,22 @@ defmodule BlackgateWeb.SystemController do
   end
 
   def perform_action(conn, %{"action" => action}) do
-    case SystemControl.action(action) do
-      {:ok, message} ->
-        conn
-        |> put_status(:accepted)
-        |> json(%{message: message, action: action})
+    allowed? = action == "restart-blackgate" or conn.assigns.current_user["role"] == "admin"
 
-      {:error, message} ->
-        conn
-        |> put_status(:service_unavailable)
-        |> json(%{error: "System action unavailable: #{message}"})
+    if !allowed? do
+      conn |> put_status(:forbidden) |> json(%{error: "Admin role required for gateway reboot"})
+    else
+      case SystemControl.action(action) do
+        {:ok, message} ->
+          conn
+          |> put_status(:accepted)
+          |> json(%{message: message, action: action})
+
+        {:error, message} ->
+          conn
+          |> put_status(:service_unavailable)
+          |> json(%{error: "System action unavailable: #{message}"})
+      end
     end
   end
 
