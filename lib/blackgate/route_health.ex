@@ -40,10 +40,11 @@ defmodule Blackgate.RouteHealth do
       loss = packet_loss_pct(stats, caller)
       rtt = stats["rtt-ms"] || caller["rtt-ms"] || 0.0
 
-      sdi_video_stats = stats["sdi_video_stats"] || []
-      high_drops? = Enum.any?(sdi_video_stats, fn item ->
-        (item["drops_per_sec"] || 0.0) >= 2.0
-      end)
+      # `drops_per_sec` in `sdi_video_stats` is deliberately excluded here:
+      # it counts `videorate` "drop" events, i.e. expected framerate-conversion
+      # drops (50p -> 25p drops every other frame), not DeckLink hardware
+      # failures. Hardware failures crash the pipeline and are handled by
+      # RouteHandler restart logic instead.
 
       # Extract pipeline warnings and egress loss
       warning_count = stats["warning_count"] || 0
@@ -80,8 +81,8 @@ defmodule Blackgate.RouteHealth do
         has_egress_loss? ->
           "network_loss_egress"
 
-        # 4. Warnings / SDI frame drops
-        loss >= @loss_warning or rtt >= @rtt_warning or high_drops? ->
+        # 4. Warnings
+        loss >= @loss_warning or rtt >= @rtt_warning ->
           "warning"
 
         true ->

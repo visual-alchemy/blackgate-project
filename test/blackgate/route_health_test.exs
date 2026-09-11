@@ -63,4 +63,21 @@ defmodule Blackgate.RouteHealthTest do
     }
     assert RouteHealth.evaluate(stats) == "network_loss_egress"
   end
+
+  test "evaluate/1 healthy despite SDI framerate-conversion drops" do
+    # `drops_per_sec` reflects videorate downconversion (e.g. 50p -> 25p),
+    # not a hardware failure, so it must not degrade health to warning.
+    stats = %{
+      "receive-rate-mbps" => 5.5,
+      "packets-received" => 1000,
+      "packets-received-lost" => 0,
+      "rtt-ms" => 10.0,
+      "warning_count" => 0,
+      "sink_stats" => [],
+      "sdi_video_stats" => [
+        %{"device_number" => 0, "drops_per_sec" => 25.0, "duplicates_per_sec" => 0.0}
+      ]
+    }
+    assert RouteHealth.evaluate(stats) == "healthy"
+  end
 end
