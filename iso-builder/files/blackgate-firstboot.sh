@@ -12,7 +12,10 @@ gpasswd -d blackgate sudo 2>/dev/null || true
 
 # ─── Extract Elixir release ─────────────────────────────────────────────
 RELEASE_TARBALL="/opt/blackgate/blackgate-release.tar.gz"
-RELEASE_VERSION="1.0.0"
+# Replaced by iso-builder/build.sh when this script is injected into an ISO.
+# Keep the runtime release directory independent from the OTP application
+# version (which remains 1.0.0).
+RELEASE_VERSION="@BLACKGATE_RELEASE_VERSION@"
 if [ -f "$RELEASE_TARBALL" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Extracting Blackgate release..."
     mkdir -p "/opt/blackgate/releases/$RELEASE_VERSION" /opt/blackgate/incoming /opt/blackgate/backups
@@ -67,7 +70,7 @@ fi
 
 # ─── Configure DeckLink Duo 2 connector mapping ────────────────────────
 PROFILE_TOOL_STAGED="/opt/blackgate/decklink-profile-config"
-PROFILE_TOOL="/opt/blackgate/bin/decklink-profile-config"
+PROFILE_TOOL="/opt/blackgate/current/bin/decklink-profile-config"
 install -m 0755 "$PROFILE_TOOL_STAGED" "$PROFILE_TOOL"
 
 for i in {1..30}; do

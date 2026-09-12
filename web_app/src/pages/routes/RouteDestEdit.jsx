@@ -561,26 +561,26 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         label="Video Mode"
                                                         name={['schema_options', 'video_mode']}
                                                         required
-                                                        extra="Output video format. Must match source resolution and frame rate."
+                                                        extra="Progressive modes use frame rate. Interlaced modes show complete frames per second and fields per second."
                                                     >
                                                         <Select
                                                             placeholder="Select video mode"
                                                             options={[
-                                                                { label: 'Auto (detect from source)', value: 0 },
-                                                                { label: '1080p 25fps (PAL)', value: 9 },
-                                                                { label: '1080p 30fps (NTSC)', value: 11 },
-                                                                { label: '1080p 50fps', value: 12 },
-                                                                { label: '1080p 60fps', value: 13 },
-                                                                { label: '1080i 50fps (PAL)', value: 7 },
-                                                                { label: '1080i 60fps (NTSC)', value: 8 },
-                                                                { label: '720p 50fps', value: 14 },
-                                                                { label: '720p 60fps', value: 15 },
-                                                                { label: '576i 50fps (PAL SD)', value: 17 },
-                                                                { label: '480i 60fps (NTSC SD)', value: 18 },
-                                                                { label: '2160p 25fps (4K)', value: 22 },
-                                                                { label: '2160p 30fps (4K)', value: 23 },
-                                                                { label: '2160p 50fps (4K)', value: 24 },
-                                                                { label: '2160p 60fps (4K)', value: 25 },
+                                                                { label: 'Auto — detect source format (fallback: 1080p25)', value: 0 },
+                                                                { label: '1080p25 — 25 fps', value: 9 },
+                                                                { label: '1080p30 — 30 fps', value: 11 },
+                                                                { label: '1080p50 — 50 fps', value: 12 },
+                                                                { label: '1080p60 — 60 fps', value: 13 },
+                                                                { label: '1080i50 — 25 fps / 50 fields', value: 7 },
+                                                                { label: '1080i60 — 30 fps / 60 fields', value: 8 },
+                                                                { label: '720p50 — 50 fps', value: 14 },
+                                                                { label: '720p60 — 60 fps', value: 15 },
+                                                                { label: '576i50 (PAL) — 25 fps / 50 fields', value: 17 },
+                                                                { label: '480i60 (NTSC) — 30 fps / 60 fields', value: 18 },
+                                                                { label: '2160p25 (4K) — 25 fps', value: 22 },
+                                                                { label: '2160p30 (4K) — 30 fps', value: 23 },
+                                                                { label: '2160p50 (4K) — 50 fps', value: 24 },
+                                                                { label: '2160p60 (4K) — 60 fps', value: 25 },
                                                             ]}
                                                             style={{ width: '250px' }}
                                                         />

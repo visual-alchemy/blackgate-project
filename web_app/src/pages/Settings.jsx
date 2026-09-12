@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined, PoweroffOutlined, FileTextOutlined } from '@ant-design/icons';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined, PoweroffOutlined, FileTextOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { backupApi, networkApi, authApi, systemApi, usersApi } from '../utils/api';
 import { logout, getUser } from '../utils/auth';
 
@@ -572,8 +572,52 @@ const Settings = () => {
   const UsersTabContent = () => {
     const [form] = Form.useForm();
     const [createForm] = Form.useForm();
+    const [editForm] = Form.useForm();
     const [isUpdating, setIsUpdating] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
+    const [editingUser, setEditingUser] = useState(null);
+    const [isSavingUser, setIsSavingUser] = useState(false);
+
+    const openEditUser = (user) => {
+      setEditingUser(user);
+      editForm.setFieldsValue({ username: user.username, role: user.role, enabled: String(user.enabled), password: "" });
+    };
+
+    const saveEditedUser = async (values) => {
+      if (!editingUser) return;
+      setIsSavingUser(true);
+      try {
+        const update = { ...values, enabled: values.enabled === "true" };
+        if (update.password === "") delete update.password;
+        await usersApi.update(editingUser.id, update);
+        messageApi.success({ content: "User updated", duration: 3 });
+        setEditingUser(null);
+        fetchUsers();
+      } catch (error) {
+        messageApi.error({ content: error.message || "Could not update user", duration: 5 });
+      } finally {
+        setIsSavingUser(false);
+      }
+    };
+
+    const confirmDeleteUser = (user) => {
+      modal.confirm({
+        title: `Delete ${user.username}?`,
+        icon: <ExclamationCircleOutlined />,
+        content: "This dashboard account loses access immediately.",
+        okText: "Delete User",
+        okButtonProps: { danger: true },
+        onOk: async () => {
+          try {
+            await usersApi.delete(user.id);
+            messageApi.success({ content: "User deleted", duration: 3 });
+            fetchUsers();
+          } catch (error) {
+            messageApi.error({ content: error.message || "Could not delete user", duration: 5 });
+          }
+        },
+      });
+    };
 
     const onFinish = async (values) => {
       setIsUpdating(true);
@@ -709,9 +753,26 @@ const Settings = () => {
               { title: 'Username', dataIndex: 'username' },
               { title: 'Role', dataIndex: 'role', render: (role) => <Tag color={role === 'admin' ? 'gold' : 'blue'}>{role}</Tag> },
               { title: 'Status', dataIndex: 'enabled', render: (enabled) => <Tag color={enabled ? 'green' : 'red'}>{enabled ? 'Enabled' : 'Disabled'}</Tag> },
+              { title: 'Actions', key: 'actions', render: (_, user) => <Space size="small"><Button type="text" icon={<EditOutlined />} onClick={() => openEditUser(user)} title="Edit user" /><Button type="text" danger icon={<DeleteOutlined />} onClick={() => confirmDeleteUser(user)} title="Delete user" /></Space> },
             ]} />
           </Card>
         )}
+        <Modal
+          open={Boolean(editingUser)}
+          title={editingUser ? `Edit ${editingUser.username}` : "Edit user"}
+          okText="Save User"
+          confirmLoading={isSavingUser}
+          onCancel={() => { if (!isSavingUser) setEditingUser(null); }}
+          onOk={() => editForm.submit()}
+          destroyOnClose
+        >
+          <Form form={editForm} layout="vertical" onFinish={saveEditedUser}>
+            <Form.Item name="username" label="Username" rules={[{ required: true }, { min: 3 }]}><Input autoComplete="off" /></Form.Item>
+            <Form.Item name="role" label="Role" rules={[{ required: true }]}><select style={{ width: "100%", height: 32 }}><option value="operator">Operator</option><option value="admin">Admin</option></select></Form.Item>
+            <Form.Item name="enabled" label="Status" rules={[{ required: true }]}><select style={{ width: "100%", height: 32 }}><option value="true">Enabled</option><option value="false">Disabled</option></select></Form.Item>
+            <Form.Item name="password" label="New Password" rules={[{ min: 12, message: "Minimum 12 characters" }]}><Input.Password autoComplete="new-password" placeholder="Leave blank to keep current password" /></Form.Item>
+          </Form>
+        </Modal>
       </div>
     );
   };

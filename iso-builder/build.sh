@@ -12,6 +12,7 @@ EXTRACT_DIR="$WORK_DIR/iso-extract"
 PROFILE_TOOL="$WORK_DIR/decklink-profile-config"
 PROJECT_BUILD_DIR="$WORK_DIR/project-build"
 OFFLINE_PACKAGE_LIST="$SCRIPT_DIR/offline-packages.txt"
+RELEASE_VERSION_FILE="$SCRIPT_DIR/release-version"
 OFFLINE_CACHE_DIR="${BLACKGATE_OFFLINE_CACHE_DIR:-$SCRIPT_DIR/cache/offline-packages}"
 OFFLINE_REPO_DIR="$EXTRACT_DIR/blackgate/offline-repo"
 XORRISO_BIN="$(command -v xorriso || true)"
@@ -39,6 +40,17 @@ fi
 
 if [ ! -f "$DESKTOPVIDEO_DEB" ]; then
     echo "❌ Desktop Video driver not found: $DESKTOPVIDEO_DEB"
+    exit 1
+fi
+
+if [ ! -f "$RELEASE_VERSION_FILE" ]; then
+    echo "❌ Release version file not found: $RELEASE_VERSION_FILE"
+    exit 1
+fi
+
+RELEASE_VERSION="$(tr -d '[:space:]' < "$RELEASE_VERSION_FILE")"
+if ! printf '%s' "$RELEASE_VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+    echo "❌ Invalid release version: $RELEASE_VERSION"
     exit 1
 fi
 
@@ -104,6 +116,7 @@ for f in "${REQUIRED[@]}"; do
 done
 
 echo "✅ Pre-flight checks passed"
+echo "   Release version: $RELEASE_VERSION"
 
 # ─── Step 0: Assemble local APT repository ──────────────────────────────
 
@@ -144,6 +157,7 @@ echo "   Creating isolated build tree (live installation remains untouched)..."
 mkdir -p "$PROJECT_BUILD_DIR"
 rsync -a \
     --exclude='.git/' \
+    --exclude='_build/' \
     --exclude='iso-builder/output/' \
     --exclude='iso-builder/files/blackgate-release.tar.gz' \
     "$PROJECT_ROOT/" "$PROJECT_BUILD_DIR/"
@@ -194,7 +208,6 @@ mkdir -p "$EXTRACT_DIR/blackgate"
 for f in \
     blackgate-release.tar.gz \
     blackgate.service \
-    blackgate-firstboot.sh \
     blackgate-firstboot.service \
     99-blackgate-motd.sh \
     blackgate-system-action \
@@ -204,6 +217,13 @@ for f in \
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
 done
+
+# First boot needs the appliance release label, not Mix/OTP's internal 1.0.0.
+sed "s/@BLACKGATE_RELEASE_VERSION@/$RELEASE_VERSION/g" \
+    "$SCRIPT_DIR/files/blackgate-firstboot.sh" \
+    > "$EXTRACT_DIR/blackgate/blackgate-firstboot.sh"
+chmod 0755 "$EXTRACT_DIR/blackgate/blackgate-firstboot.sh"
+echo "   ✅ blackgate-firstboot.sh ($(du -h "$SCRIPT_DIR/files/blackgate-firstboot.sh" | cut -f1), release $RELEASE_VERSION)"
 cp "$DESKTOPVIDEO_DEB" "$EXTRACT_DIR/blackgate/desktopvideo_16.0.1a2_amd64.deb"
 cp "$PROFILE_TOOL" "$EXTRACT_DIR/blackgate/decklink-profile-config"
 echo "   ✅ Desktop Video 16.0.1 driver"
