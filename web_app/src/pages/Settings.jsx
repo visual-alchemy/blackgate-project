@@ -14,6 +14,9 @@ const Settings = () => {
   const [isImportingRoutes, setIsImportingRoutes] = useState(false);
   const [interfaces, setInterfaces] = useState([]);
   const [loadingInterfaces, setLoadingInterfaces] = useState(false);
+  const [interfaceAliasForm] = Form.useForm();
+  const [editingInterface, setEditingInterface] = useState(null);
+  const [savingInterfaceAlias, setSavingInterfaceAlias] = useState(false);
   const [systemStatus, setSystemStatus] = useState(null);
   const [loadingSystemStatus, setLoadingSystemStatus] = useState(false);
   const [systemAction, setSystemAction] = useState(null);
@@ -172,6 +175,26 @@ const Settings = () => {
       });
     } finally {
       setLoadingInterfaces(false);
+    }
+  };
+
+  const openInterfaceAliasEditor = (networkInterface) => {
+    setEditingInterface(networkInterface);
+    interfaceAliasForm.setFieldsValue({ alias: networkInterface.alias || '' });
+  };
+
+  const saveInterfaceAlias = async ({ alias }) => {
+    if (!editingInterface?.mac) return;
+    setSavingInterfaceAlias(true);
+    try {
+      await networkApi.setInterfaceAlias(editingInterface.mac, alias || '');
+      messageApi.success({ content: alias?.trim() ? 'Interface alias saved' : 'Interface alias removed', duration: 3 });
+      setEditingInterface(null);
+      fetchInterfaces();
+    } catch (error) {
+      messageApi.error({ content: error.message || 'Could not save interface alias', duration: 5 });
+    } finally {
+      setSavingInterfaceAlias(false);
     }
   };
 
@@ -496,7 +519,18 @@ const Settings = () => {
         title: 'Interface',
         dataIndex: 'name',
         key: 'name',
-        render: (name) => <code>{name}</code>,
+        render: (name, record) => (
+          <Space direction="vertical" size={0}>
+            <span>{record.alias || name}</span>
+            {record.alias && <code style={{ fontSize: '12px' }}>{name}</code>}
+          </Space>
+        ),
+      },
+      {
+        title: 'Alias',
+        dataIndex: 'alias',
+        key: 'alias',
+        render: (alias) => alias || <span style={{ color: 'rgba(255, 255, 255, 0.45)' }}>Not set</span>,
       },
       {
         title: 'IP Address',
@@ -526,6 +560,20 @@ const Settings = () => {
           </Tag>
         ),
       },
+      ...(isAdmin ? [{
+        title: 'Actions',
+        key: 'actions',
+        render: (_, record) => (
+          <Button
+            type="text"
+            icon={<EditOutlined />}
+            disabled={!record.mac}
+            onClick={() => openInterfaceAliasEditor(record)}
+          >
+            Edit Alias
+          </Button>
+        ),
+      }] : []),
     ];
 
     return (
@@ -548,7 +596,7 @@ const Settings = () => {
           }
         >
           <p style={{ marginBottom: '16px' }}>
-            Detected network interfaces on this server. Use these when configuring UDP routes to bind traffic to a specific interface.
+            Aliases are Blackgate display labels only. Linux interface names and network traffic are not changed.
           </p>
           {loadingInterfaces ? (
             <div style={{ textAlign: 'center', padding: '40px' }}>
@@ -564,6 +612,26 @@ const Settings = () => {
             />
           )}
         </Card>
+        <Modal
+          open={Boolean(editingInterface)}
+          title={editingInterface ? `Edit alias — ${editingInterface.name}` : 'Edit interface alias'}
+          okText="Save Alias"
+          confirmLoading={savingInterfaceAlias}
+          onCancel={() => { if (!savingInterfaceAlias) setEditingInterface(null); }}
+          onOk={() => interfaceAliasForm.submit()}
+          destroyOnClose
+        >
+          <Form form={interfaceAliasForm} layout="vertical" onFinish={saveInterfaceAlias}>
+            <Form.Item
+              name="alias"
+              label="Display Alias"
+              extra="Examples: ISP1, ISP2. Leave blank to use the Linux interface name."
+              rules={[{ max: 32, message: 'Maximum 32 characters' }, { pattern: /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/, message: 'Use letters, numbers, spaces, dots, dashes, or underscores' }]}
+            >
+              <Input autoFocus autoComplete="off" placeholder="ISP1" />
+            </Form.Item>
+          </Form>
+        </Modal>
       </div>
     );
   };

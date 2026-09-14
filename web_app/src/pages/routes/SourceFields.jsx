@@ -4,6 +4,9 @@ import React from 'react';
 
 const { Text } = Typography;
 
+const interfaceLabel = (networkInterface) =>
+  networkInterface.alias ? `${networkInterface.alias} (${networkInterface.name})` : networkInterface.name;
+
 const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
   return (
     <>
@@ -63,7 +66,7 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                           ...interfaces
                             .filter(iface => iface.up && iface.address)
                             .map(iface => ({
-                              label: `${iface.name} (${iface.address})`,
+                              label: `${interfaceLabel(iface)} (${iface.address})`,
                               value: iface.address
                             }))
                         ]}
@@ -331,7 +334,7 @@ const SourceFields = ({ prefix, schemaName, interfaces, hideSchema }) => {
                     ...interfaces
                       .filter(iface => iface.up)
                       .map(iface => ({
-                        label: `${iface.name} (${iface.address || 'no IP'})`,
+                        label: `${interfaceLabel(iface)} (${iface.address || 'no IP'})`,
                         value: iface.name
                       }))
                   ]}
