@@ -369,6 +369,14 @@ export const networkApi = {
     const response = await authFetch('/api/network/interfaces');
     return response.json();
   },
+
+  setInterfaceAlias: async (mac, alias) => {
+    const response = await authFetch(`/api/network/interfaces/${encodeURIComponent(mac)}/alias`, {
+      method: 'PUT',
+      body: JSON.stringify({ alias }),
+    });
+    return response.json();
+  },
 };
 
 // License API

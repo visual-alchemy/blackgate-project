@@ -44,6 +44,7 @@ defmodule BlackgateWeb.Router do
     pipe_through [:api, :auth, :admin]
 
     resources "/users", UserController, only: [:index, :create, :update, :delete]
+    put "/network/interfaces/:mac/alias", NetworkController, :update_alias
     get "/system/updates", UpdateController, :index
     post "/system/updates", UpdateController, :upload
     post "/system/updates/:version/deploy", UpdateController, :deploy

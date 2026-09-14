@@ -15,6 +15,9 @@ import React from 'react';
 
 const { Title } = Typography;
 
+const interfaceLabel = (networkInterface) =>
+    networkInterface.alias ? `${networkInterface.alias} (${networkInterface.name})` : networkInterface.name;
+
 const RouteDestEdit = ({ initialValues, onChange }) => {
     const [form] = Form.useForm();
     const navigate = useNavigate();
@@ -302,7 +305,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                             ...interfaces
                                                                                 .filter(iface => iface.up && iface.address)
                                                                                 .map(iface => ({
-                                                                                    label: `${iface.name} (${iface.address})`,
+                                                                                    label: `${interfaceLabel(iface)} (${iface.address})`,
                                                                                     value: iface.address
                                                                                 }))
                                                                         ]}
@@ -502,7 +505,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                 ...interfaces
                                                                     .filter(iface => iface.up && iface.address)
                                                                     .map(iface => ({
-                                                                        label: `${iface.name} (${iface.address})`,
+                                                                        label: `${interfaceLabel(iface)} (${iface.address})`,
                                                                         value: iface.address
                                                                     }))
                                                             ]}
@@ -522,7 +525,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                 ...interfaces
                                                                     .filter(iface => iface.up)
                                                                     .map(iface => ({
-                                                                        label: iface.name,
+                                                                        label: interfaceLabel(iface),
                                                                         value: iface.name
                                                                     }))
                                                             ]}
