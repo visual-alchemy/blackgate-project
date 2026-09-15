@@ -204,6 +204,8 @@ rm -f /tmp/hydra_unix_sock
 tar czf "$DATABASE_BACKUP" -C "$DATABASE_SOURCE" .
 cp -a "$DATABASE_SOURCE"/. "$DATABASE_TARGET"/
 chown -R blackgate:blackgate "$DATABASE_TARGET"
+find "$DATABASE_TARGET" -type d -exec chmod 0750 {} +
+find "$DATABASE_TARGET" -type f -exec chmod 0640 {} +
 
 ln -s "releases/$NEW_VERSION" "$ROOT/current"
 install -o root -g root -m 0644 "$NEW_UNIT" "$UNIT_TARGET"
