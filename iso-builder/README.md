@@ -64,3 +64,17 @@ sudo journalctl -u blackgate -f
 sudo systemctl restart blackgate
 sudo systemctl stop blackgate
 ```
+
+## Migrating a Source Installation
+
+Gateways currently running from a source checkout such as
+`/home/woi/blackgate-project` require one-time migration before dashboard
+updates work. Build a source migration bundle with:
+
+```bash
+scripts/package-source-appliance-bootstrap.sh VERSION output
+```
+
+See [`docs/source-appliance-migration.md`](../docs/source-appliance-migration.md)
+for checksum verification, read-only preflight, confirmed migration, rollback,
+and post-migration checks.

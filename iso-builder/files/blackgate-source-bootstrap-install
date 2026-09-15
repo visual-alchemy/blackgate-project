@@ -1,0 +1,234 @@
+#!/bin/sh
+# One-time migration from a source-checkout Blackgate service to appliance layout.
+# Source tree and database remain untouched so old service can be restored.
+set -eu
+umask 077
+
+usage() {
+    echo "usage: $0 --check|--confirm SOURCE_ROOT OLD_VERSION [DATABASE_SOURCE]" >&2
+    echo "example: $0 --check /home/woi/blackgate-project legacy-1.0.0" >&2
+}
+
+if [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
+
+MODE=${1:-}
+case "$MODE" in
+    --check|--confirm) ;;
+    *) echo "Specify --check or --confirm" >&2; usage; exit 64 ;;
+esac
+shift
+[ "$#" -ge 2 ] && [ "$#" -le 3 ] || { usage; exit 64; }
+[ "$MODE" = "--check" ] || [ "$(id -u)" = 0 ] || { echo "Run --confirm as root" >&2; exit 1; }
+
+SOURCE_ROOT=${1%/}
+OLD_VERSION=$2
+DATABASE_SOURCE=${3:-}
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+VERSION_FILE="$DIR/bootstrap-version"
+RELEASE_TARBALL="$DIR/blackgate-release.tar.gz"
+ROOT=/opt/blackgate
+RELEASES="$ROOT/releases"
+INCOMING="$ROOT/incoming"
+BACKUPS="$ROOT/backups"
+DATABASE_TARGET=/var/lib/blackgate/khepri
+UNIT_TARGET=/etc/systemd/system/blackgate.service
+NEW_UNIT=/etc/systemd/system/blackgate.service.appliance-new
+
+[ -n "$SOURCE_ROOT" ] && [ "$SOURCE_ROOT" != "/" ] && [ "$SOURCE_ROOT" != "$ROOT" ] || {
+    echo "Unsafe source root: $SOURCE_ROOT" >&2
+    exit 64
+}
+printf '%s' "$OLD_VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || {
+    echo "Invalid old version label: $OLD_VERSION" >&2
+    exit 64
+}
+[ -d "$SOURCE_ROOT" ] || { echo "Source root not found: $SOURCE_ROOT" >&2; exit 66; }
+[ -x "$SOURCE_ROOT/_build/prod/rel/blackgate/bin/blackgate" ] || {
+    echo "Source-built release not found beneath: $SOURCE_ROOT" >&2
+    exit 66
+}
+[ -r "$VERSION_FILE" ] || { echo "Bundle version file missing" >&2; exit 66; }
+[ -r "$RELEASE_TARBALL" ] || { echo "Release tarball missing" >&2; exit 66; }
+
+NEW_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE")
+printf '%s' "$NEW_VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || {
+    echo "Invalid bundle version: $NEW_VERSION" >&2
+    exit 64
+}
+[ "$OLD_VERSION" != "$NEW_VERSION" ] || {
+    echo "Old and new version labels must differ" >&2
+    exit 64
+}
+[ ! -e "$ROOT" ] || {
+    echo "$ROOT already exists; source-layout bootstrap refused" >&2
+    exit 73
+}
+
+OLD_UNIT=$(systemctl show blackgate.service --property=FragmentPath --value)
+[ -n "$OLD_UNIT" ] && [ -r "$OLD_UNIT" ] || {
+    echo "Could not locate existing blackgate.service unit" >&2
+    exit 69
+}
+
+if [ -z "$DATABASE_SOURCE" ]; then
+    DATABASE_COUNT=0
+    for candidate in "$SOURCE_ROOT"/khepri*; do
+        [ -d "$candidate" ] || continue
+        DATABASE_SOURCE=$candidate
+        DATABASE_COUNT=$((DATABASE_COUNT + 1))
+    done
+    [ "$DATABASE_COUNT" -eq 1 ] || {
+        echo "Expected exactly one $SOURCE_ROOT/khepri* database directory; found $DATABASE_COUNT" >&2
+        echo "Pass DATABASE_SOURCE explicitly as third argument" >&2
+        exit 66
+    }
+fi
+[ -d "$DATABASE_SOURCE" ] || {
+    echo "Database source not found: $DATABASE_SOURCE" >&2
+    exit 66
+}
+if [ -d "$DATABASE_TARGET" ] &&
+    find "$DATABASE_TARGET" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+    echo "Database target is not empty: $DATABASE_TARGET" >&2
+    exit 73
+fi
+
+for required in \
+    blackgate-system-action \
+    blackgate-updater \
+    blackgate-system-action.sudoers \
+    blackgate-update-public.pem; do
+    [ -r "$DIR/$required" ] || { echo "Bundle file missing: $required" >&2; exit 66; }
+done
+
+echo "Blackgate source-layout migration preflight"
+echo "  source:       $SOURCE_ROOT"
+echo "  database:     $DATABASE_SOURCE"
+echo "  old unit:     $OLD_UNIT"
+echo "  old label:    $OLD_VERSION"
+echo "  new version:  $NEW_VERSION"
+echo "  target:       $ROOT"
+
+if [ "$MODE" = "--check" ]; then
+    echo "Preflight passed; no changes made"
+    exit 0
+fi
+
+# Prepare every artifact possible before stopping live service.
+if ! id blackgate >/dev/null 2>&1; then
+    useradd --system --home-dir "$ROOT" --shell /usr/sbin/nologin blackgate
+fi
+for service_group in video audio; do
+    if getent group "$service_group" >/dev/null 2>&1; then
+        usermod -a -G "$service_group" blackgate
+    fi
+done
+install -d -o root -g root -m 0755 /usr/local/libexec /etc/blackgate
+install -o root -g root -m 0750 "$DIR/blackgate-system-action" /usr/local/libexec/blackgate-system-action
+install -o root -g root -m 0750 "$DIR/blackgate-updater" /usr/local/libexec/blackgate-updater
+install -o root -g root -m 0440 "$DIR/blackgate-system-action.sudoers" /etc/sudoers.d/blackgate-system-action
+install -o root -g root -m 0644 "$DIR/blackgate-update-public.pem" /etc/blackgate/update-public-key.pem
+visudo -cf /etc/sudoers.d/blackgate-system-action
+
+install -d -o root -g root -m 0755 "$ROOT" "$RELEASES"
+install -d -o root -g root -m 0700 "$BACKUPS"
+install -d -o blackgate -g blackgate -m 0750 "$INCOMING"
+install -d -o blackgate -g blackgate -m 0750 "$DATABASE_TARGET"
+install -d -o root -g root -m 0755 "$RELEASES/$NEW_VERSION"
+tar xzf "$RELEASE_TARBALL" -C "$RELEASES/$NEW_VERSION" --strip-components=1
+[ -x "$RELEASES/$NEW_VERSION/bin/blackgate" ] || {
+    echo "Packaged release executable missing" >&2
+    exit 65
+}
+chown -R root:root "$RELEASES/$NEW_VERSION"
+
+# Preserve existing runtime environment while standardizing paths and user.
+{
+    echo "[Unit]"
+    echo "Description=Blackgate SRT Gateway"
+    echo "After=network-online.target"
+    echo "Wants=network-online.target"
+    echo
+    echo "[Service]"
+    echo "Type=exec"
+    echo "User=blackgate"
+    echo "Group=blackgate"
+    echo "WorkingDirectory=$ROOT/current"
+    sed -n '/^Environment=/p; /^EnvironmentFile=/p' "$OLD_UNIT" |
+        grep -Ev '(^Environment=HOME=|^Environment=DATABASE_DATA_DIR=)' || true
+    echo "Environment=HOME=$ROOT/current"
+    echo "Environment=DATABASE_DATA_DIR=$DATABASE_TARGET"
+    echo "ExecStartPre=-/bin/rm -f /tmp/hydra_unix_sock"
+    echo "ExecStart=$ROOT/current/bin/blackgate start"
+    echo "ExecStop=$ROOT/current/bin/blackgate stop"
+    echo "ExecStopPost=-/bin/rm -f /tmp/hydra_unix_sock"
+    echo "Restart=always"
+    echo "RestartSec=5"
+    echo "LimitNOFILE=65536"
+    echo
+    echo "[Install]"
+    echo "WantedBy=multi-user.target"
+} > "$NEW_UNIT"
+chmod 0644 "$NEW_UNIT"
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+UNIT_BACKUP="$BACKUPS/blackgate.service.$STAMP"
+DATABASE_BACKUP="$BACKUPS/khepri-$OLD_VERSION-$STAMP.tar.gz"
+install -o root -g root -m 0600 "$OLD_UNIT" "$UNIT_BACKUP"
+
+MIGRATION_STARTED=0
+MIGRATION_SUCCEEDED=0
+rollback() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$MIGRATION_STARTED" -eq 1 ] && [ "$MIGRATION_SUCCEEDED" -ne 1 ]; then
+        echo "Migration failed; restoring previous service unit" >&2
+        systemctl stop blackgate.service >/dev/null 2>&1 || true
+        install -o root -g root -m 0644 "$UNIT_BACKUP" "$UNIT_TARGET"
+        systemctl daemon-reload
+        systemctl start blackgate.service || true
+    fi
+    rm -f "$NEW_UNIT"
+    exit "$status"
+}
+trap rollback EXIT HUP INT TERM
+
+MIGRATION_STARTED=1
+systemctl stop blackgate.service
+
+# Cold backup and copy: source database remains in place for rollback.
+tar czf "$DATABASE_BACKUP" -C "$DATABASE_SOURCE" .
+cp -a "$DATABASE_SOURCE"/. "$DATABASE_TARGET"/
+chown -R blackgate:blackgate "$DATABASE_TARGET"
+
+ln -s "releases/$NEW_VERSION" "$ROOT/current"
+install -o root -g root -m 0644 "$NEW_UNIT" "$UNIT_TARGET"
+systemctl daemon-reload
+systemctl start blackgate.service
+
+ACTIVE=0
+for attempt in $(seq 1 20); do
+    if systemctl is-active --quiet blackgate.service; then
+        ACTIVE=1
+        break
+    fi
+    sleep 1
+done
+[ "$ACTIVE" -eq 1 ] || { echo "New Blackgate service did not become active" >&2; exit 1; }
+sleep 8
+systemctl is-active --quiet blackgate.service || {
+    echo "New Blackgate service did not remain active" >&2
+    exit 1
+}
+
+MIGRATION_SUCCEEDED=1
+rm -f "$NEW_UNIT"
+trap - EXIT HUP INT TERM
+echo "Migration complete"
+echo "  current:  $ROOT/current -> releases/$NEW_VERSION"
+echo "  database: $DATABASE_TARGET"
+echo "  backup:   $DATABASE_BACKUP"
+echo "  old source installation retained at: $SOURCE_ROOT"
