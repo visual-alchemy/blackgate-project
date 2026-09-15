@@ -68,7 +68,7 @@ else
     exit 1
 fi
 
-# ─── Configure DeckLink Duo 2 connector mapping ────────────────────────
+# ─── Configure DeckLink Quad 2 connector mapping ───────────────────────
 PROFILE_TOOL_STAGED="/opt/blackgate/decklink-profile-config"
 PROFILE_TOOL="/opt/blackgate/current/bin/decklink-profile-config"
 install -m 0755 "$PROFILE_TOOL_STAGED" "$PROFILE_TOOL"

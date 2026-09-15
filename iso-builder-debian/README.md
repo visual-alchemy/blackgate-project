@@ -4,7 +4,7 @@ Separate experimental appliance builder. Does not modify the Ubuntu builder.
 
 Base: `debian-13.6.0-amd64-netinst.iso`. Installer uses Debian preseed and a
 bundled package repository; it never selects an Internet mirror. First boot
-rebuilds Desktop Video DKMS for the running kernel, activates Duo 2 `2dhd`,
+rebuilds Desktop Video DKMS for the running kernel, activates Quad 2 `2dhd`,
 then enables Blackgate.
 
 ## Required inputs

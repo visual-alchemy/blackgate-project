@@ -2,7 +2,7 @@
 
 Builds a bootable **Ubuntu 24.04 (Noble) Server** ISO appliance containing the
 native Blackgate OTP release, Blackmagic Desktop Video 16.0.1 driver, and
-headless DeckLink Duo 2 connector-profile configuration.
+headless DeckLink Quad 2 connector-profile configuration.
 
 ## How to Build
 
@@ -38,14 +38,15 @@ cable with Internet is connected. Later builds reuse package cache.
 | **OS** | Ubuntu 24.04 (Noble) CLI; offline autoinstall |
 | **Engine** | Native Elixir/OTP release + C/GStreamer pipeline |
 | **Packages** | Local APT repository with runtime and DKMS dependency closure |
-| **DeckLink** | Desktop Video 16.0.1; first boot rebuilds DKMS for installed kernel, then activates Duo 2 `2dhd` |
+| **DeckLink** | Desktop Video 16.0.1; first boot rebuilds DKMS for installed kernel, then activates Quad 2 `2dhd` |
 | **SSH** | Enabled |
 | **Boot** | systemd starts Blackgate after first-boot provisioning |
 
-With `2dhd`, four GStreamer devices drive four independent outputs. Duo 2
+With `2dhd`, eight GStreamer devices drive eight independent outputs. Quad 2
 enumeration order is `device 0 → SDI 1`, `device 1 → SDI 3`,
-`device 2 → SDI 2`, and `device 3 → SDI 4`. Frontend mapping presents ports in
-physical SDI 1–4 order.
+`device 2 → SDI 5`, `device 3 → SDI 7`, `device 4 → SDI 2`,
+`device 5 → SDI 4`, `device 6 → SDI 6`, and `device 7 → SDI 8`. Frontend
+mapping presents ports in physical SDI 1–8 order.
 
 ## Default Credentials
 | Service | User | Password |
