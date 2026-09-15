@@ -198,6 +198,7 @@ trap rollback EXIT HUP INT TERM
 
 MIGRATION_STARTED=1
 systemctl stop blackgate.service
+rm -f /tmp/hydra_unix_sock
 
 # Cold backup and copy: source database remains in place for rollback.
 tar czf "$DATABASE_BACKUP" -C "$DATABASE_SOURCE" .
