@@ -74,10 +74,11 @@ Migration performs these operations:
 3. Stages release beneath `/opt/blackgate/releases/VERSION` before downtime.
 4. Stops `blackgate.service`.
 5. Creates cold Khepri backup and copies data into `/var/lib/blackgate/khepri`.
-6. Installs updater helper, sudo policy, and update verification public key.
-7. Creates `/opt/blackgate/current` and standardized systemd unit.
-8. Starts service and waits for active state.
-9. Restores previous service unit automatically if migration fails after stop.
+6. Removes legacy-user preview files before starting dedicated service user.
+7. Installs updater helper, sudo policy, and update verification public key.
+8. Creates `/opt/blackgate/current` and standardized systemd unit.
+9. Starts service and waits for active state.
+10. Restores previous service unit automatically if migration fails after stop.
 
 Source checkout and source database remain untouched for manual recovery.
 

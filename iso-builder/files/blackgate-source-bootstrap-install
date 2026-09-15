@@ -199,6 +199,9 @@ trap rollback EXIT HUP INT TERM
 MIGRATION_STARTED=1
 systemctl stop blackgate.service
 rm -f /tmp/hydra_unix_sock
+# Preview files created by the legacy service user cannot be atomically replaced
+# by the dedicated blackgate user because /tmp has sticky-bit protection.
+find /tmp -maxdepth 1 -type f -name 'blackgate_preview_*.jpg' -delete
 
 # Cold backup and copy: source database remains in place for rollback.
 tar czf "$DATABASE_BACKUP" -C "$DATABASE_SOURCE" .
