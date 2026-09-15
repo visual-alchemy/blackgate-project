@@ -2238,13 +2238,37 @@ static guint32 read_ue(BitReader *br) // Exp-Golomb unsigned
     return (1 << leading_zeros) - 1 + read_bits(br, leading_zeros);
 }
 
+// Remove emulation-prevention bytes from an H.264 RBSP. The encoder inserts a
+// 0x03 byte after every 00 00 pair to prevent an accidental start code
+// (00 00 01) inside the payload. Per H.264 spec 7.3.2.1, these must be
+// stripped before parsing or bit-level fields deep in the SPS (VUI timing_info)
+// read misaligned. Returns the cleaned size.
+static gsize remove_emulation_prevention(const guint8 *in, gsize in_size, guint8 *out, gsize out_cap)
+{
+    gsize out_size = 0;
+    gint zero_count = 0;
+    for (gsize i = 0; i < in_size; i++) {
+        if (zero_count >= 2 && in[i] == 0x03) {
+            zero_count = 0; // skip the EPB (0x03 is not a zero byte)
+            continue;
+        }
+        if (out_size < out_cap) out[out_size++] = in[i];
+        if (in[i] == 0x00) zero_count++;
+        else zero_count = 0;
+    }
+    return out_size;
+}
+
 // Parse H.264 SPS NAL unit to get resolution and framerate
 static void parse_h264_sps(const guint8 *data, gsize size)
 {
     if (size < 5) return;
 
-    // Skip NAL header (1 byte)
-    BitReader br = {data + 1, size - 1, 0, 0};
+    // Strip emulation-prevention bytes from the RBSP (data[0] is the NAL header)
+    guint8 rbsp[256];
+    gsize rbsp_size = remove_emulation_prevention(data + 1, size - 1, rbsp, sizeof(rbsp));
+
+    BitReader br = {rbsp, rbsp_size, 0, 0};
 
     guint8 profile_idc = read_bits(&br, 8);
     read_bits(&br, 8); // constraint_set flags + reserved
@@ -2313,20 +2337,53 @@ static void parse_h264_sps(const guint8 *data, gsize size)
         height -= (crop_top + crop_bottom) * 2 * (frame_mbs_only_flag ? 1 : 2);
     }
 
-    // Infer framerate from resolution and interlace mode (common broadcast standards)
-    // Note: VUI timing_info parsing is unreliable due to H.264 emulation prevention bytes
-    // Default to 25fps (PAL standard, common for Indonesian/European content)
+    // Parse framerate from VUI timing_info when present (read from source, not inferred).
+    // Fallback to 25fps only when the SPS carries no VUI timing info.
     gint fps_num = 25, fps_den = 1;
-    gboolean fps_inferred = TRUE; // All H.264 framerates are inferred (VUI unreliable)
+    gboolean fps_inferred = TRUE;
 
-    if (interlaced) {
-        // Interlaced content: typically 25i (PAL) or 30i (NTSC)
-        fps_num = 25;
-        fps_den = 1;
-    } else {
-        // Progressive content: 25fps is a reasonable default for broadcast
-        fps_num = 25;
-        fps_den = 1;
+    if (read_bits(&br, 1)) { // vui_parameters_present_flag
+        if (read_bits(&br, 1)) { // aspect_ratio_info_present_flag
+            guint32 aspect_ratio_idc = read_bits(&br, 8);
+            if (aspect_ratio_idc == 255) { // extended SAR
+                read_bits(&br, 16); // sar_width
+                read_bits(&br, 16); // sar_height
+            }
+        }
+        if (read_bits(&br, 1)) { // overscan_info_present_flag
+            read_bits(&br, 1);   // overscan_appropriate_flag
+        }
+        if (read_bits(&br, 1)) { // video_signal_type_present_flag
+            read_bits(&br, 3);   // video_format
+            read_bits(&br, 1);   // video_full_range_flag
+            if (read_bits(&br, 1)) { // colour_description_present_flag
+                read_bits(&br, 8);   // colour_primaries
+                read_bits(&br, 8);   // transfer_characteristics
+                read_bits(&br, 8);   // matrix_coefficients
+            }
+        }
+        if (read_bits(&br, 1)) { // chroma_loc_info_present_flag
+            read_ue(&br);        // chroma_sample_loc_type_top_field
+            read_ue(&br);        // chroma_sample_loc_type_bottom_field
+        }
+        if (read_bits(&br, 1)) { // timing_info_present_flag
+            guint32 num_units_in_tick = read_u32(&br);
+            guint32 time_scale = read_u32(&br);
+            read_bits(&br, 1);   // fixed_frame_rate_flag
+
+            if (num_units_in_tick > 0 && time_scale > 0) {
+                // Frame rate = time_scale / (2 * num_units_in_tick), reduced to lowest terms.
+                guint32 a = time_scale;
+                guint32 b = 2 * num_units_in_tick;
+                guint32 g = a, t = b;
+                while (t) { guint32 r = g % t; g = t; t = r; }
+                if (g > 0) {
+                    fps_num = (gint)(a / g);
+                    fps_den = (gint)(b / g);
+                    fps_inferred = FALSE; // read from source VUI
+                }
+            }
+        }
     }
 
     pthread_mutex_lock(&video_info.mutex);
@@ -2337,8 +2394,9 @@ static void parse_h264_sps(const guint8 *data, gsize size)
     video_info.fps_den = fps_den;
     video_info.fps_inferred = fps_inferred;
     video_info.info_valid = TRUE;
-    g_print("MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: ~%d (inferred)\n", width, height,
-            interlaced ? "yes" : "no", fps_num);
+    g_print("MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: %d/%d (%s)\n", width, height,
+            interlaced ? "yes" : "no", fps_num, fps_den,
+            fps_inferred ? "inferred" : "from VUI");
     pthread_mutex_unlock(&video_info.mutex);
 }
 
