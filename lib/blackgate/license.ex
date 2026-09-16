@@ -1,394 +1,373 @@
 defmodule Blackgate.License do
-  @moduledoc """
-  License verification module for Blackgate.
-
-  Validates license keys against a remote license server over HTTPS.
-  Supports trial mode (30 days, 2 routes) for unlicensed installations.
-  """
-
+  @moduledoc "Local entitlement deadlines, durable offline grace, and remote validation."
   use GenServer
   require Logger
+  @table :blackgate_license
+  @path ["license", "enforcement_v1"]
+  @heartbeat :timer.hours(6)
 
-  @table_name :blackgate_license
-  @trial_max_routes 2
-  @trial_days 30
-  # Re-verify license every 6 hours to keep Supabase alive and catch revocations
-  @heartbeat_interval :timer.hours(6)
+  def start_link(args), do: GenServer.start_link(__MODULE__, args, name: __MODULE__)
+  def activate(key), do: GenServer.call(__MODULE__, {:activate, key}, 30_000)
+  def deactivate, do: GenServer.call(__MODULE__, :deactivate)
+  def valid?, do: not get_license().expired
 
-  # ─── Public API ──────────────────────────────────────────────────────────
-
-  def start_link(args) do
-    GenServer.start_link(__MODULE__, args, name: __MODULE__)
+  def utc_now do
+    clock = Application.get_env(:blackgate, :license_clock, DateTime)
+    clock.utc_now() |> DateTime.to_unix()
   end
 
-  @doc "Check if the current license allows operation"
-  @spec valid?() :: boolean()
-  def valid? do
-    case get_license() do
-      %{status: :licensed, expired: false} -> true
-      %{status: :trial, expired: false} -> true
-      _ -> false
+  defp monotonic, do: System.monotonic_time(:second)
+
+  def get_license do
+    case :ets.lookup(@table, :license) do
+      [{:license, cache, wall, mono}] ->
+        evaluate(cache, max(utc_now(), wall + max(monotonic() - mono, 0)))
+
+      _ ->
+        blocked("License state unavailable")
     end
+  rescue
+    ArgumentError -> blocked("License state unavailable")
   end
 
-  @doc "Check if adding a new route is allowed"
-  @spec can_start_route?() :: {:ok, :allowed} | {:error, String.t()}
-  def can_start_route? do
+  @doc false
+  def evaluate(cache, now) do
+    expiry = Map.get(cache, :deadline)
+    offline = Map.get(cache, :offline_deadline)
+    status = Map.get(cache, :status, :unlicensed)
+
+    reason =
+      cond do
+        status not in [:trial, :licensed] ->
+          Map.get(cache, :reason, "No valid license")
+
+        is_integer(expiry) and now >= expiry ->
+          "License expired. Please activate a valid license key."
+
+        is_integer(offline) and now >= offline ->
+          "Offline grace expired. Connect to license server."
+
+        true ->
+          nil
+      end
+
+    %{
+      status: status,
+      expired: reason != nil,
+      reason: reason,
+      client: Map.get(cache, :client, "Unlicensed"),
+      plan: Map.get(cache, :plan, "none"),
+      max_routes: Map.get(cache, :max_routes, 0),
+      issued_at: Map.get(cache, :issued_at),
+      expires_at: iso(expiry),
+      offline_deadline: iso(offline),
+      last_verified_at: iso(Map.get(cache, :verified_at)),
+      days_remaining:
+        if(is_integer(expiry), do: max(div(expiry - now + 86_399, 86_400), 0), else: 9999),
+      verification: Map.get(cache, :verification, "none")
+    }
+  end
+
+  defp blocked(reason), do: %{status: :unlicensed, expired: true, reason: reason, max_routes: 0}
+  defp iso(nil), do: nil
+  defp iso(seconds), do: seconds |> DateTime.from_unix!() |> DateTime.to_iso8601()
+
+  def can_start_route?(id \\ nil) do
     license = get_license()
+    active = Blackgate.running_routes()
 
     cond do
-      license.status == :revoked ->
-        {:error, "License has been revoked. Please contact support."}
-
       license.expired ->
-        {:error, "License expired. Please activate a valid license key."}
+        {:error, license.reason}
 
-      license.status == :trial ->
-        active_routes = count_active_routes()
+      Enum.any?(active, &(&1.id == id)) ->
+        {:ok, :allowed}
 
-        if active_routes >= @trial_max_routes do
-          {:error,
-           "Trial limit reached (#{@trial_max_routes} routes). Activate a license for more routes."}
-        else
-          {:ok, :allowed}
-        end
-
-      license.status == :licensed ->
-        active_routes = count_active_routes()
-
-        if active_routes >= license.max_routes do
-          {:error,
-           "Route limit reached (#{license.max_routes}). Upgrade your license for more routes."}
-        else
-          {:ok, :allowed}
-        end
+      length(active) >= license.max_routes ->
+        {:error, "Route limit reached (#{license.max_routes})."}
 
       true ->
-        {:error, "No valid license. Please activate a license key."}
+        {:ok, :allowed}
     end
   end
 
-  @doc "Check if persisting a new route is allowed"
-  @spec can_create_route?() ::
-          {:ok, :allowed} | {:error, {:route_creation_not_allowed, String.t()}}
   def can_create_route? do
     license = get_license()
 
-    cond do
-      license.status == :revoked ->
-        {:error,
-         {:route_creation_not_allowed, "License has been revoked. Please contact support."}}
-
-      license.expired ->
-        {:error,
-         {:route_creation_not_allowed, "License expired. Please activate a valid license key."}}
-
-      license.status == :trial ->
-        if count_saved_routes() >= @trial_max_routes do
-          {:error,
-           {:route_creation_not_allowed,
-            "Trial route limit reached (#{@trial_max_routes}). Activate a license for more routes."}}
-        else
-          {:ok, :allowed}
-        end
-
-      license.status == :licensed ->
+    with false <- license.expired, {:ok, routes} <- Blackgate.Db.get_all_routes() do
+      if license.status == :trial and length(routes) >= 2 do
+        creation_error("Trial route limit reached (2). Activate a license for more routes.")
+      else
         {:ok, :allowed}
-
-      true ->
-        {:error,
-         {:route_creation_not_allowed, "No valid license. Please activate a license key."}}
+      end
+    else
+      true -> creation_error(license.reason)
+      _ -> creation_error("Cannot verify saved route count")
     end
   end
 
-  @doc "Get the current license information"
-  @spec get_license() :: map()
-  def get_license do
-    case :ets.lookup(@table_name, :license) do
-      [{:license, data}] -> data
-      [] -> %{status: :unlicensed, expired: true}
-    end
-  end
-
-  @doc "Activate a license key"
-  @spec activate(String.t()) :: {:ok, map()} | {:error, String.t()}
-  def activate(license_key) do
-    GenServer.call(__MODULE__, {:activate, license_key})
-  end
-
-  @doc "Deactivate / remove the current license"
-  @spec deactivate() :: :ok
-  def deactivate do
-    GenServer.call(__MODULE__, :deactivate)
-  end
-
-  # ─── GenServer Callbacks ─────────────────────────────────────────────────
+  defp creation_error(reason), do: {:error, {:route_creation_not_allowed, reason}}
 
   @impl true
-  def init(_args) do
-    :ets.new(@table_name, [:named_table, :public, :set, read_concurrency: true])
+  def init(_) do
+    :ets.new(@table, [:named_table, :protected, :set, read_concurrency: true])
 
-    # Check for existing license data in Khepri
+    cache =
+      case :khepri.get(@path) do
+        {:ok, %{status: _} = stored} -> stored
+        {:error, {:khepri, :node_not_found, _}} -> migrate(utc_now())
+        _ -> raise "Cannot load license enforcement state"
+      end
+
+    state = publish(%{cache: cache, generation: make_ref(), checking: false})
+    send(self(), :heartbeat)
+    Process.send_after(self(), :checkpoint, 60_000)
+    {:ok, state}
+  end
+
+  defp migrate(now) do
     case :khepri.get(["license", "data"]) do
       {:ok, payload} when is_map(payload) ->
-        Logger.info("License: Found cached license data for #{payload["client_name"]}, loading...")
-        
-        # Load immediately to ensure fast boot and offline capability
-        license_data = build_license_data(payload)
-        :ets.insert(@table_name, {:license, license_data})
+        case from_payload(payload, now) do
+          {:ok, cache} ->
+            Map.merge(cache, %{
+              offline_deadline: now + 86_400,
+              verified_at: nil,
+              verification: "legacy_migration",
+              ever_licensed: true
+            })
 
-        # Spawn an async task to re-verify against the server quietly
-        Task.start(fn -> re_verify_license_async(payload["license_key"]) end)
+          _ ->
+            %{
+              status: :revoked,
+              ever_licensed: true,
+              reason: "Invalid cached license; activate again"
+            }
+        end
 
-        # Schedule periodic heartbeat
-        schedule_heartbeat()
+      {:error, {:khepri, :node_not_found, _}} ->
+        first =
+          case :khepri.get(["license", "first_boot"]) do
+            {:ok, value} ->
+              parse_timestamp(value)
+
+            {:error, {:khepri, :node_not_found, _}} ->
+              :ok = :khepri.put(["license", "first_boot"], iso(now))
+              {:ok, now}
+
+            _ ->
+              :error
+          end
+
+        case first do
+          {:ok, timestamp} ->
+            %{
+              status: :trial,
+              client: "Trial",
+              plan: "trial",
+              max_routes: 2,
+              deadline: timestamp + 30 * 86_400,
+              issued_at: iso(timestamp),
+              ever_licensed: false
+            }
+
+          _ ->
+            %{status: :revoked, reason: "Invalid trial state"}
+        end
 
       _ ->
-        Logger.info("License: No license found, checking trial status...")
-        init_trial()
+        raise "Cannot load legacy license state"
     end
-
-    {:ok, %{}}
   end
 
   @impl true
-  def handle_call({:activate, license_key}, _from, state) do
-    case verify_license_with_server(license_key) do
+  def handle_call({:activate, key}, _from, state) do
+    case verify(key) do
       {:ok, payload} ->
-        # Store full payload in Khepri for offline persistence
-        :khepri.put(["license", "data"], payload)
+        case from_payload(Map.put(payload, "license_key", key), effective_now(state)) do
+          {:ok, cache} ->
+            state = publish(%{state | cache: cache, generation: make_ref(), checking: false})
+            notify_enforcer()
+            {:reply, {:ok, get_license()}, state}
 
-        license_data = build_license_data(payload)
-        :ets.insert(@table_name, {:license, license_data})
+          _ ->
+            {:reply, {:error, "Invalid license response"}, state}
+        end
 
-        # Start heartbeat on fresh activation
-        schedule_heartbeat()
-
-        Logger.info("License: Activated for #{payload["client_name"]} (#{payload["plan_tier"]})")
-        {:reply, {:ok, license_data}, state}
-
-      {:error, _class, reason} ->
+      {:error, _, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
 
-  @impl true
   def handle_call(:deactivate, _from, state) do
+    cache =
+      if Map.get(state.cache, :ever_licensed, false) do
+        %{
+          status: :unlicensed,
+          ever_licensed: true,
+          reason: "License deactivated. Activate a valid license."
+        }
+      else
+        state.cache
+      end
+
+    state = publish(%{state | cache: cache, generation: make_ref(), checking: false})
     :khepri.delete(["license", "data"])
-    init_trial()
-    Logger.info("License: Deactivated, reverting to trial mode")
+    notify_enforcer()
     {:reply, :ok, state}
   end
 
   @impl true
   def handle_info(:heartbeat, state) do
-    case :khepri.get(["license", "data"]) do
-      {:ok, payload} when is_map(payload) ->
-        Logger.info("License: Running periodic heartbeat verification...")
-        re_verify_license_async(payload["license_key"])
+    Process.send_after(self(), :heartbeat, @heartbeat)
+    {:noreply, begin_verification(state)}
+  end
 
-      _ ->
-        Logger.debug("License: Heartbeat skipped — no active license")
-    end
+  def handle_info({:verified, generation, result}, %{generation: generation} = state) do
+    state = %{state | checking: false}
 
-    schedule_heartbeat()
+    state =
+      case result do
+        {:ok, payload} ->
+          case from_payload(
+                 Map.put(payload, "license_key", state.cache.key),
+                 effective_now(state)
+               ) do
+            {:ok, cache} -> publish(%{state | cache: cache})
+            _ -> revoke(state, "Invalid license response")
+          end
+
+        {:error, :revoked, reason} ->
+          revoke(state, reason)
+
+        {:error, :unreachable, reason} ->
+          Logger.warning(
+            "License validation unavailable: #{reason}; keeping original offline deadline"
+          )
+
+          state
+      end
+
+    notify_enforcer()
     {:noreply, state}
   end
 
-  # ─── Private Functions ───────────────────────────────────────────────────
+  def handle_info({:verified, _, _}, state), do: {:noreply, state}
 
-  defp schedule_heartbeat do
-    Process.send_after(self(), :heartbeat, @heartbeat_interval)
+  def handle_info(:checkpoint, state) do
+    Process.send_after(self(), :checkpoint, 60_000)
+    {:noreply, publish(state)}
   end
 
-  defp verify_license_with_server(license_key) do
-    server_url = Application.get_env(:blackgate, :license_server_url, "http://localhost:3000")
+  defp begin_verification(%{checking: true} = state), do: state
 
-    headers = [
-      {"content-type", "application/json"}
-    ]
+  defp begin_verification(state) do
+    if is_binary(Map.get(state.cache, :key)) do
+      parent = self()
+      key = state.cache.key
+      generation = state.generation
+      Task.start(fn -> send(parent, {:verified, generation, verify(key)}) end)
+      %{state | checking: true}
+    else
+      state
+    end
+  end
 
-    body = %{
-      license_key: license_key,
-      machine_id: Blackgate.MachineId.get()
-    }
+  defp revoke(state, reason) do
+    publish(%{state | cache: Map.merge(state.cache, %{status: :revoked, reason: reason})})
+  end
+
+  defp effective_now(state) do
+    floor = Map.get(state.cache, :last_seen_at, 0)
+    elapsed = max(monotonic() - Map.get(state, :mono, monotonic()), 0)
+    max(utc_now(), floor + elapsed)
+  end
+
+  defp publish(state) do
+    previous_floor =
+      case :ets.lookup(@table, :license) do
+        [{:license, _, wall, mono}] -> wall + max(monotonic() - mono, 0)
+        _ -> 0
+      end
+
+    now = max(effective_now(state), previous_floor)
+    cache = Map.put(state.cache, :last_seen_at, now)
+    :ok = :khepri.put(@path, cache)
+    :ets.insert(@table, {:license, cache, now, monotonic()})
+    %{state | cache: cache} |> Map.put(:mono, monotonic())
+  end
+
+  defp notify_enforcer do
+    if pid = Process.whereis(Blackgate.LicenseEnforcer), do: send(pid, :enforce)
+  end
+
+  defp verify(key) do
+    url = Application.get_env(:blackgate, :license_server_url, "http://localhost:3000")
 
     try do
-      response = Req.post!("#{server_url}/api/validate", headers: headers, json: body)
-      
-      # Vercel NextJS might sometimes return text/plain for error responses
-      parsed_body = if is_binary(response.body) do
-        case Jason.decode(response.body) do
-          {:ok, decoded} -> decoded
-          _ -> %{}
-        end
-      else
-        response.body || %{}
-      end
-      
+      response =
+        Req.post!("#{url}/api/validate",
+          json: %{license_key: key, machine_id: Blackgate.MachineId.get()},
+          receive_timeout: 10_000,
+          retry: false
+        )
+
+      body = if is_binary(response.body), do: Jason.decode!(response.body), else: response.body
+
       cond do
-        response.status == 200 && parsed_body["valid"] == true ->
-          {:ok, parsed_body["license"]}
-          
+        response.status == 200 and body["valid"] == true and is_map(body["license"]) ->
+          {:ok, body["license"]}
+
         response.status in [401, 403, 404] ->
-          error_msg = parsed_body["error"] || "Verification failed"
-          {:error, :revoked, error_msg}
-          
+          {:error, :revoked, body["error"] || "License rejected"}
+
         true ->
-          {:error, :unreachable, "Unexpected response from license server"}
+          {:error, :unreachable, "Unexpected server response"}
       end
     rescue
-      e ->
-        Logger.error("Failed to connect to license server: #{inspect(e)}")
-        {:error, :unreachable, "Could not reach license server for verification. Are you online?"}
+      _ -> {:error, :unreachable, "Cannot reach license server"}
     end
   end
 
-  defp re_verify_license_async(license_key) do
-    case verify_license_with_server(license_key) do
-      {:ok, payload} ->
-        Logger.debug("License: Background verification successful")
-        # Update cache in case expiration dates or tiers changed
-        :khepri.put(["license", "data"], payload)
-        license_data = build_license_data(payload)
-        :ets.insert(@table_name, {:license, license_data})
-        reset_heartbeat_failures()
-
-      {:error, :revoked, reason} ->
-        Logger.warning("License: Server rejected license (#{reason}). Invalidating.")
-        invalidate_license(reason)
-
-      {:error, :unreachable, reason} ->
-        failures = register_heartbeat_failure()
-
-        if failures >= max_heartbeat_failures() do
-          Logger.warning(
-            "License: Unreachable for #{failures} consecutive heartbeats (~#{offline_grace_days()} days). Invalidating."
-          )
-
-          invalidate_license(reason)
-        else
-          Logger.warning(
-            "License: Background verification failed (#{reason}). " <>
-              "Keeping cached license active (failure #{failures}/#{max_heartbeat_failures()})."
-          )
-        end
-    end
-  end
-
-  defp invalidate_license(reason) do
-    :khepri.delete(["license", "data"])
-    reset_heartbeat_failures()
-    :ets.insert(@table_name, {:license, %{status: :revoked, expired: true, reason: reason}})
-  end
-
-  defp register_heartbeat_failure do
-    count =
-      case :ets.lookup(@table_name, :license_failures) do
-        [{:license_failures, n}] -> n + 1
-        [] -> 1
-      end
-
-    :ets.insert(@table_name, {:license_failures, count})
-    count
-  end
-
-  defp reset_heartbeat_failures do
-    :ets.delete(@table_name, :license_failures)
-  end
-
-  defp offline_grace_days do
-    Application.get_env(:blackgate, :offline_grace_days, 30)
-  end
-
-  defp max_heartbeat_failures do
-    max(div(offline_grace_days() * 24 * 60 * 60 * 1000, @heartbeat_interval), 1)
-  end
-
-  defp build_license_data(payload) do
-    # Handle potentially null expires_at
-    expires_at = if payload["expires_at"], do: Date.from_iso8601!(payload["expires_at"] |> String.slice(0, 10)), else: nil
-    today = Date.utc_today()
-    
-    # Calculate days remaining if expiration exists
-    {days_remaining, is_expired} = if expires_at do
-      remaining = Date.diff(expires_at, today)
-      {max(remaining, 0), remaining < 0}
+  defp from_payload(payload, now) do
+    with max_routes when is_integer(max_routes) and max_routes > 0 <- payload["max_routes"],
+         {:ok, deadline} <- parse_expiry(payload["expires_at"]),
+         key when is_binary(key) and byte_size(key) > 0 <- payload["license_key"] do
+      {:ok,
+       %{
+         status: :licensed,
+         client: payload["client_name"],
+         plan: payload["plan_tier"],
+         max_routes: max_routes,
+         deadline: deadline,
+         issued_at: payload["created_at"],
+         key: key,
+         ever_licensed: true,
+         verified_at: now,
+         verification: "server_validated",
+         offline_deadline: now + Application.get_env(:blackgate, :offline_grace_days, 30) * 86_400
+       }}
     else
-      # Lifetime license
-      {9999, false}
-    end
-
-    %{
-      status: :licensed,
-      client: payload["client_name"],
-      plan: payload["plan_tier"],
-      max_routes: payload["max_routes"],
-      issued_at: payload["created_at"] |> String.slice(0, 10),
-      expires_at: if(expires_at, do: Date.to_iso8601(expires_at), else: nil),
-      days_remaining: days_remaining,
-      expired: is_expired
-    }
-  end
-
-  defp init_trial do
-    # Get or set the first boot timestamp
-    first_boot =
-      case :khepri.get(["license", "first_boot"]) do
-        {:ok, timestamp} when is_binary(timestamp) ->
-          timestamp
-
-        _ ->
-          timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-          :khepri.put(["license", "first_boot"], timestamp)
-          timestamp
-      end
-
-    # Calculate trial remaining
-    {:ok, boot_dt, _} = DateTime.from_iso8601(first_boot)
-    boot_date = DateTime.to_date(boot_dt)
-    today = Date.utc_today()
-    days_elapsed = Date.diff(today, boot_date)
-    days_remaining = max(@trial_days - days_elapsed, 0)
-    is_expired = days_remaining <= 0
-
-    trial_data = %{
-      status: :trial,
-      client: "Trial",
-      plan: "trial",
-      max_routes: @trial_max_routes,
-      issued_at: Date.to_iso8601(boot_date),
-      expires_at: Date.to_iso8601(Date.add(boot_date, @trial_days)),
-      days_remaining: days_remaining,
-      expired: is_expired
-    }
-
-    :ets.insert(@table_name, {:license, trial_data})
-
-    if is_expired do
-      Logger.warning("License: Trial period has expired")
-    else
-      Logger.info("License: Trial mode — #{days_remaining} days remaining (#{@trial_max_routes} routes max)")
+      _ -> :error
     end
   end
 
-  defp count_active_routes do
-    case Blackgate.Db.get_all_routes() do
-      {:ok, routes} ->
-        routes
-        |> Enum.count(fn route ->
-          route["status"] == "started" || route["status"] == "running"
-        end)
-
-      _ ->
-        0
+  defp parse_expiry(nil), do: {:ok, nil}
+  # Preserve legacy date-only validity through the end of that UTC day.
+  defp parse_expiry(<<_::binary-size(10)>> = date) do
+    with {:ok, d} <- Date.from_iso8601(date) do
+      {:ok, DateTime.new!(Date.add(d, 1), ~T[00:00:00], "Etc/UTC") |> DateTime.to_unix()}
     end
   end
 
-  defp count_saved_routes do
-    case Blackgate.Db.get_all_routes() do
-      {:ok, routes} -> length(routes)
-      _ -> 0
+  defp parse_expiry(value), do: parse_timestamp(value)
+
+  defp parse_timestamp(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _} -> {:ok, DateTime.to_unix(dt)}
+      _ -> :error
     end
   end
+
+  defp parse_timestamp(_), do: :error
 end

@@ -39,6 +39,7 @@ defmodule Blackgate.RouteHandler do
 
   @impl true
   def init(args) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     Process.flag(:trap_exit, true)
     Logger.info("RouteHandler: init route #{args.id}")
 
@@ -83,6 +84,7 @@ defmodule Blackgate.RouteHandler do
 
   @impl true
   def handle_event(:internal, :start, _state, data) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     # For RTMP/HTTP/HLS sources, spawn ffmpeg sidecar to convert to SRT
     active_route = active_route_for_pipeline(data)
     {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(active_route)
@@ -521,6 +523,7 @@ defmodule Blackgate.RouteHandler do
 
   # Reconnect timer fired — attempt to restart the pipeline
   def handle_event({:timeout, :reconnect}, :retry, :reconnecting, data) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     elapsed = System.monotonic_time(:millisecond) - data.reconnect_started_at
 
     if elapsed >= @reconnect_timeout_ms do
@@ -1470,6 +1473,7 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp start_native_pipeline(route) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     binary_path = get_binary_path()
     cmd = "#{binary_path} #{route["id"]}"
 

@@ -2,17 +2,12 @@ defmodule BlackgateTest do
   use ExUnit.Case, async: false
 
   describe "start_route/1" do
-    test "returns {:ok, pid} when route process is already running" do
-      id = "test_route_already_started"
-      :ok = :syn.register(:routes, id, self(), nil)
-
-      try do
-        assert {:ok, pid} = Blackgate.start_route(id)
-        assert is_pid(pid)
-        assert Process.alive?(pid)
-      after
-        :syn.unregister(:routes, id)
-      end
+    test "rejects start and restart when central admission denies operation" do
+      :meck.new(Blackgate.License, [:passthrough])
+      :meck.expect(Blackgate.License, :can_start_route?, fn _ -> {:error, "License expired"} end)
+      on_exit(fn -> :meck.unload() end)
+      assert {:error, "License expired"} = Blackgate.start_route("not-running")
+      assert {:error, "License expired"} = Blackgate.restart_route("not-running")
     end
 
     test "detects route supervisors whose transient handler has exited normally" do

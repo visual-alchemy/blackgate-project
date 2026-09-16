@@ -11,11 +11,13 @@ import {
     DeleteOutlined,
 } from '@ant-design/icons';
 import { licenseApi } from '../utils/api';
+import { getUser } from '../utils/auth';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
 const License = () => {
+    const isAdmin = getUser()?.role === 'admin';
     const [license, setLicense] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activating, setActivating] = useState(false);
@@ -36,6 +38,8 @@ const License = () => {
 
     useEffect(() => {
         fetchLicense();
+        const timer = setInterval(fetchLicense, 5000);
+        return () => clearInterval(timer);
     }, []);
 
     const handleActivate = async () => {
@@ -81,7 +85,7 @@ const License = () => {
     const handleDeactivate = () => {
         modal.confirm({
             title: 'Deactivate License',
-            content: 'Are you sure you want to deactivate your license? This will revert to trial mode.',
+            content: 'Deactivating this license will stop all routes. Saved configurations remain. A new trial will not be granted.',
             okText: 'Deactivate',
             okType: 'danger',
             cancelText: 'Cancel',
@@ -101,7 +105,7 @@ const License = () => {
         if (!license) return null;
 
         if (license.expired) {
-            return <Tag icon={<CloseCircleOutlined />} color="error">Expired</Tag>;
+            return <Tag icon={<CloseCircleOutlined />} color="error">Operation blocked</Tag>;
         }
 
         if (license.status === 'licensed') {
@@ -146,7 +150,7 @@ const License = () => {
                             <Title level={4} style={{ margin: 0 }}>License Status</Title>
                             {getStatusTag()}
                         </Space>
-                        {license?.status === 'licensed' && (
+                        {isAdmin && license?.status === 'licensed' && (
                             <Button
                                 danger
                                 icon={<DeleteOutlined />}
@@ -160,12 +164,8 @@ const License = () => {
 
                     {license?.expired && (
                         <Alert
-                            message={license.status === 'trial' ? 'Trial Period Expired' : 'License Expired'}
-                            description={
-                                license.status === 'trial'
-                                    ? 'Your 30-day trial has ended. Please activate a license key to continue using Blackgate.'
-                                    : 'Your license has expired. Please renew your license to start new routes.'
-                            }
+                            message="Route operation blocked"
+                            description={`${license.reason || 'A valid license is required.'} Running routes are stopped; saved configurations remain.`}
                             type="error"
                             showIcon
                         />
@@ -219,12 +219,18 @@ const License = () => {
                         <Col xs={12} sm={8} md={6}>
                             <Statistic title="Expires" value={license?.expires_at || '—'} />
                         </Col>
+                        <Col xs={12} sm={8} md={6}>
+                            <Statistic title="Active routes" value={license?.active_routes ?? 0} />
+                        </Col>
+                        <Col xs={12} sm={8} md={6}>
+                            <Statistic title="Offline grace deadline (UTC)" value={license?.offline_deadline || '—'} />
+                        </Col>
                     </Row>
                 </Space>
             </Card>
 
             {/* Activate License Card */}
-            <Card
+            {isAdmin && <Card
                 title={
                     <Space>
                         <KeyOutlined />
@@ -257,7 +263,7 @@ const License = () => {
                         Activate License
                     </Button>
                 </Space>
-            </Card>
+            </Card>}
         </Space>
     );
 };

@@ -32,10 +32,12 @@ import { routesApi, destinationsApi } from '../../utils/api';
 import { DEVICE_TO_SDI } from '../../utils/sdiPorts';
 import RouteStats from '../../components/RouteStats';
 import DestinationStats from '../../components/DestinationStats';
+import { useLicense } from '../../hooks/useLicense';
 
 const { Title, Text } = Typography;
 
 const RouteItem = () => {
+  const license = useLicense();
   const navigate = useNavigate();
   const { id } = useParams();
   const [routeData, setRouteData] = useState(null);
@@ -504,6 +506,7 @@ const RouteItem = () => {
                 type={statusDetails.buttonType}
                 icon={statusDetails.buttonIcon}
                 onClick={handleRouteStatusToggle}
+                disabled={!isRouteStarted && (!license || license.expired)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

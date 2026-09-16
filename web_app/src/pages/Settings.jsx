@@ -341,7 +341,7 @@ const Settings = () => {
       content: (
         <>
           <p>Are you sure you want to restore from this backup?</p>
-          <p>This will delete all existing data and replace it with the data from the backup file.</p>
+          <p>This stops running routes and replaces saved route configuration. Network aliases from the backup are restored. Local users, license, and trial history are preserved.</p>
           <p>Selected file: {file.name}</p>
         </>
       ),
@@ -421,7 +421,7 @@ const Settings = () => {
     return (
       <div>
         <Card title="System Backup" style={{ marginBottom: '16px' }}>
-          <p>Create a backup of your system configuration and data.</p>
+          <p>Back up routes, destinations, and network aliases.</p>
           <Space direction="vertical" style={{ width: '100%' }}>
             <Button
               type="primary"
@@ -432,7 +432,7 @@ const Settings = () => {
               Download Backup
             </Button>
             <p style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.45)' }}>
-              This will create a complete backup of your system configuration.
+              License data, trial history, and user accounts are excluded.
             </p>
           </Space>
         </Card>
@@ -452,11 +452,12 @@ const Settings = () => {
               icon={<UploadOutlined />}
               onClick={() => fileInputRef.current.click()}
               loading={isRestoring}
+              disabled={!isAdmin}
             >
               Select Backup File
             </Button>
             <p style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.45)' }}>
-              Warning: Restoring from backup will overwrite your current configuration.
+              Admin role required. Restore stops running routes and replaces saved route configuration.
             </p>
           </Space>
         </Card>

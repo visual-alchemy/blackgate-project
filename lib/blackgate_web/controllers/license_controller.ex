@@ -5,7 +5,7 @@ defmodule BlackgateWeb.LicenseController do
 
   @doc "Get current license status"
   def show(conn, _params) do
-    license = License.get_license()
+    license = License.get_license() |> Map.put(:active_routes, length(Blackgate.running_routes()))
 
     conn
     |> put_status(:ok)

@@ -14,7 +14,9 @@ defmodule Blackgate.Application do
 
     khepri_data_dir = System.get_env("DATABASE_DATA_DIR", "#{File.cwd!()}/khepri##{node()}")
     Logger.notice("Database directory: #{khepri_data_dir}")
-    Logger.notice("Starting database: #{inspect(:khepri.start(khepri_data_dir))}")
+    # Startup must happen even when notice logging is disabled (e.g. tests).
+    {:ok, store} = :khepri.start(khepri_data_dir)
+    Logger.notice("Started database: #{inspect(store)}")
 
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
@@ -50,6 +52,7 @@ defmodule Blackgate.Application do
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},
       {Registry,
        keys: :unique, name: Blackgate.Registry.MsgHandlers, partitions: runtime_schedulers},
+      Blackgate.LicenseEnforcer,
       BlackgateWeb.Telemetry,
       {Phoenix.PubSub, name: Blackgate.PubSub, partitions: runtime_schedulers},
       BlackgateWeb.Endpoint,
