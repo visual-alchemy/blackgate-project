@@ -60,6 +60,7 @@ defmodule Blackgate.License do
       max_routes: Map.get(cache, :max_routes, 0),
       issued_at: Map.get(cache, :issued_at),
       expires_at: iso(expiry),
+      expires_in_seconds: if(is_integer(expiry), do: max(expiry - now, 0), else: nil),
       offline_deadline: iso(offline),
       last_verified_at: iso(Map.get(cache, :verified_at)),
       days_remaining:

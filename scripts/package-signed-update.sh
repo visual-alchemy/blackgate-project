@@ -13,6 +13,10 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 cd "$PROJECT_ROOT"
+[[ "$VERSION" == "$(tr -d '\r\n' < iso-builder/release-version)" ]] || {
+  echo "Package version must match iso-builder/release-version and bundled release notes" >&2
+  exit 65
+}
 make build
 mkdir -p "$OUTPUT_DIR"
 tar czf "$STAGE/blackgate-release.tar.gz" -C _build/prod/rel blackgate

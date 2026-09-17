@@ -888,7 +888,8 @@ const Settings = () => {
             Restart pauses routes briefly. Reboot stops all routes and disconnects this dashboard.
           </p>
         </Card>
-        {isAdmin && <Card title="Software Updates" style={{ marginTop: '16px' }}>
+        <Card title="Software Updates" style={{ marginTop: '16px' }}>
+          {isAdmin && <>
           <input ref={updateFileRef} type="file" accept=".bgupdate" style={{ display: 'none' }} onChange={uploadUpdate} />
           <Space wrap>
             <Button onClick={() => updateFileRef.current?.click()} loading={uploadingUpdate}>Upload Update Package</Button>
@@ -900,7 +901,19 @@ const Settings = () => {
             <Button type="primary" disabled={!selectedUpdate} onClick={() => setSystemAction(`deploy:${selectedUpdate}`)}>Deploy Version</Button>
             <span title="Description: Deploy one of the available software versions. This will restart the unit.">?</span>
           </Space>
-        </Card>}
+          </>}
+          <section aria-label="Installed release changelog" style={{ marginTop: isAdmin ? 24 : 0 }}>
+            <Title level={5}>Changelog — {status?.version || 'Installed release'}</Title>
+            {status?.release_notes?.version === status?.version && status?.release_notes?.changes?.length ? (
+              <>
+                <p>Released {status.release_notes.released_on}</p>
+                <ul style={{ paddingLeft: 20 }}>
+                  {status.release_notes.changes.map((change, index) => <li key={index}>{change}</li>)}
+                </ul>
+              </>
+            ) : <p>{loadingSystemStatus ? 'Loading release notes…' : 'No release notes available for this version.'}</p>}
+          </section>
+        </Card>
       </div>
     );
   };

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, Typography, Space, Input, Button, message, Tag, Statistic, Row, Col, Alert, Divider, Modal } from 'antd';
+import { Card, Typography, Space, Input, Button, message, Tag, Statistic, Row, Col, Alert, Divider, Modal, Tooltip } from 'antd';
 import {
     SafetyCertificateOutlined,
     KeyOutlined,
@@ -15,6 +15,30 @@ import { getUser } from '../utils/auth';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
+
+const formatLicenseTimestamp = (timestamp) => {
+    if (!timestamp) return '—';
+
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return timestamp;
+
+    return `${new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'UTC',
+    }).format(date)} UTC`;
+};
+
+const LicenseTimestamp = ({ value }) => (
+    <Tooltip title={value || '—'}>
+        <span>{formatLicenseTimestamp(value)}</span>
+    </Tooltip>
+);
 
 const License = () => {
     const isAdmin = getUser()?.role === 'admin';
@@ -214,16 +238,28 @@ const License = () => {
                             />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Issued" value={license?.issued_at || '—'} />
+                            <Statistic
+                                title="Issued (UTC)"
+                                value={license?.issued_at || '—'}
+                                formatter={() => <LicenseTimestamp value={license?.issued_at} />}
+                            />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Expires" value={license?.expires_at || '—'} />
+                            <Statistic
+                                title="Expires (UTC)"
+                                value={license?.expires_at || '—'}
+                                formatter={() => <LicenseTimestamp value={license?.expires_at} />}
+                            />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
                             <Statistic title="Active routes" value={license?.active_routes ?? 0} />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Offline grace deadline (UTC)" value={license?.offline_deadline || '—'} />
+                            <Statistic
+                                title="Offline grace deadline (UTC)"
+                                value={license?.offline_deadline || '—'}
+                                formatter={() => <LicenseTimestamp value={license?.offline_deadline} />}
+                            />
                         </Col>
                     </Row>
                 </Space>

@@ -5,6 +5,8 @@ defmodule Blackgate.SystemControl do
   @allowed_actions ["restart-blackgate", "reboot"]
 
   def status do
+    notes = Blackgate.ReleaseNotes.current()
+
     %{
       hostname: command("/bin/hostname", []),
       os: os_name(),
@@ -14,7 +16,8 @@ defmodule Blackgate.SystemControl do
       disk: disk(),
       decklink_nodes: decklink_nodes(),
       blackgate_service: command("/usr/bin/systemctl", ["is-active", "blackgate.service"]),
-      version: release_version(),
+      version: if(notes, do: notes.version, else: release_version()),
+      release_notes: notes,
       update_status: update_status()
     }
   end
