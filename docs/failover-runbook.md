@@ -305,32 +305,15 @@ To keep the database between runs, drop `-v`.
 
 ## Switch Behavior by Route Type
 
-How a source switch executes depends on the route's destinations. This matters
-when interpreting switch timing and what appears on outputs.
+How a source switch executes and what to expect on the outputs.
 
-### Routes WITHOUT SDI destinations — instant in-process switch
+### Instant in-process switch
 
 The pipeline stays up; the input-selector flips its active pad. Downstream SRT
 connections are preserved. If the two feeds come from **different muxers**
 (different PMT/PID layouts), the downstream demuxer/decoder pads may starve —
-this is fine for passthrough SRT outputs (raw TS flows regardless) but see the
-SDI caveat below. Same-layout feeds (same encoder config) switch cleanly.
-
-### Routes WITH SDI destinations — pipeline restart (~3-4s black)
-
-The in-process flip is **disabled** for SDI routes: switching between feeds
-from different muxers permanently freezes the SDI output (the branch's demuxer
-pads starve and never re-link). Instead the switch:
-
-1. Persists `active_source` to the DB
-2. Tears the pipeline down (both SRT sources disconnect)
-3. Respawns after 250ms with the persisted source as the pipeline's primary
-
-Expectation on the SDI monitor: ~3-4s of black (respawn + SRT reconnect +
-latency window + first keyframe), then the new source in its native format
-(auto-detect re-runs; e.g. 1080i50 ⇄ 1080p50 both come out correct). SRT
-passthrough outputs also blip during the restart — SRT listener outputs
-re-arm, callers must reconnect.
+this is fine for passthrough SRT outputs (raw TS flows regardless). Same-layout
+feeds (same encoder config) switch cleanly.
 
 ### Sender-side reconnect expectations (OBS, ffmpeg, encoders)
 
@@ -346,12 +329,11 @@ reconnect delay.
 ### Verifying a switch in logs
 
 ```bash
-journalctl -u blackgate --since "-2min" | grep -E "source switch|Started port|MATCHED"
+journalctl -u blackgate --since "-2min" | grep -E "source switch|Started port"
 ```
 
 - `source switch -> <target>` — RouteHandler accepted the switch
 - `Started port` — pipeline respawned
-- `SDI AUTO-DETECT: MATCHED -> mode=...` — SDI output re-locked on the new feed
 
 ---
 

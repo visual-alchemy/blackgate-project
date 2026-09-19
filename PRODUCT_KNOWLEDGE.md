@@ -22,17 +22,14 @@ Traditional live broadcasting relies on expensive satellite trucks (DSNG) or ded
 
 ## 3. Recent Feature Additions (Latest First)
 
-### SDI Hardware Output (v0.3.0)
-Route SRT streams directly to Blackmagic DeckLink SDI hardware outputs. Codec-agnostic decodebin handles H.264, HEVC, MPEG-2 video at up to 2160p60 4K. Simultaneous SRT passthrough + SDI decode from the same route. Graceful failure — if SDI sink fails, SRT/UDP outputs continue unaffected.
-
 ### RTMP/HLS/HTTP-FLV Ingestion (v0.3.0)
-Accept RTMP push or pull HLS/HTTP-FLV streams via an ffmpeg sidecar that normalizes them to SRT MPEG-TS. Enables cross-protocol routing: RTMP → SRT/UDP/SDI. Auto-reconnect on source disconnect with 10s retry interval.
+Accept RTMP push or pull HLS/HTTP-FLV streams via an ffmpeg sidecar that normalizes them to SRT MPEG-TS. Enables cross-protocol routing: RTMP → SRT/UDP. Auto-reconnect on source disconnect with 10s retry interval.
 
 ### Watchdog & Auto-Recovery (v0.3.0)
 60-second heartbeat watchdog detects stalled pipelines and auto-restarts them. Combined with auto-reconnect for RTMP sources and seamless route restart on config changes.
 
 ### Event Log System (v0.3.0)
-In-app event timeline tracking route lifecycle (start, stop, crash, reconnect) and SDI failures. Filterable by severity, route, and event type. Provides operational visibility without external monitoring.
+In-app event timeline tracking route lifecycle (start, stop, crash, reconnect). Filterable by severity, route, and event type. Provides operational visibility without external monitoring.
 
 ### UI/UX Quick Wins (v0.2.0–v0.3.0)
 - **Bulk Delete**: Select and delete multiple routes at once
@@ -82,7 +79,7 @@ Blackgate is engineered for professionals who cannot afford a stream to go offli
 | :--- | :--- |
 | **Protocol** | SRT (Secure Reliable Transport), RTMP, HLS, HTTP-FLV (via ffmpeg sidecar) |
 | **Connection Modes** | Caller, Listener, Rendezvous |
-| **Output** | SRT, UDP, SDI (Blackmagic DeckLink) |
+| **Output** | SRT, UDP |
 | **Video Support** | Agnostic (H.264, HEVC, MPEG-2, AV1) |
 | **Audio Support** | Agnostic (AAC, Opus, MP2, Uncompressed) |
 | **Encryption** | Optional AES-128, AES-192, AES-256 |

@@ -1,7 +1,6 @@
-# Packages absent from Ubuntu Server image but required by Blackgate or
-# Blackmagic Desktop Video. Dependencies are resolved and bundled by build.sh.
+# Packages absent from Ubuntu Server image but required by Blackgate.
+# Dependencies are resolved and bundled by build.sh.
 build-essential
-dkms
 gstreamer1.0-libav
 gstreamer1.0-plugins-bad
 gstreamer1.0-plugins-base

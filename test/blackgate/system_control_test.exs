@@ -12,7 +12,6 @@ defmodule Blackgate.SystemControlTest do
     assert is_integer(status.uptime_seconds)
     assert is_map(status.memory)
     assert is_map(status.disk)
-    assert is_integer(status.decklink_nodes)
   end
 
   test "rejects actions outside fixed allowlist" do

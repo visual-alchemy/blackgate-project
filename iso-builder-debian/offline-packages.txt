@@ -1,7 +1,6 @@
-# Runtime, DeckLink/DKMS, and exact boot kernel for Debian 13 appliance.
+# Runtime and exact boot kernel for Debian 13 appliance.
 # build.sh resolves complete dependency closure from Debian trixie.
 build-essential
-dkms
 kmod
 linux-image-amd64
 linux-headers-amd64

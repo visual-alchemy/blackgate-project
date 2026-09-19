@@ -59,8 +59,6 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.sh /target/opt/blackgate/
-    - cp /cdrom/blackgate/desktopvideo_16.0.1a2_amd64.deb /target/opt/blackgate/
-    - cp /cdrom/blackgate/decklink-profile-config /target/opt/blackgate/
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
     - cp /cdrom/blackgate/blackgate-system-action /target/usr/local/libexec/blackgate-system-action
     - cp /cdrom/blackgate/blackgate-updater /target/usr/local/libexec/blackgate-updater
@@ -69,18 +67,17 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate-update-public.pem /target/etc/blackgate/update-public-key.pem
     - cp -a /cdrom/blackgate/offline-repo /target/opt/blackgate/
 
-    # Install runtime and DKMS dependencies exclusively from bundled media.
+    # Install runtime dependencies exclusively from bundled media.
     - mkdir -p /target/etc/apt/blackgate-empty-sources.list.d
     - |
       cat > /target/etc/apt/sources.list.d/blackgate-offline.list << 'EOF'
       deb [trusted=yes] file:/opt/blackgate/offline-repo ./
       EOF
     - curtin in-target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/blackgate-offline.list -o Dir::Etc::sourceparts=/etc/apt/blackgate-empty-sources.list.d update
-    - curtin in-target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/blackgate-offline.list -o Dir::Etc::sourceparts=/etc/apt/blackgate-empty-sources.list.d --no-install-recommends -y install build-essential dkms gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-tools libcjson1 libgl1 net-tools linux-headers-generic /opt/blackgate/desktopvideo_16.0.1a2_amd64.deb
+    - curtin in-target -- apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/blackgate-offline.list -o Dir::Etc::sourceparts=/etc/apt/blackgate-empty-sources.list.d --no-install-recommends -y install build-essential gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-tools libcjson1 libgl1 net-tools
 
     # Set permissions
     - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
-    - chmod +x /target/opt/blackgate/decklink-profile-config
     - chmod +x /target/etc/update-motd.d/99-blackgate
     - chmod 0750 /target/usr/local/libexec/blackgate-system-action
     - chmod 0750 /target/usr/local/libexec/blackgate-updater

@@ -23,7 +23,7 @@ defmodule Blackgate.LicenseEnforcementTest do
     :meck.new(Req, [:passthrough])
     :meck.expect(Req, :post!, fn _, _ -> raise "offline" end)
     :meck.new(Blackgate.RoutesSupervisor, [:passthrough])
-    # Exercise real DynamicSupervisors and route registry without SDI hardware.
+    # Exercise real DynamicSupervisors and route registry without specialized hardware.
     :meck.expect(Blackgate.RoutesSupervisor, :start_link, fn %{id: id} ->
       Supervisor.start_link(
         [

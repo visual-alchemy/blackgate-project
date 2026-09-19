@@ -5,11 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOWNLOADS_DIR="$(dirname "$PROJECT_ROOT")"
 UBUNTU_ISO="${BLACKGATE_SOURCE_ISO:-$DOWNLOADS_DIR/ubuntu-24.04.4-live-server-amd64.iso}"
-DESKTOPVIDEO_DEB="${BLACKGATE_DESKTOPVIDEO_DEB:-$DOWNLOADS_DIR/Blackmagic_Desktop_Video_Linux_16.0.1/deb/x86_64/desktopvideo_16.0.1a2_amd64.deb}"
 OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-installer-amd64.iso"
 WORK_DIR="$(mktemp -d)"
 EXTRACT_DIR="$WORK_DIR/iso-extract"
-PROFILE_TOOL="$WORK_DIR/decklink-profile-config"
 PROJECT_BUILD_DIR="$WORK_DIR/project-build"
 OFFLINE_PACKAGE_LIST="$SCRIPT_DIR/offline-packages.txt"
 RELEASE_VERSION_FILE="$SCRIPT_DIR/release-version"
@@ -38,11 +36,6 @@ if [ ! -f "$UBUNTU_ISO" ]; then
     exit 1
 fi
 
-if [ ! -f "$DESKTOPVIDEO_DEB" ]; then
-    echo "❌ Desktop Video driver not found: $DESKTOPVIDEO_DEB"
-    exit 1
-fi
-
 if [ ! -f "$RELEASE_VERSION_FILE" ]; then
     echo "❌ Release version file not found: $RELEASE_VERSION_FILE"
     exit 1
@@ -56,11 +49,6 @@ fi
 
 if ! command -v mkfs.vfat &>/dev/null; then
     echo "❌ mkfs.vfat not found: sudo apt-get install -y dosfstools"
-    exit 1
-fi
-
-if ! command -v g++ &>/dev/null; then
-    echo "❌ g++ not found: sudo apt-get install -y g++"
     exit 1
 fi
 
@@ -149,7 +137,7 @@ if [ "$OFFLINE_DEB_COUNT" -eq 0 ]; then
 fi
 echo "   ✅ $OFFLINE_DEB_COUNT packages cached ($(du -sh "$OFFLINE_CACHE_DIR" | cut -f1))"
 
-# ─── Step 1: Build release and DeckLink profile utility ────────────────
+# ─── Step 1: Build release ─────────────────────────────────────────────
 
 echo ""
 echo "🔨 Step 1: Building Blackgate Elixir release..."
@@ -174,13 +162,6 @@ fi
 echo "   Packaging release tarball..."
 tar czf "$SCRIPT_DIR/files/blackgate-release.tar.gz" -C "$PROJECT_BUILD_DIR/_build/prod/rel" blackgate
 echo "   Release size: $(du -h "$SCRIPT_DIR/files/blackgate-release.tar.gz" | cut -f1)"
-
-echo "   Building headless DeckLink profile utility..."
-g++ -std=c++11 \
-    -I "$PROJECT_ROOT/native/decklink-sdk" \
-    "$SCRIPT_DIR/tools/decklink-profile-config.cpp" \
-    "$PROJECT_ROOT/native/decklink-sdk/DeckLinkAPIDispatch.cpp" \
-    -ldl -lpthread -o "$PROFILE_TOOL"
 
 # ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────
 
@@ -224,20 +205,10 @@ sed "s/@BLACKGATE_RELEASE_VERSION@/$RELEASE_VERSION/g" \
     > "$EXTRACT_DIR/blackgate/blackgate-firstboot.sh"
 chmod 0755 "$EXTRACT_DIR/blackgate/blackgate-firstboot.sh"
 echo "   ✅ blackgate-firstboot.sh ($(du -h "$SCRIPT_DIR/files/blackgate-firstboot.sh" | cut -f1), release $RELEASE_VERSION)"
-cp "$DESKTOPVIDEO_DEB" "$EXTRACT_DIR/blackgate/desktopvideo_16.0.1a2_amd64.deb"
-cp "$PROFILE_TOOL" "$EXTRACT_DIR/blackgate/decklink-profile-config"
-echo "   ✅ Desktop Video 16.0.1 driver"
-echo "   ✅ DeckLink 2dhd profile utility"
 
 echo "   Creating offline APT repository..."
 mkdir -p "$OFFLINE_REPO_DIR"
 find "$OFFLINE_CACHE_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -t "$OFFLINE_REPO_DIR" {} +
-
-# Desktop Video DKMS requires kernel headers. Reuse exact kernel/header set
-# shipped by source ISO instead of downloading newer kernel from a mirror.
-find "$EXTRACT_DIR/pool" -type f \
-    \( -name 'linux-headers-[0-9]*_*.deb' -o -name 'linux-headers-generic_*.deb' \) \
-    -exec cp -t "$OFFLINE_REPO_DIR" {} +
 
 (
     cd "$OFFLINE_REPO_DIR"

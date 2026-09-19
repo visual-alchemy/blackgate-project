@@ -4,14 +4,12 @@ Separate experimental appliance builder. Does not modify the Ubuntu builder.
 
 Base: `debian-13.6.0-amd64-netinst.iso`. Installer uses Debian preseed and a
 bundled package repository; it never selects an Internet mirror. First boot
-rebuilds Desktop Video DKMS for the running kernel, activates Duo 2 `2dhd`,
-then enables Blackgate.
+enables Blackgate.
 
 ## Required inputs
 
 ```text
 /home/woi/Downloads/debian-13.6.0-amd64-netinst.iso
-/home/woi/Downloads/Blackmagic_Desktop_Video_Linux_16.0.1/deb/x86_64/desktopvideo_16.0.1a2_amd64.deb
 files/blackgate-release-debian13.tar.gz
 ```
 

@@ -3,7 +3,7 @@
 > **Document Version**: 2.0
 > **Date**: 2026-05-24
 > **Source Codebase**: `visual-alchemy/blackgate-project` (blackgate v0.3.0)
-> **Analysis Method**: Static code analysis of all source files, updated for SDI output, RTMP/ffmpeg sidecar, event log, watchdog, and connection monitoring
+> **Analysis Method**: Static code analysis of all source files, updated for RTMP/ffmpeg sidecar, event log, watchdog, and connection monitoring
 
 ---
 
@@ -43,7 +43,7 @@ graph TB
     subgraph "Native C Processes (per-route)"
         NATIVE["blackgate_pipeline<br/>(C + GStreamer)"]
         FFMPEG["ffmpeg Sidecar<br/>(RTMP/HLS/FLV only)"]
-        GST["GStreamer Pipeline<br/>srtsrc - tee - srtsink/udpsink/sdisink"]
+        GST["GStreamer Pipeline<br/>srtsrc - tee - srtsink/udpsink"]
     end
 
     subgraph "Frontend"
@@ -55,7 +55,6 @@ graph TB
         RTMP_IN["RTMP/FLV Source<br/>(Encoder/OBS)"]
         SRT_OUT["SRT Destination<br/>(Decoder/Gateway)"]
         UDP_OUT["UDP Destination<br/>(Multicast)"]
-        SDI_OUT["SDI Output<br/>(DeckLink Hardware)"]
         VM["VictoriaMetrics<br/>(TSDB)"]
     end
 
@@ -85,7 +84,6 @@ graph TB
     RTMP_IN -->|RTMP/FLV| FFMPEG
     GST -->|SRT Protocol| SRT_OUT
     GST -->|UDP Multicast| UDP_OUT
-    GST -->|Decode → SDI| SDI_OUT
 ```
 
 ### 1.2 Backend: Elixir + Phoenix
@@ -147,7 +145,7 @@ Blackgate.Supervisor (one_for_one)
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `native/src/gst_pipeline.c` | 1,591 | Core pipeline: SRT stats collection, MPEG-TS parsing (PAT/PMT/PES), H.264/HEVC/MPEG-2 video info extraction, SDI output via decodebin, pipeline construction |
+| `native/src/gst_pipeline.c` | 1,591 | Core pipeline: SRT stats collection, MPEG-TS parsing (PAT/PMT/PES), H.264/HEVC/MPEG-2 video info extraction, pipeline construction |
 | `native/src/main.c` | 104 | Entry point: reads route_id from argv, JSON config from stdin, initializes GStreamer and Unix socket |
 | `native/src/unix_socket.c` | 47 | Unix Domain Socket client: connects to `/tmp/hydra_unix_sock`, sends stats and metadata |
 
@@ -287,27 +285,9 @@ else if (strcmp(mode_str, "rendezvous") == 0) mode_value = 3;
 |-------------|-----------|---------------------|
 | `srtsrc` | `srtsink` | `uri`, `latency`, `auto-reconnect`, `keep-listening`, `mode`, `passphrase`, `pbkeylen`, `poll-timeout`, `streamid` |
 | `udpsrc` | `udpsink` | `address`/`host`, `port`, `buffer-size`, `mtu` |
-| `rtmp` / `hls` / `http-flv` (via ffmpeg sidecar → SRT loopback) | `srtsink` / `udpsink` / `sdisink` | Ffmpeg sidecar normalizes to SRT: `url`, `stream_key`, reconnect options |
-| — | `sdisink` (DeckLink) | `device_number` (0–7), `video_mode` (1080p25…2160p60), `audio_channels` |
+| `rtmp` / `hls` / `http-flv` (via ffmpeg sidecar → SRT loopback) | `srtsink` / `udpsink` | Ffmpeg sidecar normalizes to SRT: `url`, `stream_key`, reconnect options |
 
-### 2.1b SDI Output Pipeline
-
-SDI output uses a GStreamer decode pipeline parallel to the SRT passthrough tee:
-
-```
-srtsrc → tee ─┬─→ queue2 → srtsink/udpsink (passthrough, no decode)
-              ├─→ queue2 → tsdemux ─┬─→ decodebin(video) → videoconvert → videorate → videoscale → capsfilter(UYVY) → decklinkvideosink
-              │                     └─→ decodebin(audio) → audioconvert → audioresample → decklinkaudiosink
-              └─→ thumbnail branch (JPEG preview)
-```
-
-**Key design decisions:**
-- **`decodebin`** for codec-agnostic decode — handles H.264, HEVC, MPEG-2 video; AAC, MP2, Opus audio
-- **`sync=FALSE` on video sink / `sync=TRUE` on audio sink** — video is paced upstream, while audio relies on GStreamer clock-slaving to prevent stuttering
-- **Graceful failure**: If SDI sink fails, SRT/UDP outputs continue unaffected
-- **SDI port conflict prevention**: UI dropdown disables ports already in use, shows which route uses them
-
-### 2.1c Watchdog (Stalled Pipeline Detection)
+### 2.1b Watchdog (Stalled Pipeline Detection)
 
 **✅ CONFIRMED** — `RouteHandler` includes a 60-second heartbeat watchdog (`2113456`).
 
@@ -325,7 +305,7 @@ Connection status is exposed via the API, displayed in the UI as a colored badge
 
 ### 2.3 ffmpeg Sidecar (RTMP/HLS/HTTP-FLV Sources)
 
-RTMP, HLS, and HTTP-FLV sources are not natively handled by GStreamer. Instead, an ffmpeg sidecar process normalizes them to SRT MPEG-TS via localhost loopback before entering the GStreamer pipeline. See [Section 6: FFmpeg Sidecar Architecture](#6-ffmpeg-sidecar-architecture-rtmphlshttp-flv--sdi) for the detailed architecture.
+RTMP, HLS, and HTTP-FLV sources are not natively handled by GStreamer. Instead, an ffmpeg sidecar process normalizes them to SRT MPEG-TS via localhost loopback before entering the GStreamer pipeline. See [Section 6: FFmpeg Sidecar Architecture](#6-ffmpeg-sidecar-architecture-rtmphlshttp-flv--srt) for the detailed architecture.
 
 **Supported protocols:** RTMP push/pull, HLS (.m3u8), HTTP-FLV (.flv)
 
@@ -397,9 +377,9 @@ Uses the **Instream** library with InfluxDB v2 protocol. Configurable via `VICTO
 
 **✅ CONFIRMED** — `Blackgate.EventLog` is a GenServer with an ETS-based ring buffer (max 500 events).
 
-Events are emitted from `RouteHandler` (route started, stopped, crashed, reconnecting, SDI failed) and stored with:
+Events are emitted from `RouteHandler` (route started, stopped, crashed, reconnecting) and stored with:
 - `id` (integer), `timestamp` (ISO8601), `severity` (`:info`, `:warning`, `:critical`)
-- `type` (atom: `:route_started`, `:route_stopped`, `:route_crashed`, `:sdi_failed`, `:reconnecting`, etc.)
+- `type` (atom: `:route_started`, `:route_stopped`, `:route_crashed`, `:reconnecting`, etc.)
 - `route_id`, `message` (human-readable), `details` (map)
 
 **API endpoints:** `GET /api/events` (filterable by severity, route_id, type), `GET /api/events/counts`, `DELETE /api/events`
@@ -551,9 +531,8 @@ Based on code analysis:
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | **Cluster Mode** | 🟡 Partially Prepared | Khepri (Raft-based) supports multi-node. Syn configured for `:routes` scope. `node_controller.ex` exists for node management. **But**: no actual clustering logic implemented yet. |
-| **RTMP Input** | ✅ Implemented (v0.3.0) | RTMP, HLS, and HTTP-FLV sources via ffmpeg sidecar → SRT loopback. Cross-protocol routing to SRT/UDP/SDI. |
-| **SDI Output** | ✅ Implemented (v0.3.0) | Blackmagic DeckLink output via codec-agnostic decodebin pipeline. 12 video modes from 480i SD to 2160p60 4K. |
-| **Event Log** | ✅ Implemented (v0.3.0) | In-memory ring buffer (ETS, 500 events). Route lifecycle, SDI failures, reconnects. API + UI page. |
+| **RTMP Input** | ✅ Implemented (v0.3.0) | RTMP, HLS, and HTTP-FLV sources via ffmpeg sidecar → SRT loopback. Cross-protocol routing to SRT/UDP. |
+| **Event Log** | ✅ Implemented (v0.3.0) | In-memory ring buffer (ETS, 500 events). Route lifecycle, reconnects. API + UI page. |
 | **Watchdog** | ✅ Implemented (v0.3.0) | 60-second heartbeat to detect stalled pipelines, auto-restart. |
 | **ffmpeg Auto-Reconnect** | ✅ Implemented (v0.3.0) | Auto-reconnect for RTMP/HLS/HTTP-FLV sources (10s retry, 3min timeout). |
 | **Credential Management** | ✅ Implemented (v0.2.0) | Settings UI allows changing admin username/password, persisted in Khepri. |
@@ -562,7 +541,7 @@ Based on code analysis:
 | **Search & Filter** | ✅ Implemented (v0.2.0) | Filter by name, status, schema. Persisted across navigation. |
 | **WebSocket Live Stats** | ✅ Implemented (v0.2.0) | Phoenix Channels push real-time stats; HTTP polling as fallback. |
 | **StreamID Support** | ✅ Implemented (Unreleased) | Optional Stream ID field for SRT Caller sources/destinations (`391b189`). |
-| **HLS Output** | 🔴 Not Implemented | No HLS sink type. Only `srtsink`, `udpsink`, and `sdisink` exist. HLS relay via MediaMTX planned. |
+| **HLS Output** | 🔴 Not Implemented | No HLS sink type. Only `srtsink` and `udpsink` exist. HLS relay via MediaMTX planned. |
 | **Ecto/SQL Database** | 🟡 Vestigial | `api.ex` contains full Ecto CRUD operations but `Blackgate.Repo` is commented out in the supervision tree. |
 | **Proper Authentication** | 🟡 Basic Implementation | Auth uses env-var credentials with Cachex session tokens, plus credential management UI. No JWT, no role-based access. |
 | **Metrics Dashboard** | 🟡 Infrastructure Ready | VictoriaMetrics/InfluxDB integration exists (`Instream`), Grafana provisioning directory exists. |
@@ -641,7 +620,7 @@ end
 |------|-------|------|
 | `lib/blackgate/application.ex` | 82 | OTP Application (supervision tree, Ranch, Khepri, EventLog, License) |
 | `lib/blackgate.ex` | 56 | Public API (start/stop/restart routes) |
-| `lib/blackgate/route_handler.ex` | 653 | Pipeline lifecycle (gen_statem + watchdog), ffmpeg sidecar, SRT URI building, SDI output config |
+| `lib/blackgate/route_handler.ex` | 653 | Pipeline lifecycle (gen_statem + watchdog), ffmpeg sidecar, SRT URI building |
 | `lib/blackgate/unix_sock_handler.ex` | 233 | Stats receiver (gen_statem + Ranch protocol) |
 | `lib/blackgate/db.ex` | 209 | Khepri CRUD operations |
 | `lib/blackgate/route_stats_registry.ex` | 103 | ETS stats storage (GenServer) |
@@ -667,7 +646,7 @@ end
 
 | File | Lines | Role |
 |------|-------|------|
-| `native/src/gst_pipeline.c` | 1,591 | GStreamer pipeline, SDI decodebin, SRT stats, MPEG-TS parsing |
+| `native/src/gst_pipeline.c` | 1,591 | GStreamer pipeline, SRT stats, MPEG-TS parsing |
 | `native/src/main.c` | 104 | Entry point, JSON config reader |
 | `native/src/unix_socket.c` | 47 | UDS client for stats communication |
 
@@ -728,11 +707,11 @@ end
 
 ---
 
-## 6. FFmpeg Sidecar Architecture (RTMP/HLS/HTTP-FLV → SDI)
+## 6. FFmpeg Sidecar Architecture (RTMP/HLS/HTTP-FLV → SRT)
 
 ### 6.1 Overview
 
-RTMP, HLS, and HTTP-FLV sources cannot be directly decoded to SDI output via GStreamer's native elements due to timestamp drift and preroll deadlock issues. The solution uses ffmpeg as a sidecar process to normalize the stream into SRT, which then feeds the proven SRT→SDI pipeline.
+RTMP, HLS, and HTTP-FLV sources cannot be fed directly into the GStreamer pipeline via native elements due to timestamp drift and preroll deadlock issues. The solution uses ffmpeg as a sidecar process to normalize the stream into SRT, which then feeds the standard SRT routing pipeline.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -742,8 +721,8 @@ RTMP, HLS, and HTTP-FLV sources cannot be directly decoded to SDI output via GSt
 │  │  ffmpeg   │──────────────────→ │  GStreamer Pipeline               │  │
 │  │           │  127.0.0.1:39xxx   │                                    │  │
 │  │ RTMP pull │  mode=listener     │  srtsrc(caller) → tee ─┬→ srtsink │  │
-│  │ → MPEG-TS │  latency=125ms    │                         ├→ SDI     │  │
-│  │ → SRT out │                    │                         └→ thumb   │  │
+│  │ → MPEG-TS │  latency=125ms     │                         └→ thumb   │  │
+│  │ → SRT out │                    │                                    │  │
 │  └──────────┘                     └──────────────────────────────────┘  │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -757,14 +736,13 @@ RTMP, HLS, and HTTP-FLV sources cannot be directly decoded to SDI output via GSt
 4. 3-second sleep to allow ffmpeg to start listening
 5. Route config rewritten: `schema: "RTMP"` → `schema: "SRT", mode: "caller", port: {port}`
 6. GStreamer pipeline starts with `srtsrc uri="srt://127.0.0.1:{port}?mode=caller"`
-7. Pipeline sees a normal SRT source — standard tee → SDI/SRT/thumbnail paths
+7. Pipeline sees a normal SRT source — standard tee → SRT/UDP/thumbnail paths
 
 ### 6.3 Why ffmpeg Sidecar Works
 
 | Problem with native GStreamer | How ffmpeg solves it |
 |-------------------------------|---------------------|
 | `flvdemux` + compressed tee causes timestamp drift after 10-20 min | ffmpeg remuxes to MPEG-TS with normalized PTS/DTS timestamps |
-| `rtmpsrc` is a live source — DeckLink preroll deadlocks | SRT loopback is not live — normal preroll works |
 | `identity sync=true` drifts for audio after several minutes | SRT protocol adds latency buffer, smoothing timing |
 | Standard tee path (mpegtsmux → tsdemux) freezes video for RTMP | ffmpeg's mpegtsmux is battle-tested, produces clean MPEG-TS |
 
@@ -783,28 +761,14 @@ ffmpeg -hide_banner -loglevel warning \
 - `mode=listener`: ffmpeg listens, GStreamer calls in
 - `latency=125`: 125ms SRT latency buffer
 
-### 6.5 SDI Pipeline Configuration (Proven Stable)
-
-```
-srtsrc(caller) → tee → queue(5s, non-leaky) → tsdemux → decodebin → queue(5s, non-leaky)
-  → videoconvert → videorate(skip-to-first=true) → videoscale → caps(UYVY) → identity(sync=true) → decklinkvideosink(sync=false)
-  → audioconvert → audioresample → audiorate → decklinkaudiosink(sync=true)
-```
-
-Critical settings that make it work:
-- **`sync=false` on video / `sync=true` on audio**: Video timing is paced by an upstream `identity sync=true` element to prevent state change failures, while `decklinkaudiosink` relies on GStreamer's master-clock slaving to align samples dynamically and prevent stuttering.
-- **`skip-to-first=true`** on videorate: prevents initial frame burst from overwhelming DeckLink
-- **Non-leaky 5-second queues**: absorbs timing variations without dropping frames
-- **`audiorate`**: prevents sample rate drift in the audio path
-
-### 6.6 Lifecycle Management
+### 6.5 Lifecycle Management
 
 - **Start**: Spawn ffmpeg → wait 3s → start GStreamer pipeline
 - **Stop**: Kill GStreamer pipeline (Port.close) → kill ffmpeg (sys_kill by OS PID)
 - **ffmpeg crash**: Erlang Port detects `:exit_status` → route process crashes → can be restarted via UI
 - **GStreamer crash**: Bus error callback → route stops → logged in Event Log
 
-### 6.7 Supported Source Protocols
+### 6.6 Supported Source Protocols
 
 | Protocol | ffmpeg input | Example URL |
 |----------|-------------|-------------|

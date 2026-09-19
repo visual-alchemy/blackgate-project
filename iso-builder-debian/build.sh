@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOWNLOADS_DIR="$(dirname "$PROJECT_ROOT")"
 SOURCE_ISO="${BLACKGATE_DEBIAN_SOURCE_ISO:-$DOWNLOADS_DIR/debian-13.6.0-amd64-netinst.iso}"
-DESKTOPVIDEO_DEB="${BLACKGATE_DESKTOPVIDEO_DEB:-$DOWNLOADS_DIR/Blackmagic_Desktop_Video_Linux_16.0.1/deb/x86_64/desktopvideo_16.0.1a2_amd64.deb}"
 RELEASE_TARBALL="${BLACKGATE_DEBIAN_RELEASE:-$SCRIPT_DIR/files/blackgate-release-debian13.tar.gz}"
 OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-debian13-installer-amd64.iso"
 CACHE_DIR="${BLACKGATE_DEBIAN_CACHE:-$SCRIPT_DIR/cache/debs}"
@@ -13,7 +12,6 @@ WORK_DIR="$(mktemp -d)"
 EXTRACT_DIR="$WORK_DIR/iso"
 XORRISO_ROOT="$WORK_DIR/xorriso"
 XORRISO_BIN="$XORRISO_ROOT/usr/bin/xorriso"
-PROFILE_TOOL="$WORK_DIR/decklink-profile-config"
 APT_LIST="$WORK_DIR/debian-trixie.list"
 APT_LISTS="$WORK_DIR/apt-lists"
 RELEASE_STAGE="$WORK_DIR/release-stage"
@@ -22,12 +20,12 @@ CLEAN_RELEASE="$WORK_DIR/blackgate-release.tar.gz"
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
-for file in "$SOURCE_ISO" "$DESKTOPVIDEO_DEB" "$RELEASE_TARBALL" \
+for file in "$SOURCE_ISO" "$RELEASE_TARBALL" \
   "$SCRIPT_DIR/preseed.cfg" "$SCRIPT_DIR/offline-packages.txt"; do
     [ -f "$file" ] || { echo "Missing required file: $file"; exit 1; }
 done
 
-for command in apt-get dpkg-deb dpkg-scanpackages g++ rsync; do
+for command in apt-get dpkg-deb dpkg-scanpackages rsync; do
     command -v "$command" >/dev/null || { echo "Missing host command: $command"; exit 1; }
 done
 
@@ -68,13 +66,6 @@ apt-get \
     -o Acquire::Languages=none \
     --download-only --no-install-recommends -y install "${packages[@]}"
 
-echo "Compiling DeckLink profile utility..."
-g++ -std=c++11 \
-    -I "$PROJECT_ROOT/native/decklink-sdk" \
-    "$SCRIPT_DIR/tools/decklink-profile-config.cpp" \
-    "$PROJECT_ROOT/native/decklink-sdk/DeckLinkAPIDispatch.cpp" \
-    -ldl -lpthread -o "$PROFILE_TOOL"
-
 echo "Sanitizing Debian release payload..."
 mkdir -p "$RELEASE_STAGE"
 tar xzf "$RELEASE_TARBALL" -C "$RELEASE_STAGE"
@@ -89,8 +80,6 @@ chmod -R u+w "$EXTRACT_DIR"
 mkdir -p "$EXTRACT_DIR/blackgate/offline-repo"
 cp "$SCRIPT_DIR/preseed.cfg" "$EXTRACT_DIR/preseed.cfg"
 cp "$CLEAN_RELEASE" "$EXTRACT_DIR/blackgate/blackgate-release.tar.gz"
-cp "$DESKTOPVIDEO_DEB" "$EXTRACT_DIR/blackgate/desktopvideo_16.0.1a2_amd64.deb"
-cp "$PROFILE_TOOL" "$EXTRACT_DIR/blackgate/decklink-profile-config"
 cp "$SCRIPT_DIR/files/blackgate-firstboot.sh" "$EXTRACT_DIR/blackgate/"
 cp "$SCRIPT_DIR/files/blackgate-firstboot.service" "$EXTRACT_DIR/blackgate/"
 cp "$SCRIPT_DIR/files/blackgate.service" "$EXTRACT_DIR/blackgate/"
