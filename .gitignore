@@ -57,3 +57,4 @@ graphify-out/
 logs/.agents/
 .omo/
 docs/superpowers/skills/
+.worktrees/
