@@ -869,7 +869,6 @@ const Settings = () => {
                 { label: 'Uptime', value: formatUptime(status?.uptime_seconds) },
                 { label: 'Memory', value: `${formatBytes(status?.memory?.used_bytes)} / ${formatBytes(status?.memory?.total_bytes)}` },
                 { label: 'Root disk', value: `${formatBytes(status?.disk?.used_bytes)} used, ${formatBytes(status?.disk?.available_bytes)} free (${status?.disk?.percent || '-'})` },
-                { label: 'DeckLink nodes', value: status?.decklink_nodes ?? '-' },
                 { label: 'Release version', value: status?.version || '-' },
                 { label: 'Update status', value: status?.update_status || 'idle' },
               ]}

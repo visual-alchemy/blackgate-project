@@ -1,12 +1,15 @@
 defmodule Blackgate.Db do
   @moduledoc false
   require Logger
+  @sdi_not_supported_message "SDI output not supported on Blackgate Lite"
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
-    :global.trans({{__MODULE__, :route_creation}, self()}, fn ->
-      create_route_with_license(data, id)
-    end)
+    with :ok <- validate_no_sdi(data) do
+      :global.trans({{__MODULE__, :route_creation}, self()}, fn ->
+        create_route_with_license(data, id)
+      end)
+    end
   end
 
   defp create_route_with_license(data, id) do
@@ -65,24 +68,26 @@ defmodule Blackgate.Db do
 
   @spec update_route(String.t(), map) :: {:ok, map} | {:error, any}
   def update_route(id, data) do
-    path = ["routes", id]
-    now = now()
+    with :ok <- validate_no_sdi(data) do
+      path = ["routes", id]
+      now = now()
 
-    :khepri.transaction(fn ->
-      case :khepri_tx.get(path) do
-        {:ok, route} ->
-          new_route = Map.merge(route, Map.put(data, "updated_at", now))
+      :khepri.transaction(fn ->
+        case :khepri_tx.get(path) do
+          {:ok, route} ->
+            new_route = Map.merge(route, Map.put(data, "updated_at", now))
 
-          :ok = :khepri_tx.put(path, new_route)
-          :khepri_tx.get(path)
+            :ok = :khepri_tx.put(path, new_route)
+            :khepri_tx.get(path)
 
-        _ ->
-          {:error, :route_not_found}
+          _ ->
+            {:error, :route_not_found}
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        other -> {:error, inspect(other)}
       end
-    end)
-    |> case do
-      {:ok, result} -> result
-      other -> {:error, inspect(other)}
     end
   end
 
@@ -93,6 +98,12 @@ defmodule Blackgate.Db do
 
   @spec create_destination(String.t(), map, binary | nil) :: {:ok, map} | {:error, any}
   def create_destination(route_id, data, id \\ nil) do
+    with :ok <- validate_no_sdi(data) do
+      create_destination_allowed(route_id, data, id)
+    end
+  end
+
+  defp create_destination_allowed(route_id, data, id) do
     id = if id, do: id, else: UUID.uuid1()
 
     data =
@@ -108,7 +119,7 @@ defmodule Blackgate.Db do
       {:ok, result}
     else
       other ->
-        Logger.error("Failed to create route: #{inspect(other)}")
+        Logger.error("Failed to create destination: #{inspect(other)}")
         {:error, other}
     end
   end
@@ -128,8 +139,14 @@ defmodule Blackgate.Db do
         {:ok, destination} ->
           new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
 
-          :ok = :khepri_tx.put(path, new_destination)
-          :khepri_tx.get(path)
+          case validate_no_sdi(new_destination) do
+            :ok ->
+              :ok = :khepri_tx.put(path, new_destination)
+              :khepri_tx.get(path)
+
+            error ->
+              error
+          end
 
         _ ->
           {:error, :destination_not_found}
@@ -248,6 +265,9 @@ defmodule Blackgate.Db do
       if not Enum.all?(allowed, fn {_, value} -> is_map(value) end),
         do: raise(ArgumentError, "Invalid configuration values")
 
+      if Enum.any?(allowed, fn {_, value} -> has_sdi_destination?(value) end),
+        do: raise(ArgumentError, @sdi_not_supported_message)
+
       # Share creation lock with create/clone/import. Never import protected
       # namespaces, even when reading a legacy full-database backup.
       :global.trans({{__MODULE__, :route_creation}, self()}, fn ->
@@ -296,4 +316,23 @@ defmodule Blackgate.Db do
   defp backup_path?(_), do: false
 
   defp now, do: DateTime.utc_now()
+
+  defp validate_no_sdi(data) do
+    if has_sdi_destination?(data), do: {:error, @sdi_not_supported_message}, else: :ok
+  end
+
+  defp has_sdi_destination?(data) when is_map(data) do
+    case Map.get(data, "destinations", Map.get(data, :destinations)) do
+      destinations when is_list(destinations) -> Enum.any?(destinations, &sdi_destination?/1)
+      _ -> sdi_destination?(data)
+    end
+  end
+
+  defp has_sdi_destination?(_data), do: false
+
+  defp sdi_destination?(destination) when is_map(destination) do
+    Map.get(destination, "schema", Map.get(destination, :schema)) == "SDI"
+  end
+
+  defp sdi_destination?(_destination), do: false
 end

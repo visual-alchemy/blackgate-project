@@ -29,7 +29,6 @@ import {
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
-import { DEVICE_TO_SDI } from '../../utils/sdiPorts';
 import RouteStats from '../../components/RouteStats';
 import DestinationStats from '../../components/DestinationStats';
 import { useLicense } from '../../hooks/useLicense';
@@ -203,12 +202,6 @@ const RouteItem = () => {
             return `${record.schema_options?.localaddress || 'N/A'}:${record.schema_options?.localport || 'N/A'}:${record.schema_options?.mode || 'N/A'}`;
           case 'UDP':
             return `${record.schema_options?.host || record.schema_options?.address || 'N/A'}:${record.schema_options?.port || 'N/A'}`;
-          case 'SDI': {
-            const port = DEVICE_TO_SDI[record.schema_options?.device_number] ?? '?';
-            const modeMap = { 0: 'Auto', 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60' };
-            const mode = modeMap[record.schema_options?.video_mode] || '1080p25';
-            return `SDI ${port} · ${mode}`;
-          }
           default:
             return '—';
         }
@@ -223,7 +216,6 @@ const RouteItem = () => {
       title: 'Latency',
       key: 'latency',
       render: (_, record) => {
-        if (record?.schema === 'SDI') return '—';
         const latency = record?.schema_options?.latency || record?.latency;
         return latency ? `${latency}ms` : '—';
       },
@@ -474,16 +466,6 @@ const RouteItem = () => {
       {contextHolder}
       {modalContextHolder}
 
-      {routeData && routeData.status && routeData.status.toLowerCase() === 'error' && (
-        <Alert
-          message="Hardware / Driver Error"
-          description={routeData.error_message || "The DeckLink hardware or kernel driver has stopped responding. Please verify PCIe installation and ensure DesktopVideoHelper is running."}
-          type="error"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
-
       {/* Route Info Card */}
       <Card style={{ marginBottom: 24 }}>
         <Row justify="space-between" align="middle">
@@ -644,13 +626,6 @@ const RouteItem = () => {
                 <Tag color={(routeData.active_source || 'primary') === 'primary' ? 'blue' : 'orange'}>
                   {(routeData.active_source || 'primary').toUpperCase()}
                 </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="SDI Switch Strategy">
-                {routeData.seamless_sdi_failover ? (
-                  <Tag color="green">KEYFRAME-GATED</Tag>
-                ) : (
-                  <Tag>RESTART FALLBACK</Tag>
-                )}
               </Descriptions.Item>
               <Descriptions.Item label="Secondary Source">
                 <Tag color="orange">

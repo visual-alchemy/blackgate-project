@@ -28,7 +28,7 @@ const RouteNameCell = ({ record }) => {
     tooltipTitle = (
       <div style={{ padding: '4px' }}>
         <div style={{ fontWeight: 600, color: '#ff4d4f', marginBottom: '4px' }}>Hardware / Driver Error</div>
-        <div>{record.error_message || 'DeckLink driver unresponsive or PCIe card missing.'}</div>
+        <div>{record.error_message || 'Hardware error.'}</div>
       </div>
     );
   } else if (isRunning) {
@@ -412,7 +412,7 @@ const Routes = () => {
       title: 'Output',
       key: 'output',
       render: (_, record) => (
-        <OutputPopover route={record} allRoutes={routes} onUpdate={() => fetchRoutes(true)} />
+        <OutputPopover route={record} onUpdate={() => fetchRoutes(true)} />
       )
     },
     {

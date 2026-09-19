@@ -1,36 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Popover, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, message, Tooltip } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons';
-import { destinationsApi, routesApi } from '../../utils/api';
-import { DEVICE_TO_SDI, SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
+import { destinationsApi } from '../../utils/api';
 import { useNavigate } from 'react-router-dom';
 
 const { Text } = Typography;
 
-const VIDEO_MODE_MAP = {
-  0: 'Auto',
-  9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60',
-  7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60',
-  17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60'
-};
-
-const OutputPopover = ({ route, allRoutes, onUpdate }) => {
+const OutputPopover = ({ route, onUpdate }) => {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
 
   const destinations = route.destinations || [];
-
-  // Build SDI port usage map (excluding current route's destinations)
-  const sdiPortUsage = {};
-  (allRoutes || []).forEach(r => {
-    if (r.id === route.id) return;
-    (r.destinations || []).forEach(dest => {
-      if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
-        sdiPortUsage[dest.schema_options.device_number] = r.name;
-      }
-    });
-  });
 
   const handleQuickUpdate = async (destId, field, value) => {
     setSaving(true);
@@ -39,12 +20,7 @@ const OutputPopover = ({ route, allRoutes, onUpdate }) => {
       if (!dest) return;
 
       let updatedData;
-      if (field === 'device_number') {
-        updatedData = {
-          ...dest,
-          schema_options: { ...dest.schema_options, device_number: value }
-        };
-      } else if (field === 'localport') {
+      if (field === 'localport') {
         updatedData = {
           ...dest,
           schema_options: { ...dest.schema_options, localport: value }
@@ -81,53 +57,6 @@ const OutputPopover = ({ route, allRoutes, onUpdate }) => {
 
   const renderDestinationRow = (dest) => {
     switch (dest.schema) {
-      case 'SDI': {
-        const currentPort = dest.schema_options?.device_number;
-        const sdiLabel = DEVICE_TO_SDI[currentPort] ?? '?';
-        const mode = VIDEO_MODE_MAP[dest.schema_options?.video_mode] || '1080p25';
-
-        return (
-          <div key={dest.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <Tag color="purple" style={{ margin: 0 }}>SDI</Tag>
-            <Select
-              size="small"
-              value={currentPort}
-              style={{ width: 110 }}
-              disabled={saving}
-              onChange={(value) => handleQuickUpdate(dest.id, 'device_number', value)}
-              options={SDI_PORT_OPTIONS.map(opt => ({
-                ...opt,
-                label: sdiPortUsage[opt.value]
-                  ? `${opt.label} (${sdiPortUsage[opt.value]})`
-                  : opt.label,
-                disabled: !!sdiPortUsage[opt.value],
-              }))}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>{mode}</Text>
-            <Tooltip title="Full edit">
-              <Button
-                type="text"
-                size="small"
-                icon={<SettingOutlined />}
-                onClick={() => {
-                  setOpen(false);
-                  navigate(`/routes/${route.id}/destinations/${dest.id}/edit`);
-                }}
-              />
-            </Tooltip>
-            <Tooltip title="Delete">
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => handleDelete(dest.id, dest.name)}
-              />
-            </Tooltip>
-          </div>
-        );
-      }
-
       case 'SRT': {
         const port = dest.schema_options?.localport || '';
         return (
@@ -245,11 +174,6 @@ const OutputPopover = ({ route, allRoutes, onUpdate }) => {
         return `SRT:${dest.schema_options?.localport || '?'}`;
       case 'UDP':
         return `UDP:${dest.schema_options?.host || dest.schema_options?.address || '?'}:${dest.schema_options?.port || '?'}`;
-      case 'SDI': {
-        const port = DEVICE_TO_SDI[dest.schema_options?.device_number] ?? '?';
-        const mode = VIDEO_MODE_MAP[dest.schema_options?.video_mode] || '1080p25';
-        return `SDI ${port} · ${mode}`;
-      }
       default:
         return dest.schema || '?';
     }

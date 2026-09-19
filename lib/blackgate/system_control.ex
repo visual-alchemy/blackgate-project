@@ -14,7 +14,6 @@ defmodule Blackgate.SystemControl do
       uptime_seconds: uptime_seconds(),
       memory: memory(),
       disk: disk(),
-      decklink_nodes: decklink_nodes(),
       blackgate_service: command("/usr/bin/systemctl", ["is-active", "blackgate.service"]),
       version: if(notes, do: notes.version, else: release_version()),
       release_notes: notes,
@@ -140,13 +139,6 @@ defmodule Blackgate.SystemControl do
     end
   rescue
     _ -> %{}
-  end
-
-  defp decklink_nodes do
-    case File.ls("/dev/blackmagic") do
-      {:ok, entries} -> Enum.count(entries, &String.starts_with?(&1, "io"))
-      _ -> 0
-    end
   end
 
   defp release_version do

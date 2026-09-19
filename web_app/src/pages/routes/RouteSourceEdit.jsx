@@ -80,18 +80,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   ];
 
   const handleValuesChange = (changedValues, allValues) => {
-    if (changedValues.seamless_sdi_failover === true && allValues.auto_join !== true) {
-      form.setFieldValue('auto_join', true);
-    }
-
-    // Disabling failover must also clear the seamless SDI flag. The field is
-    // hidden (unmounted) but antd preserves its value, so it still ships in the
-    // payload and the backend rejects it ("seamless SDI failover requires
-    // failover to be enabled").
-    if (changedValues.failover_enabled === false) {
-      form.setFieldValue('seamless_sdi_failover', false);
-    }
-
     // Auto-fill Local Address when mode is set to listener or rendezvous
     if (changedValues?.schema_options?.mode) {
       const mode = changedValues.schema_options.mode;
@@ -210,7 +198,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
           failover_enabled: false,
           failover_mode: 'maintain-primary',
           auto_join: true,
-          seamless_sdi_failover: false,
           active_source: 'primary',
           secondary_source: { schema: 'SRT', schema_options: {} },
           ...initialValues
@@ -299,16 +286,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     tooltip="True: both primary and secondary always connected (zero reconnect delay, more bandwidth). False: secondary connects only when it becomes active."
                                   >
                                     <Switch defaultChecked />
-                                  </Form.Item>
-
-                                  <Form.Item
-                                    label="Seamless SDI Failover"
-                                    name="seamless_sdi_failover"
-                                    valuePropName="checked"
-                                    tooltip="Keep both SRT sources warm, validate their MPEG-TS stream maps, and switch on a target keyframe. Incompatible feeds automatically use restart failover."
-                                    extra="Experimental. Requires matching encoder codec, PID, program, audio, and timing configuration. Enabling this also enables Auto-Join."
-                                  >
-                                    <Switch />
                                   </Form.Item>
 
                                   <Form.Item

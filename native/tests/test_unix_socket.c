@@ -215,15 +215,12 @@ static void assert_dual_ingest_initial_state(const char *active_source,
 
     GstPad *active_pad = NULL;
     g_object_get(selector, "active-pad", &active_pad, NULL);
-    GstPad *expected_pad = gst_element_get_static_pad(
-        selector, strcmp(active_source, "secondary") == 0 ? "sink_1" : "sink_0");
 
     assert_non_null(active_pad);
-    assert_non_null(expected_pad);
-    assert_ptr_equal(active_pad, expected_pad);
+    assert_string_equal(GST_PAD_NAME(active_pad),
+                        strcmp(active_source, "secondary") == 0 ? "sink_1" : "sink_0");
     assert_int_equal(gst_element_is_locked_state(secondary), secondary_locked);
 
-    gst_object_unref(expected_pad);
     gst_object_unref(active_pad);
     gst_object_unref(secondary);
     gst_object_unref(selector);
@@ -241,48 +238,6 @@ static void test_dual_ingest_initial_secondary_starts_secondary(void **state)
 {
     (void)state;
     assert_dual_ingest_initial_state("secondary", FALSE);
-}
-
-static void test_seamless_sdi_keeps_nonblocking_selector_and_warm_secondary(void **state)
-{
-    (void)state;
-    const char *json_str =
-        "{\"primary_source\":{\"type\":\"srtsrc\",\"uri\":\"srt://127.0.0.1:18201?mode=listener\"},"
-        "\"secondary_source\":{\"type\":\"srtsrc\",\"uri\":\"srt://127.0.0.1:18202?mode=listener\"},"
-        "\"active_source\":\"primary\",\"auto_join\":false,"
-        "\"seamless_sdi_failover\":true,\"sinks\":[{\"type\":\"fakesink\"}]}";
-
-    cJSON *json = cJSON_Parse(json_str);
-    assert_non_null(json);
-    GstElement *pipeline = create_pipeline(json, NULL);
-    assert_non_null(pipeline);
-
-    GstElement *selector = gst_bin_get_by_name(GST_BIN(pipeline), "input-selector");
-    GstElement *primary = gst_bin_get_by_name(GST_BIN(pipeline), "source");
-    GstElement *secondary = gst_bin_get_by_name(GST_BIN(pipeline), "secondary_source");
-    assert_non_null(selector);
-    assert_non_null(primary);
-    assert_non_null(secondary);
-
-    gboolean sync_streams = FALSE;
-    gboolean primary_do_timestamp = TRUE;
-    gboolean secondary_do_timestamp = TRUE;
-    gint sync_mode = 0;
-    g_object_get(selector, "sync-streams", &sync_streams, "sync-mode", &sync_mode, NULL);
-    g_object_get(primary, "do-timestamp", &primary_do_timestamp, NULL);
-    g_object_get(secondary, "do-timestamp", &secondary_do_timestamp, NULL);
-
-    assert_false(sync_streams);
-    assert_int_equal(sync_mode, 0);
-    assert_false(primary_do_timestamp);
-    assert_false(secondary_do_timestamp);
-    assert_false(gst_element_is_locked_state(secondary));
-
-    gst_object_unref(primary);
-    gst_object_unref(secondary);
-    gst_object_unref(selector);
-    cleanup_pipeline(pipeline);
-    cJSON_Delete(json);
 }
 
 static GstBuffer *make_ts_buffer(gboolean include_keyframe, GstClockTime pts,
@@ -475,14 +430,14 @@ static gboolean selector_is_on(GstElement *selector, const char *pad_name)
     return matches;
 }
 
-static void test_seamless_switch_waits_for_compatible_target_keyframe(void **state)
+static void test_live_switch_moves_selector_immediately(void **state)
 {
     (void)state;
     const char *json_str =
         "{\"primary_source\":{\"type\":\"appsrc\"},"
         "\"secondary_source\":{\"type\":\"appsrc\"},"
         "\"active_source\":\"primary\",\"auto_join\":true,"
-        "\"seamless_sdi_failover\":true,\"sinks\":[{\"type\":\"fakesink\"}]}";
+        "\"sinks\":[{\"type\":\"fakesink\"}]}";
 
     cJSON *json = cJSON_Parse(json_str);
     assert_non_null(json);
@@ -568,10 +523,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_dual_ingest_initial_secondary_starts_secondary,
                                         setup_socket_fixture, teardown_socket_fixture),
         cmocka_unit_test_setup_teardown(
-            test_seamless_sdi_keeps_nonblocking_selector_and_warm_secondary,
-            setup_socket_fixture, teardown_socket_fixture),
-        cmocka_unit_test_setup_teardown(
-            test_seamless_switch_waits_for_compatible_target_keyframe,
+            test_live_switch_moves_selector_immediately,
             setup_socket_fixture, teardown_socket_fixture),
         cmocka_unit_test(test_ts_normalizer_aligns_switch_timestamps_and_continuity),
         cmocka_unit_test(test_ts_normalizer_handles_33_bit_wraparound),

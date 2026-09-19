@@ -4,7 +4,7 @@
 
 **High-performance video routing with secure, reliable transport**
 
-> **v1.0.1**: Real-time health diagnostics, timestamp correction, clock-pacing, tsparse packet alignment, SDI output, RTMP/ffmpeg sidecar. Actively improving based on real-world usage.
+> **v1.0.1**: Real-time health diagnostics, timestamp correction, clock-pacing, tsparse packet alignment, RTMP/ffmpeg sidecar. Actively improving based on real-world usage.
 
 ---
 
@@ -15,10 +15,9 @@
 | Category | Features |
 |----------|----------|
 | **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication, StreamID support |
-| **Input Failover** | Dual SRT sources (primary + secondary) per route with 4 modes: manual, maintain-primary, maintain-stability, and manual-switchback; optional warm ingest and guarded seamless SDI switching; live per-source health telemetry |
+| **Input Failover** | Dual SRT sources (primary + secondary) per route with 4 modes: manual, maintain-primary, maintain-stability, and manual-switchback; optional warm ingest; live per-source health telemetry |
 | **RTMP/HLS/HTTP-FLV** | Ingest RTMP push or pull HLS/FLV streams via ffmpeg sidecar with SRT loopback normalization |
 | **UDP Support** | Source and Destination for local network streaming |
-| **SDI Output** | Blackmagic DeckLink hardware output (decode + scale to SDI) |
 | **Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
 | **Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
 | **Connection Status** | Live green/red/yellow/grey badge showing real-time SRT connection health including "Reconnecting" state |
@@ -28,21 +27,12 @@
 | **Auto-Restart & Reconnect** | Editing a running route auto-restarts; RTMP sources auto-reconnect on disconnect |
 | **Bulk Operations** | Select and start/stop/delete multiple routes at once |
 | **Search & Filter** | Filter routes by name, status, or schema type |
-| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, SDI failures, reconnects) |
+| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, reconnects) |
 | **Credential Management** | Change admin username and password from the Settings UI |
 | **Systemd Service** | Auto-start on boot for baremetal production deployments |
 | **REST API** | Full programmatic control for automation |
 | **Docker Ready** | One-command deployment with backup/restore |
 | **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
-
-### SDI Output (Blackmagic DeckLink)
-
-Route SRT streams directly to SDI hardware outputs:
-- **Codec-agnostic** — Supports H.264, HEVC (H.265), MPEG-2 video; AAC, MP2, Opus audio
-- **Multiple modes** — 1080p25/30/50/60, 1080i, 720p, PAL/NTSC SD, 4K (2160p)
-- **Multi-output** — DeckLink Quad 2 provides up to 8 SDI channels
-- **Graceful failure** — SDI issues don't affect SRT passthrough outputs
-- **Simultaneous** — SRT passthrough + SDI decode from the same route
 
 ### Real-time Statistics
 
@@ -77,7 +67,6 @@ The Routes table shows a live connection status badge for each route:
 - [x] ~~Bulk Route Operations~~
 - [x] ~~Route Cloning~~
 - [x] ~~Credential Management~~
-- [x] ~~SDI Output (DeckLink)~~
 - [x] ~~Event Log~~
 - [x] ~~Watchdog (Stalled Pipeline Detection)~~
 - [x] ~~RTMP/HTTP-FLV/HLS Ingestion (ffmpeg sidecar)~~
@@ -122,13 +111,11 @@ graph TB
     subgraph "External Destinations"
         G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
         H["SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
-        I["SDI Output<br/>(DeckLink Quad 2)<br/>Hardware"]
     end
     
     A -->|"SRT Stream<br/>(Listener Mode)"| F
     F -->|"SRT Stream<br/>(Listener Mode)"| G
     F -->|"SRT Stream<br/>(Listener Mode)"| H
-    F -->|"Decode → SDI"| I
     
     B <-->|"HTTP/REST API"| C
     C <-->|"Database Ops"| E
@@ -141,7 +128,7 @@ graph TB
     classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
     classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
     
-    class A,G,H,I external
+    class A,G,H external
     class B ui
     class C,D,E backend
     class F streaming
@@ -171,14 +158,12 @@ graph TB
         F["SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
         G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
         H["SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
-        I["SDI Output<br/>(DeckLink Quad 2)<br/>Hardware"]
     end
     
     E -->|"SRT Connection<br/>(Caller Mode)"| F
     F -->|"SRT Stream"| E
     E -->|"SRT Connection<br/>(Caller Mode)"| G
     E -->|"SRT Connection<br/>(Caller Mode)"| H
-    E -->|"Decode → SDI"| I
     
     A <-->|"HTTP/REST API"| B
     B <-->|"Database Ops"| D
@@ -191,7 +176,7 @@ graph TB
     classDef backend fill:#166534,stroke:#22c55e,stroke-width:3px,color:#ffffff
     classDef streaming fill:#ea580c,stroke:#f97316,stroke-width:3px,color:#ffffff
     
-    class F,G,H,I external
+    class F,G,H external
     class A ui
     class B,C,D backend
     class E streaming
@@ -218,7 +203,7 @@ graph TB
             S_SRC["srtsrc (Secondary Input / Auto-Join)"]
             SEL["input-selector<br/>Guarded In-Process Switch"]
             TEE["tee (Distribution)"]
-            SNK["srtsink / udpsink / sdisink<br/>Output Destinations"]
+            SNK["srtsink / udpsink<br/>Output Destinations"]
         end
     end
 
@@ -260,35 +245,25 @@ graph TB
 
 #### Failover Decision Engine & Switch Sequence
 
-`Failover Mode`, `Auto Join`, and `Seamless SDI Failover` control different
-parts of failover:
+`Failover Mode` and `Auto Join` control different parts of failover:
 
 | Setting | What it controls |
 |---------|------------------|
 | **Failover Mode** | Source-selection policy: when to leave a failed source and whether to return to Primary. It does not decide whether both sources remain connected. |
 | **Auto Join** | Source lifetime. When enabled, Primary and Secondary SRT branches run simultaneously so the inactive source stays connected and warm. When disabled, only the selected source runs. |
-| **Seamless SDI Failover** | SDI switch mechanism. When enabled, Blackgate keeps the native pipeline alive, waits for a compatible target keyframe, switches the selector, and normalizes MPEG-TS timing and continuity. It requires Auto Join. |
 
 Common configurations:
 
-| Auto Join | Seamless SDI | Result |
-|-----------|--------------|--------|
-| Off | Off | Only active source receives data. Backup starts or reconnects when selected. |
-| On | Off | Both sources stay warm during normal operation, but an SDI source change still restarts the complete native pipeline. Both SRT input sessions disconnect and reconnect during that restart. |
-| On | On | Both sources stay warm and a compatible SDI source change occurs inside the running pipeline. SRT input sessions remain connected. |
+| Auto Join | Result |
+|-----------|--------|
+| Off | Only active source receives data. Backup starts or reconnects when selected. |
+| On | Both sources stay warm, and a source switch happens inside the running pipeline via the input selector. SRT input sessions remain connected. |
 
 For SRT listener inputs, a full pipeline restart closes both listening sockets;
 encoder callers therefore reconnect when the sockets reopen. Auto Join cannot
 preserve connections across a process restart. `Keep Listening` is separate:
 it controls listener behavior after a sender disconnects, not whether failover
 uses an in-process switch.
-
-Seamless SDI mode currently requires matching encoder and MPEG-TS structure:
-codec configuration, video/audio format, program layout, and PIDs. If metadata
-is unavailable or incompatible, Blackgate rejects the in-process switch and
-uses restart fallback. A compatible switch minimizes disruption but cannot
-guarantee zero lost frames because target-keyframe arrival and downstream
-decoder buffering still affect recovery time.
 
 ```mermaid
 sequenceDiagram
@@ -307,22 +282,9 @@ sequenceDiagram
     PS--xRH: Network Loss / Stream Invalid (0 B/s or stall)
     RH->>RH: Evaluate Health (Primary: INVALID, Secondary: VALID)
 
-    alt SDI route with Seamless SDI Failover enabled
-        RH->>C: Request guarded switch to Secondary
-        C->>C: Validate MPEG-TS map and wait for target keyframe
-        C->>C: Switch active pad and normalize PCR/PTS/DTS/continuity
-        C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
-        Note over PS, SS: Both SRT input sessions remain connected
-    else SDI route without Seamless SDI Failover
-        RH->>RH: Persist active_source, close ports
-        RH->>C: Respawn pipeline (~250ms) born on Secondary
-        Note over PS, SS: Both SRT sessions disconnect and reconnect
-        Note over C: SDI recovers after reconnect, latency, and first decodable frame
-    else Non-SDI route
-        RH->>C: Send stdin JSON: {"command": "switch-source", "target": "secondary"}
-        C->>C: Switch input-selector active-pad -> sink_1 (Secondary)
-        C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
-    end
+    RH->>C: Send stdin JSON: {"command": "switch-source", "target": "secondary"}
+    C->>C: Switch input-selector active-pad -> sink_1 (Secondary)
+    C-->>RH: stdout Event: SOURCE_SWITCHED:secondary
     RH->>Op: Broadcast WebSocket Failover Event & Dual Stats
 
     Note over PS, SS: Primary Stream Recovers
@@ -333,16 +295,11 @@ sequenceDiagram
         RH->>RH: Hold Secondary active position while Secondary is healthy
     else manual-switchback / manual
         Op->>RH: Operator clicks [ Switch to Primary ]
-        RH->>RH: Switch executes via the same route-type paths
+        RH->>RH: Switch executes via the same switch path as above
     end
 ```
 
-**Why restart fallback remains**: switching directly between feeds from
-different muxers can starve SDI demuxer/decoder pads or feed incompatible codec
-state into the decoder. Guarded Seamless SDI mode prevents that by requiring
-matching MPEG-TS maps and codec configuration, waiting for a target keyframe,
-and normalizing timestamps and continuity counters. Incompatible or unknown
-feeds use deterministic pipeline restart instead. Full test procedure:
+Full failover test procedure:
 [`docs/failover-runbook.md`](./docs/failover-runbook.md).
 
 ### Technology Stack
@@ -355,7 +312,6 @@ feeds use deterministic pipeline restart instead. Full test procedure:
 | **Stats** | ETS + Registry | In-memory real-time statistics |
 | **Streaming** | C + GStreamer | High-performance video processing |
 | **Transport** | Haivision SRT | Secure, reliable UDP-based streaming |
-| **SDI Output** | Blackmagic DeckLink + GStreamer | Hardware video output via decodebin |
 | **IPC** | Unix Socket | Low-latency backend ↔ pipeline communication |
 
 ---
@@ -414,7 +370,7 @@ brew install gstreamer cjson srt cmocka pkg-config elixir node yarn
 
 ## Production Deployment
 
-### Option 1: Baremetal (Recommended for SDI)
+### Option 1: Baremetal
 
 ```bash
 # 1. Install dependencies
@@ -462,8 +418,6 @@ docker compose down
 ```
 
 Access: http://localhost:4000
-
-> **Note:** For SDI output via Docker, the host must have Blackmagic Desktop Video drivers installed and device passthrough configured in `docker-compose.yml`.
 
 ### Commands Reference
 
@@ -513,7 +467,7 @@ All other endpoints require `Authorization: Bearer <token>` header.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/routes/:id/destinations` | List destinations |
-| `POST` | `/api/routes/:id/destinations` | Add destination (SRT, UDP, or SDI) |
+| `POST` | `/api/routes/:id/destinations` | Add destination (SRT or UDP) |
 | `PUT` | `/api/routes/:id/destinations/:dest_id` | Update destination |
 | `DELETE` | `/api/routes/:id/destinations/:dest_id` | Remove destination |
 
@@ -563,19 +517,6 @@ All other endpoints require `Authorization: Bearer <token>` header.
 
 ---
 
-## SDI Hardware Setup
-
-For SDI output via Blackmagic DeckLink:
-
-1. **Install Blackmagic Desktop Video driver** on the host (creates `/dev/blackmagic/*`)
-2. **Install GStreamer libav**: `sudo apt install gstreamer1.0-libav`
-3. **Verify**: `gst-inspect-1.0 decklinkvideosink`
-4. **Test**: `gst-launch-1.0 videotestsrc ! videoconvert ! "video/x-raw,format=UYVY,width=1920,height=1080,framerate=25/1" ! decklinkvideosink device-number=0 mode=1080p25`
-
-See [SDI_FIXES.md](./SDI_FIXES.md) for detailed hardware setup, device mapping, and troubleshooting.
-
----
-
 ## License
 
 Blackgate is proprietary software developed by [Visual Alchemy](https://github.com/visual-alchemy). All rights reserved. A valid license key is required for production use.
@@ -586,7 +527,6 @@ Blackgate is proprietary software developed by [Visual Alchemy](https://github.c
 
 - [ROADMAP](./ROADMAP.md) — Development roadmap & feature backlog
 - [CHANGELOG](./CHANGELOG.md) — Version history
-- [SDI_FIXES](./SDI_FIXES.md) — SDI output setup, device mapping, troubleshooting
 
 ---
 

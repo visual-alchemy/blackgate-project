@@ -1,18 +1,34 @@
 defmodule Blackgate.DbSdiValidationTest do
   use ExUnit.Case, async: false
   alias Blackgate.Db
+  alias Blackgate.License
 
   @sdi_error "SDI output not supported on Blackgate Lite"
 
-  # The test environment does not always keep the application-started Khepri
-  # store alive, so ensure a store is running before exercising Db.
   setup do
-    case :khepri.start("/tmp/blackgate_db_sdi_test_khepri") do
-      {:ok, :khepri} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, :already_started} -> :ok
-      other -> flunk("cannot start khepri: #{inspect(other)}")
-    end
+    original = :sys.get_state(License)
+
+    :sys.replace_state(License, fn state ->
+      Map.put(state, :cache, %{
+        status: :licensed,
+        deadline: nil,
+        offline_deadline: nil,
+        max_routes: 16,
+        plan: "pro",
+        client: "Lite test"
+      })
+    end)
+
+    send(License, :checkpoint)
+    :sys.get_state(License)
+    :khepri.delete_many("routes/**")
+
+    on_exit(fn ->
+      :khepri.delete_many("routes/**")
+      :sys.replace_state(License, fn _ -> original end)
+      send(License, :checkpoint)
+      :sys.get_state(License)
+    end)
 
     :ok
   end
@@ -50,6 +66,19 @@ defmodule Blackgate.DbSdiValidationTest do
              })
   end
 
+  test "update_destination/3 rejects changing a destination to SDI" do
+    {:ok, route} = Db.create_route(%{"name" => "sdi-reject-dest-update-test"})
+
+    {:ok, destination} =
+      Db.create_destination(route["id"], %{
+        "schema" => "SRT",
+        "schema_options" => %{"localaddress" => "127.0.0.1", "localport" => 4203}
+      })
+
+    assert {:error, @sdi_error} =
+             Db.update_destination(route["id"], destination["id"], %{"schema" => "SDI"})
+  end
+
   test "non-SDI route creation still succeeds" do
     attrs = %{
       "name" => "sdi-reject-allowed-test",
@@ -57,6 +86,20 @@ defmodule Blackgate.DbSdiValidationTest do
         %{
           "schema" => "SRT",
           "schema_options" => %{"localaddress" => "127.0.0.1", "localport" => 4202}
+        }
+      ]
+    }
+
+    assert {:ok, %{"id" => _}} = Db.create_route(attrs)
+  end
+
+  test "UDP route creation still succeeds" do
+    attrs = %{
+      "name" => "udp-allowed-test",
+      "destinations" => [
+        %{
+          "schema" => "UDP",
+          "schema_options" => %{"host" => "127.0.0.1", "port" => 4204}
         }
       ]
     }

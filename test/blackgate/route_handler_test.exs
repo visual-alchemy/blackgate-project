@@ -14,7 +14,6 @@ defmodule Blackgate.RouteHandlerTest do
     # Clear registry stats for test routes if they exist
     try do
       :ets.delete(:route_stats, "test_route")
-      :ets.delete(:route_stats, "test_route_sdi")
     rescue
       _ -> :ok
     end
@@ -41,26 +40,6 @@ defmodule Blackgate.RouteHandlerTest do
                  "localport" => 4202,
                  "mode" => "listener"
                }
-             }
-           ]
-         }}
-
-      "test_route_sdi", _assoc ->
-        {:ok,
-         %{
-           "id" => "test_route_sdi",
-           "schema" => "SRT",
-           "schema_options" => %{
-             "localaddress" => "127.0.0.1",
-             "localport" => 4201,
-             "mode" => "listener"
-           },
-           "destinations" => [
-             %{
-               "schema" => "SDI",
-               "device-number" => 2,
-               "video-mode" => "1080p25",
-               "interlaced" => false
              }
            ]
          }}
@@ -161,6 +140,11 @@ defmodule Blackgate.RouteHandlerTest do
     assert sink["rcvbuf"] == 8_000_000
     assert sink["oheadbw"] == 30
     assert sink["maxbw"] == 50_000_000
+  end
+
+  test "sink_from_record rejects unsupported SDI destinations" do
+    assert {:error, :invalid_destination} =
+             RouteHandler.sink_from_record(%{"schema" => "SDI", "schema_options" => %{}})
   end
 
   test "source_from_record with SRT schema and passphrase" do
@@ -336,8 +320,6 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_count: 0,
       last_bytes_received: 0,
       last_bytes_changed_at: now,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now,
       # 10 seconds ago (grace period is 30s)
       started_at: now - 10_000,
       consecutive_startup_crashes: 0
@@ -363,8 +345,6 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_count: 0,
       last_bytes_received: 100,
       last_bytes_changed_at: now - 20_000,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now - 20_000,
       # past grace period
       started_at: now - 40_000,
       consecutive_startup_crashes: 0
@@ -398,8 +378,6 @@ defmodule Blackgate.RouteHandlerTest do
       last_bytes_received: 100,
       # stalled for 70 seconds (> 60s threshold)
       last_bytes_changed_at: now - 70_000,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now - 70_000,
       started_at: now - 80_000,
       consecutive_startup_crashes: 0
     }
@@ -407,88 +385,6 @@ defmodule Blackgate.RouteHandlerTest do
     # bytes have not changed
     stats = %{"total-bytes-received" => 100}
     Blackgate.RouteStatsRegistry.put_stats("test_route", stats)
-
-    res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
-    assert elem(res, 0) == :next_state
-    assert elem(res, 1) == :reconnecting
-  end
-
-  test "watchdog keeps state when SDI output is flowing" do
-    now = System.monotonic_time(:millisecond)
-
-    data = %{
-      id: "test_route_sdi",
-      route: %{
-        "id" => "test_route_sdi",
-        "destinations" => [
-          %{"schema" => "SDI", "device-number" => 2}
-        ]
-      },
-      port: nil,
-      ffmpeg_port: nil,
-      reconnect_timer: nil,
-      reconnect_started_at: nil,
-      reconnect_count: 0,
-      last_bytes_received: 100,
-      last_bytes_changed_at: now,
-      last_sdi_frames: %{2 => 500},
-      last_sdi_frames_changed_at: now - 20_000,
-      started_at: now - 40_000,
-      consecutive_startup_crashes: 0
-    }
-
-    # Put new frames in stats registry
-    stats = %{
-      "total-bytes-received" => 100,
-      "sdi_video_stats" => [
-        %{"device_number" => 2, "video_frames" => 510}
-      ]
-    }
-
-    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
-
-    assert {:keep_state, updated_data, _} =
-             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
-
-    assert updated_data.last_sdi_frames[2] == 510
-    assert updated_data.last_sdi_frames_changed_at > now - 5000
-  end
-
-  test "watchdog restarts route when SDI playout is frozen" do
-    now = System.monotonic_time(:millisecond)
-
-    data = %{
-      id: "test_route_sdi",
-      route: %{
-        "id" => "test_route_sdi",
-        "destinations" => [
-          %{"schema" => "SDI", "device-number" => 2}
-        ]
-      },
-      port: nil,
-      ffmpeg_port: nil,
-      reconnect_timer: nil,
-      reconnect_started_at: nil,
-      reconnect_count: 0,
-      last_bytes_received: 100,
-      # network is fine
-      last_bytes_changed_at: now,
-      last_sdi_frames: %{2 => 500},
-      # playout frozen for 70 seconds (> 60s threshold)
-      last_sdi_frames_changed_at: now - 70_000,
-      started_at: now - 80_000,
-      consecutive_startup_crashes: 0
-    }
-
-    # SDI frames have not advanced (still 500)
-    stats = %{
-      "total-bytes-received" => 100,
-      "sdi_video_stats" => [
-        %{"device_number" => 2, "video_frames" => 500}
-      ]
-    }
-
-    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
 
     res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
     assert elem(res, 0) == :next_state
@@ -655,11 +551,8 @@ defmodule Blackgate.RouteHandlerTest do
         reconnect_count: 0,
         last_bytes_received: 0,
         last_bytes_changed_at: now,
-        last_sdi_frames: %{},
-        last_sdi_frames_changed_at: now,
         started_at: now - 20_000,
         consecutive_startup_crashes: 0,
-        sdi_audio_last_restart_at: nil,
         active_source: "primary",
         pending_switch: nil,
         pending_switch_token: nil,
@@ -937,34 +830,9 @@ defmodule Blackgate.RouteHandlerTest do
       assert payload["secondary_source"]["uri"] =~ "secondary-host"
 
       assert payload["auto_join"] == true
-      assert payload["seamless_sdi_failover"] == false
       assert payload["active_source"] == "secondary"
       assert is_list(payload["sinks"])
       refute Map.has_key?(payload, "source")
-    end
-
-    test "send_initial_command enables seamless mode only for SDI routes" do
-      path =
-        Path.join(System.tmp_dir!(), "bg_init_sdi_#{System.unique_integer([:positive])}.json")
-
-      port = capture_port(path)
-
-      route =
-        failover_route_with_sinks()
-        |> Map.put("seamless_sdi_failover", true)
-        |> Map.put("destinations", [%{"schema" => "SDI", "schema_options" => %{}}])
-
-      assert :ok = RouteHandler.send_initial_command(port, route)
-      Port.close(port)
-
-      receive do
-        {^port, {:exit_status, _}} -> :ok
-      after
-        1_000 -> :ok
-      end
-
-      {:ok, payload} = path |> read_and_cleanup() |> String.trim() |> Jason.decode()
-      assert payload["seamless_sdi_failover"] == true
     end
 
     test "send_initial_command emits legacy source-only JSON for non-failover route" do
@@ -1135,120 +1003,6 @@ defmodule Blackgate.RouteHandlerTest do
       Port.close(port)
     end
 
-    test "SDI route uses kill/respawn switch path by default" do
-      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
-
-      route =
-        failover_route("maintain-primary")
-        |> Map.put("destinations", [%{"schema" => "SDI", "schema_options" => %{}}])
-
-      data = base_data(%{port: port, route: route})
-
-      assert {:next_state, :reconnecting, new_data, _actions} =
-               RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
-
-      assert is_nil(new_data.port)
-      assert new_data.active_source == "secondary"
-      assert new_data.pending_switch == "secondary"
-    end
-
-    test "seamless-enabled SDI route switches in-process and falls back on native rejection" do
-      path =
-        Path.join(System.tmp_dir!(), "bg_sdi_switch_#{System.unique_integer([:positive])}.json")
-
-      port = Port.open({:spawn, "cat > #{path}"}, [:binary, :exit_status])
-
-      route =
-        failover_route("maintain-primary")
-        |> Map.put("destinations", [%{"schema" => "SDI", "schema_options" => %{}}])
-        |> Map.put("seamless_sdi_failover", true)
-        |> Map.put("auto_join", true)
-
-      data = base_data(%{port: port, route: route})
-
-      assert {:keep_state, pending} =
-               RouteHandler.handle_event(:cast, {:switch_source, "secondary"}, :started, data)
-
-      assert pending.port == port
-      assert pending.pending_switch == "secondary"
-
-      assert {:keep_state, rejected} =
-               RouteHandler.handle_event(
-                 :info,
-                 {port, {:data, "SOURCE_SWITCH_REJECTED:secondary:incompatible-mpegts-map\n"}},
-                 :started,
-                 pending
-               )
-
-      assert_receive {:restart_for_source_switch, "secondary"}
-
-      assert {:next_state, :reconnecting, restarting, _actions} =
-               RouteHandler.handle_event(
-                 :info,
-                 {:restart_for_source_switch, "secondary"},
-                 :started,
-                 rejected
-               )
-
-      assert is_nil(restarting.port)
-      assert restarting.active_source == "secondary"
-      File.rm(path)
-    end
-  end
-
-  # =========================================================================
-  # 4-MODE FAILOVER ENGINE (T6 evaluate_failover/1)
-  # =========================================================================
-
-  describe "failover mode engine" do
-    defp engine_state(mode, health, active) do
-      port = Port.open({:spawn, "cat"}, [:binary, :exit_status])
-
-      base_data(%{
-        port: port,
-        route: failover_route(mode),
-        active_source: active,
-        source_health: health
-      })
-    end
-
-    test "maintain-primary: primary INVALID -> switch to secondary" do
-      data = engine_state("maintain-primary", %{primary: :invalid, secondary: :valid}, "primary")
-      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "primary"
-      assert new_data.pending_switch == "secondary"
-      assert new_data.failover_switched == true
-      Port.close(data.port)
-    end
-
-    test "maintain-primary: primary VALID again -> switch back" do
-      data = engine_state("maintain-primary", %{primary: :valid, secondary: :valid}, "secondary")
-      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "secondary"
-      assert new_data.pending_switch == "primary"
-      Port.close(data.port)
-    end
-
-    test "maintain-stability: primary INVALID -> switch to secondary" do
-      data =
-        engine_state("maintain-stability", %{primary: :invalid, secondary: :valid}, "primary")
-
-      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "primary"
-      assert new_data.pending_switch == "secondary"
-      Port.close(data.port)
-    end
-
-    test "maintain-stability: secondary INVALID (primary VALID) -> switch back" do
-      data =
-        engine_state("maintain-stability", %{primary: :valid, secondary: :invalid}, "secondary")
-
-      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
-      assert new_data.active_source == "secondary"
-      assert new_data.pending_switch == "primary"
-      Port.close(data.port)
-    end
-
     test "manual-switchback: primary INVALID -> switch to secondary" do
       data =
         engine_state("manual-switchback", %{primary: :invalid, secondary: :valid}, "primary")
@@ -1274,20 +1028,6 @@ defmodule Blackgate.RouteHandlerTest do
       {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
       assert new_data.active_source == "primary"
       refute new_data.failover_switched
-      Port.close(data.port)
-    end
-
-    test "automatic SDI failover schedules restart instead of selector command" do
-      data =
-        engine_state("maintain-primary", %{primary: :invalid, secondary: :valid}, "primary")
-
-      route = Map.put(data.route, "destinations", [%{"schema" => "SDI"}])
-
-      {:keep_state, new_data} =
-        RouteHandler.evaluate_failover_for_test(%{data | route: route})
-
-      assert new_data.pending_switch == "secondary"
-      assert_receive {:restart_for_source_switch, "secondary"}
       Port.close(data.port)
     end
 

@@ -10,7 +10,6 @@ import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, routesApi, networkApi } from '../../utils/api';
-import { SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
 import React from 'react';
 
 const { Title } = Typography;
@@ -29,7 +28,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     const [destData, setDestData] = useState(null);
     const [routeLoading, setRouteLoading] = useState(true);
     const [interfaces, setInterfaces] = useState([]);
-    const [sdiPortUsage, setSdiPortUsage] = useState({});
 
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
@@ -102,27 +100,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 console.error('Error fetching network interfaces:', error);
             });
     }, []);
-
-    // Fetch SDI port usage across all routes
-    useEffect(() => {
-        routesApi.getAll()
-            .then(result => {
-                const usage = {};
-                (result.data || []).forEach(route => {
-                    (route.destinations || []).forEach(dest => {
-                        if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
-                            // Skip if this is the current destination being edited
-                            if (dest.id === destId) return;
-                            usage[dest.schema_options.device_number] = route.name;
-                        }
-                    });
-                });
-                setSdiPortUsage(usage);
-            })
-            .catch(error => {
-                console.error('Error fetching SDI port usage:', error);
-            });
-    }, [destId]);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -237,7 +214,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
-                                            <Radio.Button value="SDI">SDI</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -529,63 +505,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                         value: iface.name
                                                                     }))
                                                             ]}
-                                                        />
-                                                    </Form.Item>
-                                                </>
-                                            )
-                                        }
-                                    </Form.Item>
-
-                                    {/* SDI specific options (DeckLink Duo 2) */}
-                                    <Form.Item noStyle dependencies={['schema']}>
-                                        {({ getFieldValue }) =>
-                                            getFieldValue('schema') === 'SDI' && (
-                                                <>
-                                                    <Form.Item
-                                                        label="SDI Output Port"
-                                                        name={['schema_options', 'device_number']}
-                                                        required
-                                                        extra="DeckLink Duo 2 port number. This card provides 4 SDI channels (0-3)."
-                                                    >
-                                                        <Select
-                                                            placeholder="Select SDI port"
-                                                            options={SDI_PORT_OPTIONS.map(opt => ({
-                                                                ...opt,
-                                                                label: sdiPortUsage[opt.value]
-                                                                    ? `${opt.label} (used by ${sdiPortUsage[opt.value]})`
-                                                                    : opt.label,
-                                                                disabled: !!sdiPortUsage[opt.value],
-                                                            }))}
-                                                            style={{ width: '280px' }}
-                                                        />
-                                                    </Form.Item>
-
-                                                    <Form.Item
-                                                        label="Video Mode"
-                                                        name={['schema_options', 'video_mode']}
-                                                        required
-                                                        extra="Progressive modes use frame rate. Interlaced modes show complete frames per second and fields per second."
-                                                    >
-                                                        <Select
-                                                            placeholder="Select video mode"
-                                                            options={[
-                                                                { label: 'Auto — detect source format (fallback: 1080p25)', value: 0 },
-                                                                { label: '1080p25 — 25 fps', value: 9 },
-                                                                { label: '1080p30 — 30 fps', value: 11 },
-                                                                { label: '1080p50 — 50 fps', value: 12 },
-                                                                { label: '1080p60 — 60 fps', value: 13 },
-                                                                { label: '1080i50 — 25 fps / 50 fields', value: 7 },
-                                                                { label: '1080i60 — 30 fps / 60 fields', value: 8 },
-                                                                { label: '720p50 — 50 fps', value: 14 },
-                                                                { label: '720p60 — 60 fps', value: 15 },
-                                                                { label: '576i50 (PAL) — 25 fps / 50 fields', value: 17 },
-                                                                { label: '480i60 (NTSC) — 30 fps / 60 fields', value: 18 },
-                                                                { label: '2160p25 (4K) — 25 fps', value: 22 },
-                                                                { label: '2160p30 (4K) — 30 fps', value: 23 },
-                                                                { label: '2160p50 (4K) — 50 fps', value: 24 },
-                                                                { label: '2160p60 (4K) — 60 fps', value: 25 },
-                                                            ]}
-                                                            style={{ width: '250px' }}
                                                         />
                                                     </Form.Item>
                                                 </>
