@@ -86,6 +86,29 @@ defmodule Blackgate.LicenseEnforcementTest do
     :sys.get_state(License)
   end
 
+  defp license_payload(capacity, expiry \\ nil) do
+    %{
+      "client_name" => "RANS",
+      "plan_tier" => "pro",
+      "max_routes" => capacity,
+      "created_at" => DateTime.to_iso8601(Blackgate.LicenseTestClock.utc_now()),
+      "expires_at" => expiry
+    }
+  end
+
+  defp wait_until(fun, attempts \\ 50)
+
+  defp wait_until(fun, attempts) when attempts > 0 do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp wait_until(_fun, 0), do: flunk("condition did not become true")
+
   test "concurrent starts reserve capacity; status edits cannot free slots" do
     ids = Enum.map(1..12, &route("limit-#{&1}"))
 
@@ -283,5 +306,115 @@ defmodule Blackgate.LicenseEnforcementTest do
     assert conn.resp_body =~ "Admin role required"
     :khepri.delete(["users", "audit-operator"])
     Cachex.del(Blackgate.Cache, "auth_session:audit-token")
+  end
+
+  test "manual sync applies an extended entitlement immediately" do
+    expiry =
+      Blackgate.LicenseTestClock.utc_now() |> DateTime.add(90 * 86_400) |> DateTime.to_iso8601()
+
+    :meck.expect(Req, :post!, fn _, _ ->
+      %{status: 200, body: %{"valid" => true, "license" => license_payload(8, expiry)}}
+    end)
+
+    assert {:ok, synced} = License.sync_now()
+    assert synced.plan == "pro"
+    assert synced.max_routes == 8
+    assert {:ok, synced_expiry, _} = DateTime.from_iso8601(synced.expires_at)
+    assert {:ok, expected_expiry, _} = DateTime.from_iso8601(expiry)
+    assert DateTime.to_unix(synced_expiry) == DateTime.to_unix(expected_expiry)
+    assert synced.can_sync
+    assert synced.last_verified_at
+  end
+
+  test "concurrent manual sync callers share one request and cooldown rate limits repeats" do
+    parent = self()
+    {:ok, requests} = Agent.start_link(fn -> 0 end)
+
+    :meck.expect(Req, :post!, fn _, _ ->
+      Agent.update(requests, &(&1 + 1))
+      send(parent, {:verification_started, self()})
+      receive do: (:continue -> :ok)
+      %{status: 200, body: %{"valid" => true, "license" => license_payload(4)}}
+    end)
+
+    callers = Enum.map(1..3, fn _ -> Task.async(&License.sync_now/0) end)
+    assert_receive {:verification_started, verifier}, 1_000
+    wait_until(fn -> length(Map.get(:sys.get_state(License), :waiters, [])) == 3 end)
+    send(verifier, :continue)
+    assert Enum.all?(callers, &match?({:ok, _}, Task.await(&1)))
+    assert Agent.get(requests, & &1) == 1
+    assert {:error, :rate_limited, retry_after} = License.sync_now()
+    assert retry_after in 1..30
+    assert Agent.get(requests, & &1) == 1
+  end
+
+  test "manual sync preserves cached entitlement when server is unreachable" do
+    before = License.get_license()
+    :meck.expect(Req, :post!, fn _, _ -> raise "offline-secret-sentinel" end)
+
+    assert {:error, :unreachable, "Cannot reach license server"} = License.sync_now()
+    after_sync = License.get_license()
+    assert after_sync.plan == before.plan
+    assert after_sync.max_routes == before.max_routes
+    assert after_sync.expires_at == before.expires_at
+    assert after_sync.offline_deadline == before.offline_deadline
+    assert after_sync.last_verified_at == before.last_verified_at
+  end
+
+  test "sync endpoint requires Admin and never returns the license key" do
+    :meck.expect(Req, :post!, fn _, _ ->
+      %{status: 200, body: %{"valid" => true, "license" => license_payload(4)}}
+    end)
+
+    for {id, role, token} <- [
+          {"sync-operator", "operator", "sync-operator-token"},
+          {"sync-admin", "admin", "sync-admin-token"}
+        ] do
+      :ok =
+        :khepri.put(["users", id], %{
+          "id" => id,
+          "username" => id,
+          "role" => role,
+          "enabled" => true
+        })
+
+      {:ok, true} = Cachex.put(Blackgate.Cache, "auth_session:#{token}", %{"id" => id})
+    end
+
+    opts = BlackgateWeb.Router.init([])
+
+    assert Plug.Test.conn(:post, "/api/license/sync")
+           |> BlackgateWeb.Router.call(opts)
+           |> Map.get(:status) == 403
+
+    assert Plug.Test.conn(:post, "/api/license/sync")
+           |> Plug.Conn.put_req_header("authorization", "Bearer sync-operator-token")
+           |> BlackgateWeb.Router.call(opts)
+           |> Map.get(:status) == 403
+
+    conn =
+      Plug.Test.conn(:post, "/api/license/sync")
+      |> Plug.Conn.put_req_header("authorization", "Bearer sync-admin-token")
+      |> BlackgateWeb.Router.call(opts)
+
+    assert conn.status == 200
+    refute conn.resp_body =~ "test-license"
+    refute conn.resp_body =~ "license_key"
+    assert Jason.decode!(conn.resp_body)["data"]["max_routes"] == 4
+
+    rate_limited =
+      Plug.Test.conn(:post, "/api/license/sync")
+      |> Plug.Conn.put_req_header("authorization", "Bearer sync-admin-token")
+      |> BlackgateWeb.Router.call(opts)
+
+    assert rate_limited.status == 429
+    assert Plug.Conn.get_resp_header(rate_limited, "retry-after") != []
+    assert Jason.decode!(rate_limited.resp_body)["retry_after_seconds"] in 1..30
+
+    Enum.each(["sync-operator", "sync-admin"], &:khepri.delete(["users", &1]))
+
+    Enum.each(["sync-operator-token", "sync-admin-token"], fn token ->
+      Cachex.del(Blackgate.Cache, "auth_session:#{token}")
+    end)
   end
 end

@@ -49,6 +49,7 @@ defmodule BlackgateWeb.Router do
     post "/system/updates", UpdateController, :upload
     post "/system/updates/:version/deploy", UpdateController, :deploy
     post "/license/activate", LicenseController, :activate
+    post "/license/sync", LicenseController, :sync
     delete "/license/deactivate", LicenseController, :deactivate
   end
 

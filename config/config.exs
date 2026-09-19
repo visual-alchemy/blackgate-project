@@ -35,7 +35,9 @@ config :phoenix, :filter_parameters, [
   "passphrase",
   "token",
   "secret",
-  "authorization"
+  "authorization",
+  "license_key",
+  "key"
 ]
 
 # Import environment specific config. This must remain at the bottom

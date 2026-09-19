@@ -5,10 +5,12 @@ defmodule Blackgate.License do
   @table :blackgate_license
   @path ["license", "enforcement_v1"]
   @heartbeat :timer.hours(6)
+  @manual_sync_cooldown_seconds 30
 
   def start_link(args), do: GenServer.start_link(__MODULE__, args, name: __MODULE__)
   def activate(key), do: GenServer.call(__MODULE__, {:activate, key}, 30_000)
   def deactivate, do: GenServer.call(__MODULE__, :deactivate)
+  def sync_now, do: GenServer.call(__MODULE__, :sync_now, 30_000)
   def valid?, do: not get_license().expired
 
   def utc_now do
@@ -65,11 +67,14 @@ defmodule Blackgate.License do
       last_verified_at: iso(Map.get(cache, :verified_at)),
       days_remaining:
         if(is_integer(expiry), do: max(div(expiry - now + 86_399, 86_400), 0), else: 9999),
-      verification: Map.get(cache, :verification, "none")
+      verification: Map.get(cache, :verification, "none"),
+      can_sync: is_binary(Map.get(cache, :key))
     }
   end
 
-  defp blocked(reason), do: %{status: :unlicensed, expired: true, reason: reason, max_routes: 0}
+  defp blocked(reason),
+    do: %{status: :unlicensed, expired: true, reason: reason, max_routes: 0, can_sync: false}
+
   defp iso(nil), do: nil
   defp iso(seconds), do: seconds |> DateTime.from_unix!() |> DateTime.to_iso8601()
 
@@ -120,7 +125,15 @@ defmodule Blackgate.License do
         _ -> raise "Cannot load license enforcement state"
       end
 
-    state = publish(%{cache: cache, generation: make_ref(), checking: false})
+    state =
+      publish(%{
+        cache: cache,
+        generation: make_ref(),
+        checking: false,
+        waiters: [],
+        last_manual_sync_at: nil
+      })
+
     send(self(), :heartbeat)
     Process.send_after(self(), :checkpoint, 60_000)
     {:ok, state}
@@ -183,6 +196,8 @@ defmodule Blackgate.License do
 
   @impl true
   def handle_call({:activate, key}, _from, state) do
+    state = cancel_pending_verification(state)
+
     case verify(key) do
       {:ok, payload} ->
         case from_payload(Map.put(payload, "license_key", key), effective_now(state)) do
@@ -200,7 +215,26 @@ defmodule Blackgate.License do
     end
   end
 
+  def handle_call(:sync_now, from, state) do
+    cond do
+      not is_binary(Map.get(state.cache, :key)) ->
+        {:reply, {:error, :not_activated, "No activated license is available to sync."}, state}
+
+      state.checking ->
+        {:noreply, %{state | waiters: [from | state.waiters]}}
+
+      retry_after = manual_sync_retry_after(state) ->
+        {:reply, {:error, :rate_limited, retry_after}, state}
+
+      true ->
+        state = %{state | waiters: [from | state.waiters]}
+        {:noreply, begin_verification(state)}
+    end
+  end
+
   def handle_call(:deactivate, _from, state) do
+    state = cancel_pending_verification(state)
+
     cache =
       if Map.get(state.cache, :ever_licensed, false) do
         %{
@@ -227,30 +261,36 @@ defmodule Blackgate.License do
   def handle_info({:verified, generation, result}, %{generation: generation} = state) do
     state = %{state | checking: false}
 
-    state =
+    {state, reply} =
       case result do
         {:ok, payload} ->
           case from_payload(
                  Map.put(payload, "license_key", state.cache.key),
                  effective_now(state)
                ) do
-            {:ok, cache} -> publish(%{state | cache: cache})
-            _ -> revoke(state, "Invalid license response")
+            {:ok, cache} ->
+              state = publish(%{state | cache: cache})
+              {state, {:ok, get_license()}}
+
+            _ ->
+              state = revoke(state, "Invalid license response")
+              {state, {:ok, get_license()}}
           end
 
         {:error, :revoked, reason} ->
-          revoke(state, reason)
+          state = revoke(state, reason)
+          {state, {:ok, get_license()}}
 
         {:error, :unreachable, reason} ->
           Logger.warning(
             "License validation unavailable: #{reason}; keeping original offline deadline"
           )
 
-          state
+          {state, {:error, :unreachable, reason}}
       end
 
     notify_enforcer()
-    {:noreply, state}
+    {:noreply, reply_to_sync_waiters(state, reply)}
   end
 
   def handle_info({:verified, _, _}, state), do: {:noreply, state}
@@ -272,6 +312,46 @@ defmodule Blackgate.License do
     else
       state
     end
+  end
+
+  defp manual_sync_retry_after(state) do
+    case Map.get(state, :last_manual_sync_at) do
+      last when is_integer(last) ->
+        remaining = last + manual_sync_cooldown_seconds() - monotonic()
+        if remaining > 0, do: remaining, else: false
+
+      _ ->
+        false
+    end
+  end
+
+  defp manual_sync_cooldown_seconds do
+    Application.get_env(
+      :blackgate,
+      :license_manual_sync_cooldown_seconds,
+      @manual_sync_cooldown_seconds
+    )
+  end
+
+  defp reply_to_sync_waiters(state, reply) do
+    waiters = Map.get(state, :waiters, [])
+    Enum.each(waiters, &GenServer.reply(&1, reply))
+
+    state
+    |> Map.put(:waiters, [])
+    |> Map.put(
+      :last_manual_sync_at,
+      if(waiters == [], do: Map.get(state, :last_manual_sync_at), else: monotonic())
+    )
+  end
+
+  defp cancel_pending_verification(state) do
+    state
+    |> reply_to_sync_waiters(
+      {:error, :superseded, "License state changed during synchronization."}
+    )
+    |> Map.put(:checking, false)
+    |> Map.put(:generation, make_ref())
   end
 
   defp revoke(state, reason) do
@@ -320,7 +400,7 @@ defmodule Blackgate.License do
           {:ok, body["license"]}
 
         response.status in [401, 403, 404] ->
-          {:error, :revoked, body["error"] || "License rejected"}
+          {:error, :revoked, rejection_reason(body)}
 
         true ->
           {:error, :unreachable, "Unexpected server response"}
@@ -329,6 +409,26 @@ defmodule Blackgate.License do
       _ -> {:error, :unreachable, "Cannot reach license server"}
     end
   end
+
+  defp rejection_reason(%{"error" => reason}) when is_binary(reason) do
+    normalized = String.downcase(reason)
+
+    cond do
+      String.contains?(normalized, "locked to another device") ->
+        "License is already locked to another device"
+
+      String.contains?(normalized, "expired") ->
+        "License has expired"
+
+      String.contains?(normalized, "revoked") ->
+        "License was revoked by issuer"
+
+      true ->
+        "License rejected by issuer"
+    end
+  end
+
+  defp rejection_reason(_body), do: "License rejected by issuer"
 
   defp from_payload(payload, now) do
     with max_routes when is_integer(max_routes) and max_routes > 0 <- payload["max_routes"],

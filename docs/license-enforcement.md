@@ -19,6 +19,12 @@ The clock advances from a monotonic anchor while running. A high-water mark is s
 
 Existing legacy cached licenses receive one persisted 24-hour migration window, capped by their original expiration. Boot starts asynchronous server verification immediately. Reboot cannot renew that window. Existing trial first-boot timestamps are retained. Unreadable state fails closed.
 
+## Manual synchronization
+
+Dashboard Admins can use **Sync license now** to request the latest entitlement without restarting the gateway or waiting for the six-hour heartbeat. The Admin-only `POST /api/license/sync` endpoint reuses the heartbeat validator. Concurrent callers join one upstream request, and completed manual requests have a 30-second cooldown.
+
+A successful refresh updates expiry, plan and route capacity before notifying the license enforcer. Revocation, expiry and capacity reduction therefore use the same serialized enforcement path as scheduled verification. Reactivation updates the entitlement but does not start stopped routes. Network and server failures return HTTP 503 while preserving the cached entitlement, last verification time and original offline deadline. API responses and logs omit license keys, machine IDs and upstream response bodies.
+
 ## Backup changes
 
 Binary configuration backups contain only routes, destinations and interface aliases. Legacy full backups are filtered on import. License records, validation deadlines, trial history, accounts and unknown namespaces cannot be replaced through restore. Restore requires Admin, stops running routes and restores their saved status as stopped. Trial restore cannot exceed two saved routes.
@@ -33,6 +39,6 @@ Do not silently require a new envelope from the current server; that would lock 
 
 ## Validation
 
-`test/blackgate/license_enforcement_test.exs` uses actual route supervisors, Khepri and an injectable clock, with hardware/network boundaries mocked. It exercises concurrent admission and creation, restart capacity, forged status, expiry/cutoff/renewal, offline restarts, durable revocation, backup protection, downgrade, migration and restore authorization.
+`test/blackgate/license_enforcement_test.exs` uses actual route supervisors, Khepri and an injectable clock, with hardware/network boundaries mocked. It exercises concurrent admission and creation, restart capacity, forged status, expiry/cutoff/renewal, offline restarts, durable revocation, backup protection, downgrade, migration, restore authorization, manual refresh deduplication, cooldown, offline preservation and Admin-only API access.
 
 Run tests against isolated storage and socket. Both standard and named-node test startup were verified (117 tests, zero failures); the authorization fixture starts Cachex when needed. Do not reuse a running appliance's database or socket. Frontend production build passed. Physical stream shutdown and client migration must also be tested on spare hardware before client rollout.
