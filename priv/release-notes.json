@@ -1,9 +1,7 @@
 {
-  "version": "2026.09.17.1",
-  "released_on": "2026-09-17",
+  "version": "2026.09.19.1",
+  "released_on": "2026-09-19",
   "changes": [
-    "Added license expiry reminders at 7 days, 3 days, and 24 hours remaining to help plan renewals before streams stop.",
-    "Expiry reminders show the exact deadline in your local timezone and UTC.",
-    "Added a changelog in Settings > System showing what is new in the installed release."
+    "Added Sync license now so administrators can immediately refresh license status and route capacity."
   ]
 }
