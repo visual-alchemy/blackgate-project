@@ -23,6 +23,7 @@ defmodule Blackgate.RouteHandler do
   # Don't check for first 30 seconds after start
   @watchdog_grace_period_ms 30_000
   @switch_ack_timeout_ms 5_000
+  @pipeline_startup_failure_message "Pipeline failed to start repeatedly. Verify the source is reachable and the route configuration is valid."
 
   @impl true
   def callback_mode, do: [:handle_event_function]
@@ -490,7 +491,7 @@ defmodule Blackgate.RouteHandler do
             consecutive = data.consecutive_startup_crashes + 1
 
             if consecutive >= 3 do
-              error_msg = diagnose_hardware_issue()
+              error_msg = @pipeline_startup_failure_message
 
               Logger.error(
                 "RouteHandler: Circuit breaker triggered during reconnect after 3 consecutive failures: #{error_msg}"
@@ -523,7 +524,7 @@ defmodule Blackgate.RouteHandler do
           consecutive = data.consecutive_startup_crashes + 1
 
           if consecutive >= 3 do
-            error_msg = diagnose_hardware_issue()
+            error_msg = @pipeline_startup_failure_message
 
             Logger.error(
               "RouteHandler: Circuit breaker triggered during reconnect rescue after 3 consecutive failures: #{error_msg}"
@@ -1039,7 +1040,7 @@ defmodule Blackgate.RouteHandler do
               Process.send_after(
                 self(),
                 {:switch_ack_timeout, target, token},
-                switch_ack_timeout(data.route)
+                @switch_ack_timeout_ms
               )
 
               {:keep_state,
