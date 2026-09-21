@@ -131,30 +131,26 @@ defmodule Blackgate.Db do
 
   @spec update_destination(String.t(), String.t(), map) :: {:ok, map} | {:error, any}
   def update_destination(route_id, id, data) do
-    path = ["routes", route_id, "destinations", id]
-    now = now()
+    with :ok <- validate_no_sdi(data) do
+      path = ["routes", route_id, "destinations", id]
+      now = now()
 
-    :khepri.transaction(fn ->
-      case :khepri_tx.get(path) do
-        {:ok, destination} ->
-          new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+      :khepri.transaction(fn ->
+        case :khepri_tx.get(path) do
+          {:ok, destination} ->
+            new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
 
-          case validate_no_sdi(new_destination) do
-            :ok ->
-              :ok = :khepri_tx.put(path, new_destination)
-              :khepri_tx.get(path)
+            :ok = :khepri_tx.put(path, new_destination)
+            :khepri_tx.get(path)
 
-            error ->
-              error
-          end
-
-        _ ->
-          {:error, :destination_not_found}
+          _ ->
+            {:error, :destination_not_found}
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        other -> {:error, inspect(other)}
       end
-    end)
-    |> case do
-      {:ok, result} -> result
-      other -> {:error, inspect(other)}
     end
   end
 
