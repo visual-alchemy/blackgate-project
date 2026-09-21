@@ -10,6 +10,10 @@ import Config
 config :blackgate,
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
+# Khepri default timeout is :infinity; bound it so a stalled Ra call
+# returns {:error, :timeout} instead of hanging the caller forever.
+config :khepri, default_timeout: 5_000
+
 # Configures the endpoint
 config :blackgate, BlackgateWeb.Endpoint,
   url: [host: "localhost"],
