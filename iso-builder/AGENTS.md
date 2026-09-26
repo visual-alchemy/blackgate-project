@@ -1,18 +1,18 @@
 # OS Appliance Packaging Context (`iso-builder/`)
 
-Welcome! This folder contains the scripts and preseed configuration to build the custom Debian-based Blackgate Appliance ISO installer.
+This folder builds the Ubuntu-based Blackgate Appliance ISO installer.
 
 ## 🛠️ Technology Stack & Environment
 
-- **Base OS:** Debian 12 (Bookworm) Netinst ISO
-- **Installer Mode:** Preseeded Debian Auto-install / Unattended Installer
-- **Script:** `build.sh` (extracts, preseeds, repacks, and generates target ISO)
+- **Base OS:** Ubuntu 24.04.4 live-server ISO
+- **Installer Mode:** Subiquity autoinstall with NoCloud user-data
+- **Script:** `build.sh` (extracts, injects autoinstall and offline packages, then repacks the ISO)
 
 ## 🚀 Setup & Execution Commands
 
 Run from `iso-builder/` folder:
 - **Build Appliance ISO:**
   ```bash
-  sudo ./build.sh
+  ./build.sh
   ```
-  *Note: Building requires system packages `xorriso`, `squashfs-tools`, and `cpio` installed, and must be executed on a Linux environment with root permissions.*
+  *Note: Run on Linux as an unprivileged user; the script rejects root. Check `build.sh` for required build tools and source ISO.*
