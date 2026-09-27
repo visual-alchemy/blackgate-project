@@ -123,16 +123,6 @@ static const DeckLinkModeEntry decklink_mode_table[] = {
     // SD Interlaced
     { 720,  576, 25,    1,    TRUE,  "pal",       "interleaved"},
     { 720,  480, 30000, 1001, TRUE,  "ntsc",      "interleaved"},
-    { 720,  480, 30,    1,    TRUE,  "ntsc",      "interleaved"},
-    // 4K UHD Progressive
-    {3840, 2160, 24000, 1001, FALSE, "2160p2398", NULL},
-    {3840, 2160, 24,    1,    FALSE, "2160p24",   NULL},
-    {3840, 2160, 25,    1,    FALSE, "2160p25",   NULL},
-    {3840, 2160, 30000, 1001, FALSE, "2160p2997", NULL},
-    {3840, 2160, 30,    1,    FALSE, "2160p30",   NULL},
-    {3840, 2160, 50,    1,    FALSE, "2160p50",   NULL},
-    {3840, 2160, 60000, 1001, FALSE, "2160p5994", NULL},
-    {3840, 2160, 60,    1,    FALSE, "2160p60",   NULL},
     // Sentinel (end of table)
     {0, 0, 0, 0, FALSE, NULL, NULL},
 };
@@ -187,7 +177,10 @@ static char             s_sdi_applied_caps[8][256] = {{0}};
 // add_sink_to_pipeline(); tsdemux/decodebin pad churn across different-muxer
 // feeds is not reliably migratable pad-by-pad, so teardown+rebuild is the
 // strategy. Element[0] is always the branch's input queue (tee peer).
-#define SDI_BRANCH_MAX_ELEMS 24
+// Normal SDI branch has 19 elements. Video and audio gap fallbacks add three
+// each, so reserve headroom for future branch elements rather than silently
+// dropping an element from teardown tracking.
+#define SDI_BRANCH_MAX_ELEMS 32
 static GstElement *s_sdi_branch_elems[8][SDI_BRANCH_MAX_ELEMS];
 static int         s_sdi_branch_n[8] = {0};
 static int         s_sdi_branch_device[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
@@ -202,6 +195,355 @@ static GstElement *s_sdi_branch_asink[8]    = {NULL};
 static GstElement *s_sdi_branch_q2[8]       = {NULL};
 static GstElement *s_sdi_branch_vq[8]       = {NULL};
 static GstElement *s_sdi_branch_aq[8]       = {NULL};
+
+// SDI source-gap fallback state per slot. On a source dropout the local test
+// source keeps the DeckLink sink fed so ScheduleVideoFrame never overflows its
+// ~3-frame pool and posts E_FAIL. slot indexes mirror the s_sdi_*[8] pattern
+// (sink slot, not device number); device is recovered via s_sdi_branch_device.
+static GstElement *s_sdi_vid_selector[8]              = {NULL};
+static GstElement *s_sdi_aud_selector[8]              = {NULL};
+static GstPad     *s_sdi_vid_selector_live_pad[8]     = {NULL};
+static GstPad     *s_sdi_vid_selector_fallback_pad[8] = {NULL};
+static GstPad     *s_sdi_aud_selector_live_pad[8]     = {NULL};
+static GstPad     *s_sdi_aud_selector_fallback_pad[8] = {NULL};
+static GstElement *s_sdi_vid_fallback_caps[8]         = {NULL};
+static GstElement *s_sdi_vid_fallback_valve[8]        = {NULL};
+static GstElement *s_sdi_aud_fallback_valve[8]        = {NULL};
+static gint64      s_sdi_vid_live_grace_until[8]      = {0};
+static guint       s_sdi_gap_watchdog_source_id       = 0;
+static gint64      s_sdi_live_buf_time[8]         = {0};  /* per slot: live-branch frame time (pre-selector) */
+static gint64      s_sdi_live_fresh_since[8]      = {0};  /* per slot: when live last became continuously fresh */
+static gboolean    s_sdi_wd_on_fallback[8]        = {FALSE};  /* per slot: watchdog's view of active source */
+static gboolean    s_sdi_live_probe_added[8]      = {FALSE};  /* per slot: probe installed */
+// Pad probes run on streaming threads while selector changes run on the GLib
+// main context. Protect liveness timestamps/state from a data race.
+static GMutex      s_sdi_gap_state_mutex;
+
+static void sdi_branch_track(int slot, int device_num, GstElement *first, ...);
+static GstPadProbeReturn sdi_live_buf_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
+
+// Frames must be absent this long before the watchdog blacks an SDI output. Derived
+// from the route's configured SRT latency (2x, min 1.5 s) in create_pipeline, so
+// ordinary jitter on a high-latency link does not blank the output.
+static gint64 s_sdi_stall_threshold_us = 2000000;
+
+// Build the always-on black fallback for one SDI video slot:
+//   videotestsrc(is-live, black) → capsfilter → valve → input-selector(fallback pad)
+// The live pad is left unlinked; sdi_video_fallback_link() wires vcaps → live
+// pad and selector → vid_identity once the video chain is ready.
+static GstElement *sdi_video_fallback_create(int slot, GstElement *pipeline)
+{
+    if (slot < 0 || slot > 7 || !pipeline) return NULL;
+
+    GstElement *sel     = gst_element_factory_make("input-selector", NULL);
+    GstElement *testsrc = gst_element_factory_make("videotestsrc", NULL);
+    GstElement *fbcaps  = gst_element_factory_make("capsfilter", NULL);
+    GstElement *valve   = gst_element_factory_make("valve", NULL);
+    if (!sel || !testsrc || !fbcaps || !valve) {
+        g_printerr("SDI slot %d: failed to create video gap-fallback elements\n", slot);
+        if (sel)     gst_object_unref(sel);
+        if (testsrc) gst_object_unref(testsrc);
+        if (fbcaps)  gst_object_unref(fbcaps);
+        if (valve)   gst_object_unref(valve);
+        return NULL;
+    }
+
+    g_object_set(sel,
+                 "sync-streams", FALSE,
+                 "sync-mode", 0,
+                 "cache-buffers", TRUE,
+                 NULL);
+    g_object_set(testsrc, "is-live", TRUE, NULL);
+    gst_util_set_object_arg(G_OBJECT(testsrc), "pattern", "black");
+    // Inactive selector pads can return a flow error to an always-running
+    // source. Valve absorbs fallback buffers until watchdog selects it, while
+    // still forwarding sticky caps/segment events for fast activation.
+    g_object_set(valve, "drop", TRUE, "drop-mode", 1, NULL);
+
+    // Keep DeckLink fed before decoder caps arrive. Auto-detect replaces these
+    // conservative broadcast caps as soon as decoded caps are known.
+    GstCaps *initial_caps = gst_caps_from_string(
+        "video/x-raw,format=UYVY,width=1920,height=1080,framerate=25/1");
+    g_object_set(fbcaps, "caps", initial_caps, NULL);
+    gst_caps_unref(initial_caps);
+
+    gst_bin_add_many(GST_BIN(pipeline), sel, testsrc, fbcaps, valve, NULL);
+
+    GstPad *live_pad     = gst_element_request_pad_simple(sel, "sink_%u");
+    GstPad *fallback_pad = gst_element_request_pad_simple(sel, "sink_%u");
+    if (!live_pad || !fallback_pad) {
+        g_printerr("SDI slot %d: failed to request video selector pads\n", slot);
+        if (live_pad)     gst_object_unref(live_pad);
+        if (fallback_pad) gst_object_unref(fallback_pad);
+        gst_bin_remove_many(GST_BIN(pipeline), sel, testsrc, fbcaps, valve, NULL);
+        return NULL;
+    }
+
+    // always-ok keeps both branches alive while inactive (no NOT_LINKED teardown).
+    g_object_set(G_OBJECT(live_pad), "always-ok", TRUE, NULL);
+    g_object_set(G_OBJECT(fallback_pad), "always-ok", TRUE, NULL);
+
+    // Fallback chain: testsrc → fbcaps → valve → selector fallback pad.
+    GstPad *valve_src = gst_element_get_static_pad(valve, "src");
+    gboolean fb_linked =
+        gst_element_link_many(testsrc, fbcaps, valve, NULL) &&
+        valve_src &&
+        gst_pad_link(valve_src, fallback_pad) == GST_PAD_LINK_OK;
+    if (valve_src) gst_object_unref(valve_src);
+    if (!fb_linked) {
+        g_printerr("SDI slot %d: failed to link video gap-fallback chain\n", slot);
+        gst_bin_remove_many(GST_BIN(pipeline), sel, testsrc, fbcaps, valve, NULL);
+        gst_object_unref(live_pad);
+        gst_object_unref(fallback_pad);
+        return NULL;
+    }
+
+    s_sdi_vid_selector[slot]              = sel;
+    s_sdi_vid_selector_live_pad[slot]     = live_pad;
+    s_sdi_vid_selector_fallback_pad[slot] = fallback_pad;
+    s_sdi_vid_fallback_caps[slot]         = fbcaps;
+    s_sdi_vid_fallback_valve[slot]        = valve;
+
+    // Start on live. Some DeckLink/GStreamer combinations cannot negotiate an
+    // active synthetic source before the real branch has supplied its first
+    // caps, which causes videotestsrc to terminate the whole route. Watchdog
+    // still owns every later live/fallback transition.
+    g_object_set(sel, "active-pad", live_pad, NULL);
+    g_mutex_lock(&s_sdi_gap_state_mutex);
+    // Decodebin cannot emit a frame in first watchdog tick on every route,
+    // especially after an HEVC SRT listener accepts a caller. Do not mistake
+    // normal startup for a source gap: give it route-derived jitter window
+    // before fallback is permitted.
+    s_sdi_live_buf_time[slot] = 0;
+    s_sdi_wd_on_fallback[slot] = FALSE;
+    s_sdi_live_fresh_since[slot] = 0;
+    s_sdi_vid_live_grace_until[slot] =
+        g_get_monotonic_time() + s_sdi_stall_threshold_us;
+    g_mutex_unlock(&s_sdi_gap_state_mutex);
+
+    sdi_branch_track(slot, s_sdi_branch_device[slot], sel, testsrc, fbcaps, valve, NULL);
+
+    return sel;
+}
+
+// Link the live video branch through the per-slot gap selector:
+//   vcaps → selector(live pad) → vid_identity
+static gboolean sdi_video_fallback_link(int slot, GstElement *vcaps, GstElement *vid_identity)
+{
+    if (slot < 0 || slot > 7) return FALSE;
+    GstElement *sel = s_sdi_vid_selector[slot];
+    GstPad *live_pad = s_sdi_vid_selector_live_pad[slot];
+    if (!sel || !live_pad) return FALSE;
+
+    GstPad *vcaps_src = gst_element_get_static_pad(vcaps, "src");
+    gboolean ok =
+        vcaps_src &&
+        gst_pad_link(vcaps_src, live_pad) == GST_PAD_LINK_OK &&
+        gst_element_link(sel, vid_identity);
+    if (vcaps_src) gst_object_unref(vcaps_src);
+
+    if (!s_sdi_live_probe_added[slot]) {
+        GstPad *vsrc = gst_element_get_static_pad(vcaps, "src");
+        if (vsrc) {
+            gst_pad_add_probe(vsrc, GST_PAD_PROBE_TYPE_BUFFER, sdi_live_buf_probe,
+                GINT_TO_POINTER(slot), NULL);
+            gst_object_unref(vsrc);
+        }
+        s_sdi_live_probe_added[slot] = TRUE;
+    }
+
+    return ok;
+}
+
+// Insert an input-selector between aconvert and audiomixmatrix with a silent
+// fallback so the 2→8 upmix invariant is preserved even when audio starves:
+//   aconvert → selector(live) → amix ; audiotestsrc(silence) → capsfilter → valve → selector(fallback)
+static gboolean sdi_audio_fallback_setup(int slot, GstElement *pipeline,
+                                         GstElement *aconvert, GstElement *amix)
+{
+    if (slot < 0 || slot > 7 || !pipeline || !aconvert || !amix) return FALSE;
+
+    GstElement *sel     = gst_element_factory_make("input-selector", NULL);
+    GstElement *testsrc = gst_element_factory_make("audiotestsrc", NULL);
+    GstElement *fbcaps  = gst_element_factory_make("capsfilter", NULL);
+    GstElement *valve   = gst_element_factory_make("valve", NULL);
+    if (!sel || !testsrc || !fbcaps || !valve) {
+        g_printerr("SDI slot %d: failed to create audio gap-fallback elements\n", slot);
+        if (sel)     gst_object_unref(sel);
+        if (testsrc) gst_object_unref(testsrc);
+        if (fbcaps)  gst_object_unref(fbcaps);
+        if (valve)   gst_object_unref(valve);
+        return FALSE;
+    }
+
+    g_object_set(sel,
+                 "sync-streams", FALSE,
+                 "sync-mode", 0,
+                 "cache-buffers", TRUE,
+                 NULL);
+    g_object_set(testsrc, "is-live", TRUE, NULL);
+    gst_util_set_object_arg(G_OBJECT(testsrc), "wave", "silence");
+    g_object_set(valve, "drop", TRUE, "drop-mode", 1, NULL);
+
+    // Leave the raw format unpinned so the silence branch negotiates the same format
+    // as the live branch; a format mismatch on the inactive selector pad can leave
+    // audio stuck on this branch after a gap. Rate is pinned (48 kHz) and the channel
+    // count is pinned because the downstream matrix upmixes exactly 2 channels to 8.
+    GstCaps *acaps = gst_caps_from_string(
+        "audio/x-raw, rate=48000, channels=2, layout=interleaved");
+    g_object_set(fbcaps, "caps", acaps, NULL);
+    gst_caps_unref(acaps);
+
+    gst_bin_add_many(GST_BIN(pipeline), sel, testsrc, fbcaps, valve, NULL);
+
+    GstPad *live_pad     = gst_element_request_pad_simple(sel, "sink_%u");
+    GstPad *fallback_pad = gst_element_request_pad_simple(sel, "sink_%u");
+    if (!live_pad || !fallback_pad) {
+        g_printerr("SDI slot %d: failed to request audio selector pads\n", slot);
+        if (live_pad)     gst_object_unref(live_pad);
+        if (fallback_pad) gst_object_unref(fallback_pad);
+        gst_bin_remove_many(GST_BIN(pipeline), sel, testsrc, fbcaps, valve, NULL);
+        return FALSE;
+    }
+
+    g_object_set(G_OBJECT(live_pad), "always-ok", TRUE, NULL);
+    g_object_set(G_OBJECT(fallback_pad), "always-ok", TRUE, NULL);
+
+    // Live: aconvert → selector live pad; selector → amix.
+    // Fallback: testsrc → fbcaps → valve → selector fallback pad.
+    GstPad *aconvert_src = gst_element_get_static_pad(aconvert, "src");
+    GstPad *valve_src    = gst_element_get_static_pad(valve, "src");
+    gboolean ok =
+        aconvert_src &&
+        gst_pad_link(aconvert_src, live_pad) == GST_PAD_LINK_OK &&
+        gst_element_link_many(testsrc, fbcaps, valve, NULL) &&
+        valve_src &&
+        gst_pad_link(valve_src, fallback_pad) == GST_PAD_LINK_OK &&
+        gst_element_link(sel, amix);
+    if (aconvert_src) gst_object_unref(aconvert_src);
+    if (valve_src)    gst_object_unref(valve_src);
+    if (!ok) {
+        g_printerr("SDI slot %d: failed to link audio gap-fallback chain\n", slot);
+        gst_bin_remove_many(GST_BIN(pipeline), sel, testsrc, fbcaps, valve, NULL);
+        gst_object_unref(live_pad);
+        gst_object_unref(fallback_pad);
+        return FALSE;
+    }
+
+    s_sdi_aud_selector[slot]              = sel;
+    s_sdi_aud_selector_live_pad[slot]     = live_pad;
+    s_sdi_aud_selector_fallback_pad[slot] = fallback_pad;
+    s_sdi_aud_fallback_valve[slot]         = valve;
+
+    // Keep audio on live at startup for same negotiation reason as video.
+    // Watchdog switches audio together with video after a confirmed gap.
+    g_object_set(sel, "active-pad", live_pad, NULL);
+
+    sdi_branch_track(slot, s_sdi_branch_device[slot], sel, testsrc, fbcaps, NULL);
+
+    return TRUE;
+}
+
+// Only the main-context watchdog owns selector state. Bus and SRT callbacks
+// record errors/events but never race it into a live/fallback switch.
+static void sdi_fallback_select_slot(int slot, gboolean fallback)
+{
+    GstElement *vsel = s_sdi_vid_selector[slot];
+    GstPad *vlive = s_sdi_vid_selector_live_pad[slot];
+    GstPad *vfb = s_sdi_vid_selector_fallback_pad[slot];
+    GstElement *vvalve = s_sdi_vid_fallback_valve[slot];
+    GstElement *asel = s_sdi_aud_selector[slot];
+    GstPad *alive = s_sdi_aud_selector_live_pad[slot];
+    GstPad *afb = s_sdi_aud_selector_fallback_pad[slot];
+    GstElement *avalve = s_sdi_aud_fallback_valve[slot];
+
+    if (!vsel || !vlive || !vfb) return;
+
+    if (fallback && vvalve) g_object_set(vvalve, "drop", FALSE, NULL);
+    g_object_set(vsel, "active-pad", fallback ? vfb : vlive, NULL);
+    if (!fallback && vvalve) g_object_set(vvalve, "drop", TRUE, NULL);
+    g_print("SDI_GAP: slot %d video -> %s\n", slot,
+            fallback ? "fallback" : "live");
+    if (asel && alive && afb) {
+        if (fallback && avalve) g_object_set(avalve, "drop", FALSE, NULL);
+        g_object_set(asel, "active-pad", fallback ? afb : alive, NULL);
+        if (!fallback && avalve) g_object_set(avalve, "drop", TRUE, NULL);
+        g_print("SDI_GAP: slot %d audio -> %s\n", slot,
+                fallback ? "fallback" : "live");
+    }
+}
+
+// Live-branch frame-liveness probe (pre-selector). Installed once per slot on
+// the vcaps src pad; records the monotonic time of the last live frame. It
+// fires whenever the live source is up and is immune to fallback frames, so
+// the watchdog below keys off it without flip-flopping.
+static GstPadProbeReturn sdi_live_buf_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+    (void)pad;
+    (void)info;
+    int slot = GPOINTER_TO_INT(user_data);
+    if (slot >= 0 && slot < 8) {
+        g_mutex_lock(&s_sdi_gap_state_mutex);
+        s_sdi_live_buf_time[slot] = g_get_monotonic_time();
+        g_mutex_unlock(&s_sdi_gap_state_mutex);
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+// Bidirectional backstop driven by the live-branch frame probe: engage the
+// black fallback when live frames stall past the grace window, and return to
+// live once live frames are continuously fresh for >= 1 s.
+static gboolean sdi_gap_watchdog_cb(gpointer data)
+{
+    (void)data;
+    gint64 now = g_get_monotonic_time();
+
+    for (int slot = 0; slot < 8; slot++) {
+        gboolean fresh;
+        gboolean switch_to_fallback = FALSE;
+        gboolean switch_to_live = FALSE;
+        GstElement *sel = s_sdi_vid_selector[slot];
+        GstPad *live = s_sdi_vid_selector_live_pad[slot];
+        GstPad *fb   = s_sdi_vid_selector_fallback_pad[slot];
+        if (!sel || !live || !fb)
+            continue;
+
+        g_mutex_lock(&s_sdi_gap_state_mutex);
+        fresh = s_sdi_live_buf_time[slot] != 0 &&
+            (now - s_sdi_live_buf_time[slot]) < s_sdi_stall_threshold_us;
+
+        if (!s_sdi_wd_on_fallback[slot]) {
+            /* on live: engage black fallback when live frames stall */
+            if (!fresh && now > s_sdi_vid_live_grace_until[slot]) {
+                s_sdi_wd_on_fallback[slot] = TRUE;
+                s_sdi_live_fresh_since[slot] = 0;
+                switch_to_fallback = TRUE;
+            }
+        } else {
+            /* on fallback: return to live once live frames are continuously fresh for >= 1 s */
+            if (fresh) {
+                if (s_sdi_live_fresh_since[slot] == 0)
+                    s_sdi_live_fresh_since[slot] = now;
+                else if (now - s_sdi_live_fresh_since[slot] >= 1000000) {
+                    s_sdi_wd_on_fallback[slot] = FALSE;
+                    s_sdi_live_fresh_since[slot] = 0;
+                    s_sdi_vid_live_grace_until[slot] = now + 5 * G_USEC_PER_SEC;
+                    switch_to_live = TRUE;
+                }
+            } else {
+                s_sdi_live_fresh_since[slot] = 0;
+            }
+        }
+        g_mutex_unlock(&s_sdi_gap_state_mutex);
+
+        if (switch_to_fallback)
+            sdi_fallback_select_slot(slot, TRUE);
+        else if (switch_to_live)
+            sdi_fallback_select_slot(slot, FALSE);
+    }
+
+    return TRUE;
+}
 
 static void sdi_branch_track(int slot, int device_num, GstElement *first, ...);
 static void sdi_branch_untrack(int slot, GstElement *elem);
@@ -315,6 +657,8 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
     if (need_interlace == has_interlace) {
         GstCaps *out_caps = gst_caps_from_string(caps_str);
         g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+        if (s_sdi_vid_fallback_caps[slot])
+            g_object_set(s_sdi_vid_fallback_caps[slot], "caps", out_caps, NULL);
         gst_caps_unref(out_caps);
     } else if (need_interlace && !has_interlace) {
         // vscale → vcaps becomes vscale → vinterlace → vcaps
@@ -335,6 +679,8 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
                 gst_bin_remove(GST_BIN(ctx->pipeline), vinterlace);
                 GstCaps *out_caps = gst_caps_from_string(caps_str);
                 g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+                if (s_sdi_vid_fallback_caps[slot])
+                    g_object_set(s_sdi_vid_fallback_caps[slot], "caps", out_caps, NULL);
                 gst_caps_unref(out_caps);
             }
         }
@@ -350,6 +696,8 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
         s_sdi_vinterlace[slot] = NULL;
         GstCaps *out_caps = gst_caps_from_string(caps_str);
         g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+        if (s_sdi_vid_fallback_caps[slot])
+            g_object_set(s_sdi_vid_fallback_caps[slot], "caps", out_caps, NULL);
         gst_caps_unref(out_caps);
         g_print("SDI AUTO-DETECT: interlace element removed for switched source\n");
     }
@@ -680,6 +1028,8 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     g_print("SDI AUTO-DETECT: capsfilter → %s\n", caps_str);
     GstCaps *out_caps = gst_caps_from_string(caps_str);
     g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+    if (ctx->sink_index >= 0 && ctx->sink_index < 8 && s_sdi_vid_fallback_caps[ctx->sink_index])
+        g_object_set(s_sdi_vid_fallback_caps[ctx->sink_index], "caps", out_caps, NULL);
     gst_caps_unref(out_caps);
 
     // --- Step 6: Optionally create and add interlace element ---
@@ -703,13 +1053,19 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     // --- Step 7: Link the full video chain ---
     gboolean video_link_ok;
     if (need_interlace_element && vinterlace) {
-        video_link_ok = gst_element_link_many(
-            ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
-            vinterlace, ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
+        video_link_ok =
+            gst_element_link_many(
+                ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
+                vinterlace, ctx->vcaps, NULL) &&
+            sdi_video_fallback_link(ctx->sink_index, ctx->vcaps, ctx->vid_identity) &&
+            gst_element_link(ctx->vid_identity, ctx->videosink);
     } else {
-        video_link_ok = gst_element_link_many(
-            ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
-            ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
+        video_link_ok =
+            gst_element_link_many(
+                ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
+                ctx->vcaps, NULL) &&
+            sdi_video_fallback_link(ctx->sink_index, ctx->vcaps, ctx->vid_identity) &&
+            gst_element_link(ctx->vid_identity, ctx->videosink);
     }
 
     if (!video_link_ok) {
@@ -726,11 +1082,16 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
                      out_width, out_height, out_framerate);
             out_caps = gst_caps_from_string(caps_str);
             g_object_set(ctx->vcaps, "caps", out_caps, NULL);
+            if (ctx->sink_index >= 0 && ctx->sink_index < 8 && s_sdi_vid_fallback_caps[ctx->sink_index])
+                g_object_set(s_sdi_vid_fallback_caps[ctx->sink_index], "caps", out_caps, NULL);
             gst_caps_unref(out_caps);
 
-            video_link_ok = gst_element_link_many(
-                ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
-                ctx->vcaps, ctx->vid_identity, ctx->videosink, NULL);
+            video_link_ok =
+                gst_element_link_many(
+                    ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
+                    ctx->vcaps, NULL) &&
+                sdi_video_fallback_link(ctx->sink_index, ctx->vcaps, ctx->vid_identity) &&
+                gst_element_link(ctx->vid_identity, ctx->videosink);
 
             if (!video_link_ok) {
                 g_printerr("SDI AUTO-DETECT: FATAL — video chain link failed even without interlace\n");
@@ -780,8 +1141,13 @@ static void sdi_branch_track(int slot, int device_num, GstElement *first, ...)
     va_list ap;
     va_start(ap, first);
     for (GstElement *e = first; e; e = va_arg(ap, GstElement *)) {
-        if (s_sdi_branch_n[slot] < SDI_BRANCH_MAX_ELEMS)
+        if (s_sdi_branch_n[slot] < SDI_BRANCH_MAX_ELEMS) {
             s_sdi_branch_elems[slot][s_sdi_branch_n[slot]++] = e;
+        } else {
+            // Teardown must own every element. Failing loudly is safer than
+            // silently leaking a live DeckLink branch after source switching.
+            g_printerr("SDI slot %d: branch registry capacity exceeded\n", slot);
+        }
     }
     va_end(ap);
 }
@@ -871,6 +1237,23 @@ static void teardown_sdi_branch(int slot)
         gst_element_set_state(s_sdi_branch_elems[slot][i], GST_STATE_NULL);
     for (int i = 0; i < s_sdi_branch_n[slot]; i++)
         gst_element_get_state(s_sdi_branch_elems[slot][i], NULL, NULL, GST_SECOND);
+    // Drop gap-fallback pad refs before the selector elements are finalized below.
+    if (s_sdi_vid_selector_live_pad[slot])     { gst_object_unref(s_sdi_vid_selector_live_pad[slot]);     s_sdi_vid_selector_live_pad[slot] = NULL; }
+    if (s_sdi_vid_selector_fallback_pad[slot]) { gst_object_unref(s_sdi_vid_selector_fallback_pad[slot]); s_sdi_vid_selector_fallback_pad[slot] = NULL; }
+    if (s_sdi_aud_selector_live_pad[slot])     { gst_object_unref(s_sdi_aud_selector_live_pad[slot]);     s_sdi_aud_selector_live_pad[slot] = NULL; }
+    if (s_sdi_aud_selector_fallback_pad[slot]) { gst_object_unref(s_sdi_aud_selector_fallback_pad[slot]); s_sdi_aud_selector_fallback_pad[slot] = NULL; }
+    s_sdi_vid_selector[slot] = NULL;
+    s_sdi_aud_selector[slot] = NULL;
+    s_sdi_vid_fallback_caps[slot] = NULL;
+    s_sdi_vid_fallback_valve[slot] = NULL;
+    s_sdi_aud_fallback_valve[slot] = NULL;
+    g_mutex_lock(&s_sdi_gap_state_mutex);
+    s_sdi_vid_live_grace_until[slot] = 0;
+    s_sdi_live_buf_time[slot] = 0;
+    s_sdi_live_fresh_since[slot] = 0;
+    s_sdi_wd_on_fallback[slot] = FALSE;
+    g_mutex_unlock(&s_sdi_gap_state_mutex);
+    s_sdi_live_probe_added[slot] = FALSE;
     for (int i = 0; i < s_sdi_branch_n[slot]; i++) {
         GstElement *e = s_sdi_branch_elems[slot][i];
         gst_bin_remove(GST_BIN(g_pipeline), e);
@@ -1049,13 +1432,56 @@ typedef struct {
     gboolean interlaced;
     gboolean fps_inferred; // TRUE if framerate was inferred, not detected
     gboolean info_valid;
+    guint8 h264_profile_idc;
+    guint8 h264_level_idc;
+    guint8 h264_chroma_format_idc;
+    guint8 h264_bit_depth;
+    guint8 hevc_profile_idc;
+    guint8 hevc_level_idc;
+    guint8 hevc_chroma_format_idc;
+    guint8 hevc_bit_depth;
+    guint16 sar_num;
+    guint16 sar_den;
     guint16 pmt_pid;
     guint16 video_pid;
     guint8 video_stream_type;
     pthread_mutex_t mutex;
 } VideoInfo;
 
-static VideoInfo video_info = {0, 0, 0, 1, FALSE, FALSE, FALSE, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+static VideoInfo video_info = {
+    .fps_den = 1, .sar_num = 1, .sar_den = 1,
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+};
+
+static const char *h264_profile_name(guint8 idc)
+{
+    switch (idc) {
+    case 66: return "Baseline"; case 77: return "Main"; case 88: return "Extended";
+    case 100: return "High"; case 110: return "High 10"; case 122: return "High 4:2:2";
+    case 244: return "High 4:4:4 Predictive"; default: return "Unknown";
+    }
+}
+
+static const char *chroma_format_name(guint8 idc)
+{
+    switch (idc) {
+    case 0: return "4:0:0"; case 1: return "4:2:0"; case 2: return "4:2:2";
+    case 3: return "4:4:4"; default: return "Unknown";
+    }
+}
+
+static const char *hevc_profile_name(guint8 idc, guint8 chroma, guint8 depth)
+{
+    if (chroma == 2 && depth == 10) return "Main 4:2:2 10";
+    if (chroma == 2) return "Main 4:2:2";
+    if (chroma == 1 && depth == 10) return "Main 10";
+    if (chroma == 1 && depth == 8) return "Main";
+    switch (idc) {
+    case 1: return "Main"; case 2: return "Main 10";
+    case 3: return "Main Still Picture"; case 4: return "Range Extensions";
+    default: return "Unknown";
+    }
+}
 
 // Forward declarations for MPEG-TS parsing
 static void parse_pat(const guint8 *data, gsize size);
@@ -1167,6 +1593,36 @@ static void add_mpegts_source_stats(cJSON *root, const char *tag)
         if (!mpegts_stream_is_audio(snapshot.stream_types[i])) continue;
         cJSON_AddItemToArray(audio_pids, cJSON_CreateNumber(snapshot.stream_pids[i]));
     }
+}
+
+static void add_video_metadata_stats(cJSON *root)
+{
+    if (!root) return;
+    pthread_mutex_lock(&video_info.mutex);
+    if (video_info.info_valid) {
+        cJSON_AddNumberToObject(root, "video-width", video_info.width);
+        cJSON_AddNumberToObject(root, "video-height", video_info.height);
+        cJSON_AddNumberToObject(root, "video-framerate-num", video_info.fps_num);
+        cJSON_AddNumberToObject(root, "video-framerate-den", video_info.fps_den);
+        cJSON_AddBoolToObject(root, "video-framerate-inferred", video_info.fps_inferred);
+        cJSON_AddStringToObject(root, "video-interlace-mode", video_info.interlaced ? "interleaved" : "progressive");
+        if (video_info.video_stream_type == STREAM_TYPE_H264) {
+            cJSON_AddStringToObject(root, "video-codec", "AVC/H.264");
+            cJSON_AddStringToObject(root, "video-profile", h264_profile_name(video_info.h264_profile_idc));
+            cJSON_AddNumberToObject(root, "video-level-idc", video_info.h264_level_idc);
+            cJSON_AddStringToObject(root, "video-chroma-format", chroma_format_name(video_info.h264_chroma_format_idc));
+            cJSON_AddNumberToObject(root, "video-bit-depth", video_info.h264_bit_depth);
+        } else if (video_info.video_stream_type == STREAM_TYPE_HEVC) {
+            cJSON_AddStringToObject(root, "video-codec", "HEVC/H.265");
+            cJSON_AddStringToObject(root, "video-profile", hevc_profile_name(video_info.hevc_profile_idc, video_info.hevc_chroma_format_idc, video_info.hevc_bit_depth));
+            cJSON_AddNumberToObject(root, "video-level-idc", video_info.hevc_level_idc);
+            cJSON_AddStringToObject(root, "video-chroma-format", chroma_format_name(video_info.hevc_chroma_format_idc));
+            cJSON_AddNumberToObject(root, "video-bit-depth", video_info.hevc_bit_depth);
+        }
+        cJSON_AddNumberToObject(root, "video-sar-num", video_info.sar_num);
+        cJSON_AddNumberToObject(root, "video-sar-den", video_info.sar_den);
+    }
+    pthread_mutex_unlock(&video_info.mutex);
 }
 
 static cJSON *build_source_stats_json(GstElement *src, const char *tag)
@@ -1340,18 +1796,7 @@ static void *print_stats(void *src)
         // Always emit primary (keeps legacy single-source contract: one stats object with "source":"primary").
         cJSON *primary = build_source_stats_json(source, "primary");
 
-        // Metadata attaches to primary only — the MPEG-TS probe is on the shared tee sink pad.
-        pthread_mutex_lock(&video_info.mutex);
-        if (video_info.info_valid) {
-            cJSON_AddNumberToObject(primary, "video-width", video_info.width);
-            cJSON_AddNumberToObject(primary, "video-height", video_info.height);
-            cJSON_AddNumberToObject(primary, "video-framerate-num", video_info.fps_num);
-            cJSON_AddNumberToObject(primary, "video-framerate-den", video_info.fps_den);
-            cJSON_AddBoolToObject(primary, "video-framerate-inferred", video_info.fps_inferred);
-            cJSON_AddStringToObject(primary, "video-interlace-mode",
-                                    video_info.interlaced ? "interleaved" : "progressive");
-        }
-        pthread_mutex_unlock(&video_info.mutex);
+        add_video_metadata_stats(primary);
 
         // Query and append SDI videorate statistics (primary only)
         cJSON *sdi_array = cJSON_CreateArray();
@@ -1382,17 +1827,7 @@ static void *print_stats(void *src)
 
         if (dual_ingest_active && secondary_source_element) {
             cJSON *secondary = build_source_stats_json(secondary_source_element, "secondary");
-            pthread_mutex_lock(&video_info.mutex);
-            if (video_info.info_valid) {
-                cJSON_AddNumberToObject(secondary, "video-width", video_info.width);
-                cJSON_AddNumberToObject(secondary, "video-height", video_info.height);
-                cJSON_AddNumberToObject(secondary, "video-framerate-num", video_info.fps_num);
-                cJSON_AddNumberToObject(secondary, "video-framerate-den", video_info.fps_den);
-                cJSON_AddBoolToObject(secondary, "video-framerate-inferred", video_info.fps_inferred);
-                cJSON_AddStringToObject(secondary, "video-interlace-mode",
-                                        video_info.interlaced ? "interleaved" : "progressive");
-            }
-            pthread_mutex_unlock(&video_info.mutex);
+            add_video_metadata_stats(secondary);
             send_json_to_socket(secondary);
             cJSON_Delete(secondary);
         }
@@ -1554,6 +1989,12 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
                     g_print("SOURCE_INVALID:secondary %s\n", err ? err->message : "");
                 else if (g_strcmp0(src_name, "source") == 0)
                     g_print("SOURCE_INVALID:primary %s\n", err ? err->message : "");
+
+                // Do NOT engage the SDI local fallback on a warning: srtsrc warns for
+                // every transient SRT hiccup, including ones that recover within the
+                // jitter buffer while the branch queue is still draining, so engaging
+                // here blacks the output and mutes audio on every blip. The frame
+                // liveness watchdog engages only after live frames have stalled.
             }
 
             g_error_free(err);
@@ -1561,9 +2002,58 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
             break;
         }
         case GST_MESSAGE_ERROR: {
-            GError *err;
-            gchar *debug;
+            GError *err = NULL;
+            gchar *debug = NULL;
             gst_message_parse_error(msg, &err, &debug);
+
+            const gchar *src_name = GST_MESSAGE_SRC_NAME(msg);
+            const gchar *err_msg = err ? err->message : "";
+
+            gboolean recoverable = FALSE;
+            gboolean schedule_fail =
+                (strstr(err_msg, "Failed to schedule frame") != NULL ||
+                 strstr(err_msg, "0x80000008") != NULL) ||
+                (debug && (strstr(debug, "Failed to schedule frame") != NULL ||
+                           strstr(debug, "0x80000008") != NULL));
+            if (src_name &&
+                (g_str_has_prefix(src_name, "decklinkvideo") ||
+                 g_str_has_prefix(src_name, "decklinkaudio")) &&
+                schedule_fail) {
+                recoverable = TRUE;
+            } else if (src_name &&
+                       (g_strcmp0(src_name, "source") == 0 ||
+                        g_strcmp0(src_name, "secondary_source") == 0) &&
+                       (strstr(err_msg, "Internal data stream error") != NULL ||
+                        strstr(err_msg, "Socket is being closed") != NULL)) {
+                recoverable = TRUE;
+            }
+
+            if (recoverable) {
+                g_print("Recoverable source-gap error from %s: %s\n",
+                        src_name ? src_name : "unknown",
+                        err_msg ? err_msg : "unknown");
+
+                cJSON *root = cJSON_CreateObject();
+                cJSON_AddStringToObject(root, "type", "source_gap");
+                cJSON_AddStringToObject(root, "route_id", global_route_id);
+                cJSON_AddStringToObject(root, "element", src_name ? src_name : "");
+                cJSON_AddStringToObject(root, "message", err_msg ? err_msg : "");
+                char *json_str = cJSON_PrintUnformatted(root);
+                if (json_str) {
+                    send_message_to_unix_socket(json_str);
+                    free(json_str);
+                }
+                cJSON_Delete(root);
+
+                g_error_free(err);
+                g_free(debug);
+                // Let live-frame watchdog decide whether/when to change the
+                // SDI selector. A bus error can arrive while queued decoded
+                // frames are still healthy; switching here caused visible
+                // black flashes and HEVC decoder recovery artifacts.
+                break; /* recoverable: do NOT quit the main loop */
+            }
+
             g_print("Error: %s (src: %s, debug: %s)\n",
                     err ? err->message : "unknown",
                     GST_MESSAGE_SRC_NAME(msg),
@@ -1591,6 +2081,8 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
                 const gchar *oname = src_obj ? GST_OBJECT_NAME(src_obj) : "";
                 g_print("SOURCE_INVALID:%s\n",
                         g_strcmp0(oname, "secondary_source") == 0 ? "secondary" : "primary");
+                // Watchdog owns selector changes; connection removal alone
+                // does not prove that queued live frames have drained.
             }
             break;
         }
@@ -1627,6 +2119,9 @@ static gboolean on_caller_connecting(GstElement *element, GSocketAddress *addr,
         g_print("SOURCE_VALID:secondary\n");
     else
         g_print("SOURCE_VALID:primary\n");
+
+    // Do not release SDI fallback here. A new SRT connection may begin in the
+    // middle of a HEVC GOP; watchdog waits for stable decoded frames first.
 
     if (stream_id) {
         send_prefixed_message_to_unix_socket("stats_source_stream_id:", stream_id);
@@ -2272,16 +2767,18 @@ static void parse_h264_sps(const guint8 *data, gsize size)
 
     guint8 profile_idc = read_bits(&br, 8);
     read_bits(&br, 8); // constraint_set flags + reserved
-    read_bits(&br, 8); // level_idc
+    guint8 level_idc = read_bits(&br, 8);
     read_ue(&br);      // seq_parameter_set_id
 
+    guint32 chroma_format_idc = 1;
+    guint32 bit_depth_luma = 8;
     // Handle high profiles
     if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122 || profile_idc == 244 || profile_idc == 44 ||
         profile_idc == 83 || profile_idc == 86 || profile_idc == 118 || profile_idc == 128 || profile_idc == 138 ||
         profile_idc == 139 || profile_idc == 134) {
-        guint32 chroma_format_idc = read_ue(&br);
+        chroma_format_idc = read_ue(&br);
         if (chroma_format_idc == 3) read_bits(&br, 1); // separate_colour_plane_flag
-        read_ue(&br);                                  // bit_depth_luma_minus8
+        bit_depth_luma = 8 + read_ue(&br);             // bit_depth_luma_minus8
         read_ue(&br);                                  // bit_depth_chroma_minus8
         read_bits(&br, 1);                             // qpprime_y_zero_transform_bypass_flag
         if (read_bits(&br, 1)) {                       // seq_scaling_matrix_present_flag
@@ -2342,12 +2839,16 @@ static void parse_h264_sps(const guint8 *data, gsize size)
     gint fps_num = 25, fps_den = 1;
     gboolean fps_inferred = TRUE;
 
+    guint16 sar_num = 1, sar_den = 1;
     if (read_bits(&br, 1)) { // vui_parameters_present_flag
         if (read_bits(&br, 1)) { // aspect_ratio_info_present_flag
             guint32 aspect_ratio_idc = read_bits(&br, 8);
             if (aspect_ratio_idc == 255) { // extended SAR
-                read_bits(&br, 16); // sar_width
-                read_bits(&br, 16); // sar_height
+                sar_num = read_bits(&br, 16);
+                sar_den = read_bits(&br, 16);
+            } else {
+                static const guint16 sar_table[][2] = {{0,0},{1,1},{12,11},{10,11},{16,11},{40,33},{24,11},{20,11},{32,11},{80,33},{18,11},{15,11},{64,33},{160,99},{4,3},{3,2},{2,1}};
+                if (aspect_ratio_idc < G_N_ELEMENTS(sar_table)) { sar_num = sar_table[aspect_ratio_idc][0]; sar_den = sar_table[aspect_ratio_idc][1]; }
             }
         }
         if (read_bits(&br, 1)) { // overscan_info_present_flag
@@ -2393,6 +2894,13 @@ static void parse_h264_sps(const guint8 *data, gsize size)
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
     video_info.fps_inferred = fps_inferred;
+    video_info.h264_profile_idc = profile_idc;
+    video_info.h264_level_idc = level_idc;
+    video_info.h264_chroma_format_idc = chroma_format_idc;
+    video_info.h264_bit_depth = bit_depth_luma;
+    video_info.video_stream_type = STREAM_TYPE_H264;
+    video_info.sar_num = sar_num ? sar_num : 1;
+    video_info.sar_den = sar_den ? sar_den : 1;
     video_info.info_valid = TRUE;
     g_print("MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: %d/%d (%s)\n", width, height,
             interlaced ? "yes" : "no", fps_num, fps_den,
@@ -2431,44 +2939,43 @@ static void parse_mpeg2_sequence(const guint8 *data, gsize size)
 // Parse HEVC (H.265) SPS for resolution/framerate
 static void parse_hevc_sps(const guint8 *data, gsize size)
 {
-    // HEVC NAL unit header is 2 bytes, SPS starts after that
     if (size < 20) return;
-
-    // Skip NAL unit header (2 bytes) for HEVC
-    BitReader br = {data + 2, size - 2, 0, 0};
-
+    guint8 rbsp[256];
+    gsize rbsp_size = remove_emulation_prevention(data + 2, size - 2, rbsp, sizeof(rbsp));
+    BitReader br = {rbsp, rbsp_size, 0, 0};
     read_bits(&br, 4);                             // sps_video_parameter_set_id
     guint8 max_sub_layers = read_bits(&br, 3) + 1; // sps_max_sub_layers_minus1 + 1
     read_bits(&br, 1);                             // sps_temporal_id_nesting_flag
-
-    // Skip profile_tier_level - simplified approach
-    // This is complex in full spec, but we can skip fixed bits for common profiles
     read_bits(&br, 2);  // general_profile_space
     read_bits(&br, 1);  // general_tier_flag
-    read_bits(&br, 5);  // general_profile_idc
+    guint8 profile_idc = read_bits(&br, 5);
     read_bits(&br, 32); // general_profile_compatibility_flags (32 bits)
     read_bits(&br, 1);  // general_progressive_source_flag
-    read_bits(&br, 1);  // general_interlaced_source_flag
+    gboolean interlaced = read_bits(&br, 1);
     read_bits(&br, 1);  // general_non_packed_constraint_flag
     read_bits(&br, 1);  // general_frame_only_constraint_flag
     // Skip remaining constraint flags (44 bits)
     read_bits(&br, 32);
     read_bits(&br, 12);
-    read_bits(&br, 8); // general_level_idc
-
-    // Skip sub_layer_profile/level for each sub-layer
+    guint8 level_idc = read_bits(&br, 8);
+    gboolean profile_present[7] = {FALSE}, level_present[7] = {FALSE};
     if (max_sub_layers > 1) {
         for (int i = 0; i < max_sub_layers - 1; i++) {
-            read_bits(&br, 2); // sub_layer_profile/level_present_flag
+            profile_present[i] = read_bits(&br, 1);
+            level_present[i] = read_bits(&br, 1);
         }
-        // Padding if max_sub_layers < 8
         for (int i = max_sub_layers - 1; i < 8; i++) {
-            read_bits(&br, 2); // reserved
+            read_bits(&br, 2);
+        }
+        for (int i = 0; i < max_sub_layers - 1; i++) {
+            if (profile_present[i]) { read_bits(&br, 8); read_bits(&br, 32); read_bits(&br, 32); read_bits(&br, 12); }
+            if (level_present[i]) read_bits(&br, 8);
         }
     }
 
     read_ue(&br); // sps_seq_parameter_set_id
     guint32 chroma_format_idc = read_ue(&br);
+    if (chroma_format_idc > 3) return;
     if (chroma_format_idc == 3) {
         read_bits(&br, 1); // separate_colour_plane_flag
     }
@@ -2476,6 +2983,7 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     // The key info we need!
     guint32 pic_width = read_ue(&br);  // pic_width_in_luma_samples
     guint32 pic_height = read_ue(&br); // pic_height_in_luma_samples
+    if (!pic_width || !pic_height) return;
 
     // Check for conformance_window_flag
     if (read_bits(&br, 1)) { // conformance_window_flag
@@ -2483,10 +2991,14 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
         guint32 right = read_ue(&br);
         guint32 top = read_ue(&br);
         guint32 bottom = read_ue(&br);
-        // Adjust for cropping (simplified)
-        pic_width -= (left + right) * 2;
-        pic_height -= (top + bottom) * 2;
+        static const guint8 sub_width[] = {1, 2, 2, 1}, sub_height[] = {1, 2, 1, 1};
+        guint32 crop_w = (left + right) * sub_width[chroma_format_idc];
+        guint32 crop_h = (top + bottom) * sub_height[chroma_format_idc];
+        if (crop_w >= pic_width || crop_h >= pic_height) return;
+        pic_width -= crop_w; pic_height -= crop_h;
     }
+    guint8 bit_depth = read_ue(&br) + 8;
+    read_ue(&br); // bit_depth_chroma_minus8
 
     // Infer framerate based on resolution (50fps standard for HD/UHD broadcast)
     gint fps_num = (pic_height >= 720) ? 50 : 25, fps_den = 1;
@@ -2498,7 +3010,13 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
     video_info.fps_inferred = fps_inferred;
-    video_info.interlaced = FALSE; // HEVC is progressive by design for UHD
+    video_info.interlaced = interlaced;
+    video_info.hevc_profile_idc = profile_idc;
+    video_info.hevc_level_idc = level_idc;
+    video_info.hevc_chroma_format_idc = chroma_format_idc;
+    video_info.hevc_bit_depth = bit_depth;
+    video_info.video_stream_type = STREAM_TYPE_HEVC;
+    video_info.sar_num = video_info.sar_den = 1;
     video_info.info_valid = TRUE;
     g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: ~%d (inferred)\n", pic_width, pic_height, fps_num);
     pthread_mutex_unlock(&video_info.mutex);
@@ -2754,11 +3272,14 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 
     g_object_set(jpegenc, "quality", 85, NULL);
 
+    // Optional preview may receive no frames (e.g. HEVC on this H264-only
+    // branch). Do not let its preroll hold the whole pipeline in PAUSED.
     g_object_set(appsink,
         "emit-signals", FALSE,
         "max-buffers",  2,
         "drop",         TRUE,
         "sync",         FALSE,
+        "async",        FALSE,
         NULL);
 
     gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, h264parse, avdec, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
@@ -2854,6 +3375,19 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     cJSON *source_obj = cJSON_GetObjectItem(json, "primary_source");
     if (!cJSON_IsObject(source_obj)) {
         source_obj = cJSON_GetObjectItem(json, "source");
+    }
+    // Fallback stall threshold: 2x the configured SRT jitter buffer (min 1.5 s), so a
+    // high-latency link tolerates normal jitter without blacking the SDI output.
+    {
+        cJSON *latency = cJSON_IsObject(source_obj)
+                             ? cJSON_GetObjectItem(source_obj, "latency")
+                             : NULL;
+        int latency_ms = (latency && cJSON_IsNumber(latency)) ? (int)latency->valuedouble : 0;
+        s_sdi_stall_threshold_us = latency_ms > 0 ? (gint64)latency_ms * 2 * 1000
+                                                  : 2000000;
+        if (s_sdi_stall_threshold_us < 1500000) {
+            s_sdi_stall_threshold_us = 1500000;
+        }
     }
     cJSON *secondary_obj = cJSON_GetObjectItem(json, "secondary_source");
     cJSON *sinks_array = cJSON_GetObjectItem(json, "sinks");
@@ -3097,6 +3631,10 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         g_print("DUAL-INGEST: secondary held at NULL (auto_join=false)\n");
     }
 
+    // Gap watchdog: one-way backstop that forces SDI slots to the local
+    // fallback if their post-selector video flow stalls (source dropout).
+    s_sdi_gap_watchdog_source_id = g_timeout_add(200, sdi_gap_watchdog_cb, NULL);
+
     return pipeline;
 }
 
@@ -3290,6 +3828,11 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                          adecodebin, aqueue, aconvert, amix, aresample, arate, acaps, audiosink,
                          NULL);
 
+        if (!sdi_video_fallback_create(sink_index, pipeline)) {
+            g_printerr("SDI sink %d: video gap-fallback unavailable\n", sink_index);
+            return FALSE;
+        }
+
         if (is_auto_detect) {
             // =================================================================
             // AUTO-DETECT PATH
@@ -3316,7 +3859,9 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                              NULL);
 
             // Audio chain is linked statically (audio caps are always forced)
-            if (!gst_element_link_many(aqueue, aconvert, amix, aresample, arate, acaps, audiosink, NULL)) {
+            if (!gst_element_link_many(aqueue, aconvert, NULL) ||
+                !sdi_audio_fallback_setup(sink_index, pipeline, aconvert, amix) ||
+                !gst_element_link_many(amix, aresample, arate, acaps, audiosink, NULL)) {
                 g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
                 return FALSE;
             }
@@ -3423,6 +3968,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 
             GstCaps *caps = gst_caps_from_string(caps_str);
             g_object_set(vcaps, "caps", caps, NULL);
+            if (s_sdi_vid_fallback_caps[sink_index])
+                g_object_set(s_sdi_vid_fallback_caps[sink_index], "caps", caps, NULL);
             gst_caps_unref(caps);
 
             // Manual mode knows interlaced statically: relabel VA-API "mixed"→
@@ -3445,14 +3992,19 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
                              NULL);
 
             // --- Link static chains downstream of decodebin ---
-            // Video: vqueue → videoconvert → videorate → videoscale → capsfilter → identity(sync) → decklinkvideosink
-            gboolean video_link_ok = gst_element_link_many(vqueue, vcapssetter, vconvert, vrate, vscale, vcaps, vid_identity, videosink, NULL);
+            // Video: vqueue → videoconvert → videorate → videoscale → capsfilter → [selector] → identity(sync) → decklinkvideosink
+            gboolean video_link_ok =
+                gst_element_link_many(vqueue, vcapssetter, vconvert, vrate, vscale, vcaps, NULL) &&
+                sdi_video_fallback_link(sink_index, vcaps, vid_identity) &&
+                gst_element_link(vid_identity, videosink);
             if (!video_link_ok) {
                 g_printerr("SDI sink %d: Failed to link video output chain\n", sink_index);
                 return FALSE;
             }
-            // Audio: aqueue → audioconvert → audiomixmatrix → audioresample → audiorate → capsfilter → decklinkaudiosink
-            if (!gst_element_link_many(aqueue, aconvert, amix, aresample, arate, acaps, audiosink, NULL)) {
+            // Audio: aqueue → audioconvert → [selector] → audiomixmatrix → audioresample → audiorate → capsfilter → decklinkaudiosink
+            if (!gst_element_link_many(aqueue, aconvert, NULL) ||
+                !sdi_audio_fallback_setup(sink_index, pipeline, aconvert, amix) ||
+                !gst_element_link_many(amix, aresample, arate, acaps, audiosink, NULL)) {
                 g_printerr("SDI sink %d: Failed to link audio output chain\n", sink_index);
                 return FALSE;
             }
@@ -3575,6 +4127,11 @@ void cleanup_pipeline(GstElement *pipeline)
     running = FALSE;
     thumbnail_running = FALSE; // Signal thumbnail thread to stop
 
+    if (s_sdi_gap_watchdog_source_id != 0) {
+        g_source_remove(s_sdi_gap_watchdog_source_id);
+        s_sdi_gap_watchdog_source_id = 0;
+    }
+
     for (int i = 0; i < 8; i++) {
         sdi_audio_last_buffer_time[i] = 0;
         sdi_audio_buffer_count[i] = 0;
@@ -3582,6 +4139,23 @@ void cleanup_pipeline(GstElement *pipeline)
         sdi_video_last_buffer_time[i] = 0;
         sdi_video_buffer_count[i] = 0;
         sdi_vrate_elements[i] = NULL;
+
+        if (s_sdi_vid_selector_live_pad[i])     { gst_object_unref(s_sdi_vid_selector_live_pad[i]);     s_sdi_vid_selector_live_pad[i] = NULL; }
+        if (s_sdi_vid_selector_fallback_pad[i]) { gst_object_unref(s_sdi_vid_selector_fallback_pad[i]); s_sdi_vid_selector_fallback_pad[i] = NULL; }
+        if (s_sdi_aud_selector_live_pad[i])     { gst_object_unref(s_sdi_aud_selector_live_pad[i]);     s_sdi_aud_selector_live_pad[i] = NULL; }
+        if (s_sdi_aud_selector_fallback_pad[i]) { gst_object_unref(s_sdi_aud_selector_fallback_pad[i]); s_sdi_aud_selector_fallback_pad[i] = NULL; }
+        s_sdi_vid_selector[i] = NULL;
+        s_sdi_aud_selector[i] = NULL;
+        s_sdi_vid_fallback_caps[i] = NULL;
+        s_sdi_vid_fallback_valve[i] = NULL;
+        s_sdi_aud_fallback_valve[i] = NULL;
+        g_mutex_lock(&s_sdi_gap_state_mutex);
+        s_sdi_vid_live_grace_until[i] = 0;
+        s_sdi_live_buf_time[i] = 0;
+        s_sdi_live_fresh_since[i] = 0;
+        s_sdi_wd_on_fallback[i] = FALSE;
+        g_mutex_unlock(&s_sdi_gap_state_mutex);
+        s_sdi_live_probe_added[i] = FALSE;
     }
 
     // Set pipeline to NULL first — this flushes appsink, unblocking try_pull_sample

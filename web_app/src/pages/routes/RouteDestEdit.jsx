@@ -570,20 +570,22 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             placeholder="Select video mode"
                                                             options={[
                                                                 { label: 'Auto — detect source format (fallback: 1080p25)', value: 0 },
+                                                                { label: '1080p23.98 — 23.98 fps', value: 1 },
+                                                                { label: '1080p24 — 24 fps', value: 2 },
                                                                 { label: '1080p25 — 25 fps', value: 9 },
+                                                                { label: '1080p29.97 — 29.97 fps', value: 3 },
                                                                 { label: '1080p30 — 30 fps', value: 11 },
                                                                 { label: '1080p50 — 50 fps', value: 12 },
+                                                                { label: '1080p59.94 — 59.94 fps', value: 4 },
                                                                 { label: '1080p60 — 60 fps', value: 13 },
                                                                 { label: '1080i50 — 25 fps / 50 fields', value: 7 },
+                                                                { label: '1080i59.94 — 29.97 fps / 59.94 fields', value: 5 },
                                                                 { label: '1080i60 — 30 fps / 60 fields', value: 8 },
                                                                 { label: '720p50 — 50 fps', value: 14 },
+                                                                { label: '720p59.94 — 59.94 fps', value: 6 },
                                                                 { label: '720p60 — 60 fps', value: 15 },
                                                                 { label: '576i50 (PAL) — 25 fps / 50 fields', value: 17 },
-                                                                { label: '480i60 (NTSC) — 30 fps / 60 fields', value: 18 },
-                                                                { label: '2160p25 (4K) — 25 fps', value: 22 },
-                                                                { label: '2160p30 (4K) — 30 fps', value: 23 },
-                                                                { label: '2160p50 (4K) — 50 fps', value: 24 },
-                                                                { label: '2160p60 (4K) — 60 fps', value: 25 },
+                                                                { label: '480i59.94 (NTSC) — 29.97 fps / 59.94 fields', value: 18 },
                                                             ]}
                                                             style={{ width: '250px' }}
                                                         />

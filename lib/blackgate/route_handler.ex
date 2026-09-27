@@ -1722,6 +1722,12 @@ defmodule Blackgate.RouteHandler do
   # video_mode=0 is "auto" — the C pipeline will detect the source and pick the mode.
   # The width/height/framerate here serve as fallback values if auto-detect can't match.
   defp sdi_video_mode_to_gst(0), do: {"auto", 1920, 1080, "25/1"}
+  defp sdi_video_mode_to_gst(1), do: {"1080p2398", 1920, 1080, "24000/1001"}
+  defp sdi_video_mode_to_gst(2), do: {"1080p24", 1920, 1080, "24/1"}
+  defp sdi_video_mode_to_gst(3), do: {"1080p2997", 1920, 1080, "30000/1001"}
+  defp sdi_video_mode_to_gst(4), do: {"1080p5994", 1920, 1080, "60000/1001"}
+  defp sdi_video_mode_to_gst(5), do: {"1080i5994", 1920, 1080, "30000/1001"}
+  defp sdi_video_mode_to_gst(6), do: {"720p5994", 1280, 720, "60000/1001"}
   defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
   defp sdi_video_mode_to_gst(11), do: {"1080p30", 1920, 1080, "30/1"}
   defp sdi_video_mode_to_gst(12), do: {"1080p50", 1920, 1080, "50/1"}
@@ -1731,11 +1737,7 @@ defmodule Blackgate.RouteHandler do
   defp sdi_video_mode_to_gst(14), do: {"720p50", 1280, 720, "50/1"}
   defp sdi_video_mode_to_gst(15), do: {"720p60", 1280, 720, "60/1"}
   defp sdi_video_mode_to_gst(17), do: {"pal", 720, 576, "25/1"}
-  defp sdi_video_mode_to_gst(18), do: {"ntsc", 720, 480, "30/1"}
-  defp sdi_video_mode_to_gst(22), do: {"2160p25", 3840, 2160, "25/1"}
-  defp sdi_video_mode_to_gst(23), do: {"2160p30", 3840, 2160, "30/1"}
-  defp sdi_video_mode_to_gst(24), do: {"2160p50", 3840, 2160, "50/1"}
-  defp sdi_video_mode_to_gst(25), do: {"2160p60", 3840, 2160, "60/1"}
+  defp sdi_video_mode_to_gst(18), do: {"ntsc", 720, 480, "30000/1001"}
   defp sdi_video_mode_to_gst(_), do: {"1080p25", 1920, 1080, "25/1"}
 
   # ===========================================================================

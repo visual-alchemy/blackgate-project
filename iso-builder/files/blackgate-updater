@@ -6,8 +6,19 @@ RELEASES="$ROOT/releases"
 CURRENT="$ROOT/current"
 KEY=/etc/blackgate/update-public-key.pem
 STATUS=/run/blackgate-update-status
+KEEP_RELEASES=5
 status() { echo "$1" > "$STATUS"; }
 fail() { status "failed: $1"; echo "$1" >&2; exit 1; }
+prune_releases() {
+  current_version="$(readlink "$CURRENT" | sed 's#^.*/##')"
+  kept=0
+  find "$RELEASES" -mindepth 1 -maxdepth 1 -type d -printf '%T@:%f\n' | sort -t: -k1,1nr | cut -d: -f2- |
+    while IFS= read -r version; do
+      case "$version" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+      [ "$version" = "$current_version" ] && continue
+      if [ "$kept" -lt $((KEEP_RELEASES - 1)) ]; then kept=$((kept + 1)); else rm -rf -- "$RELEASES/$version"; fi
+    done
+}
 [ "${1:-}" = deploy ] || fail "unsupported command"
 VERSION="${2:-}"
 echo "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || fail "invalid version"
@@ -26,17 +37,20 @@ PLATFORM="$(awk -F= '$1=="platform" {print $2}' "$WORK/manifest.txt")"
 EXPECTED_SHA="$(awk -F= '$1=="release_sha256" {print $2}' "$WORK/manifest.txt")"
 [ "$PRODUCT" = blackgate ] && [ "$MANIFEST_VERSION" = "$VERSION" ] && [ "$PLATFORM" = ubuntu-24.04-amd64 ] || fail "manifest rejected"
 echo "$EXPECTED_SHA  $WORK/blackgate-release.tar.gz" | sha256sum -c - >/dev/null 2>&1 || fail "release checksum failed"
-[ ! -e "$RELEASES/$VERSION" ] || fail "version already installed"
 status "deploying: $VERSION"
-mkdir -p "$RELEASES/$VERSION"
-tar xzf "$WORK/blackgate-release.tar.gz" -C "$RELEASES/$VERSION" --strip-components=1 || fail "release extraction failed"
-chown -R blackgate:blackgate "$RELEASES/$VERSION"
 PREVIOUS="$(readlink "$CURRENT")"
+if [ -e "$RELEASES/$VERSION" ]; then
+  status "rolling back: $VERSION"
+else
+  mkdir -p "$RELEASES/$VERSION"
+  tar xzf "$WORK/blackgate-release.tar.gz" -C "$RELEASES/$VERSION" --strip-components=1 || fail "release extraction failed"
+  chown -R blackgate:blackgate "$RELEASES/$VERSION"
+fi
 ln -s "releases/$VERSION" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$CURRENT"
 systemctl restart blackgate.service
 sleep 8
-if systemctl is-active --quiet blackgate.service; then status "deployed: $VERSION"; exit 0; fi
+if systemctl is-active --quiet blackgate.service; then prune_releases; status "deployed: $VERSION"; exit 0; fi
 ln -s "$PREVIOUS" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$CURRENT"
 systemctl restart blackgate.service || true

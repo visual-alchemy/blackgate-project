@@ -205,7 +205,7 @@ const RouteItem = () => {
             return `${record.schema_options?.host || record.schema_options?.address || 'N/A'}:${record.schema_options?.port || 'N/A'}`;
           case 'SDI': {
             const port = DEVICE_TO_SDI[record.schema_options?.device_number] ?? '?';
-            const modeMap = { 0: 'Auto', 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60' };
+            const modeMap = { 0: 'Auto', 1: '1080p23.98', 2: '1080p24', 3: '1080p29.97', 4: '1080p59.94', 5: '1080i59.94', 6: '720p59.94', 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC' };
             const mode = modeMap[record.schema_options?.video_mode] || '1080p25';
             return `SDI ${port} · ${mode}`;
           }
