@@ -4,7 +4,6 @@ defmodule Blackgate.SystemControl do
   @helper "/usr/local/libexec/blackgate-system-action"
   @allowed_actions ["restart-blackgate", "reboot"]
   @incoming_updates_dir "/opt/blackgate/incoming"
-  @releases_dir "/opt/blackgate/releases"
   @max_retained_updates 5
 
   def status do
@@ -49,8 +48,8 @@ defmodule Blackgate.SystemControl do
     end
   end
 
-  def prune_incoming_updates do
-    with {:ok, files} <- incoming_update_files() do
+  def prune_incoming_updates(incoming_dir \\ @incoming_updates_dir) do
+    with {:ok, files} <- incoming_update_files(incoming_dir) do
       files
       |> newest_first()
       |> Enum.drop(@max_retained_updates)
@@ -67,8 +66,10 @@ defmodule Blackgate.SystemControl do
     end
   end
 
-  def prune_update_history do
-    with :ok <- prune_incoming_updates(), :ok <- prune_installed_releases(), do: :ok
+  def prune_update_history(incoming_dir \\ @incoming_updates_dir) do
+    # The application owns incoming packages, not the root-owned release directory.
+    # Installed releases are pruned by the privileged updater after deployment.
+    prune_incoming_updates(incoming_dir)
   end
 
   def deploy(version) when is_binary(version) do
@@ -188,36 +189,12 @@ defmodule Blackgate.SystemControl do
     end
   end
 
-  defp incoming_update_files do
-    with {:ok, files} <- File.ls(@incoming_updates_dir) do
+  defp incoming_update_files(incoming_dir \\ @incoming_updates_dir) do
+    with {:ok, files} <- File.ls(incoming_dir) do
       {:ok,
        files
        |> Enum.filter(&String.ends_with?(&1, ".bgupdate"))
-       |> Enum.map(&Path.join(@incoming_updates_dir, &1))}
-    end
-  end
-
-  defp prune_installed_releases do
-    with {:ok, target} <- File.read_link("/opt/blackgate/current"),
-         {:ok, entries} <- File.ls(@releases_dir) do
-      current = Path.basename(target)
-
-      entries
-      |> Enum.filter(&Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, &1))
-      |> Enum.map(&Path.join(@releases_dir, &1))
-      |> Enum.filter(&File.dir?/1)
-      |> newest_first()
-      |> Enum.reject(&(Path.basename(&1) == current))
-      |> Enum.drop(@max_retained_updates - 1)
-      |> Enum.reduce_while(:ok, fn path, :ok ->
-        case File.rm_rf(path) do
-          {:ok, _} -> {:cont, :ok}
-          {:error, reason, _} -> {:halt, {:error, reason}}
-        end
-      end)
-    else
-      {:error, :enoent} -> :ok
-      error -> error
+       |> Enum.map(&Path.join(incoming_dir, &1))}
     end
   end
 

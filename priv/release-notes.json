@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.28.3",
+  "version": "2026.09.28.5",
   "released_on": "2026-09-28",
   "changes": [
     "License expiry and route-capacity limits now apply to running routes; Admins can sync entitlements immediately.",
@@ -7,6 +7,8 @@
     "Live Preview supports HEVC/H.265 with improved stability, while retaining AVC/H.264 behavior.",
     "Route statistics include AVC/HEVC source-format details and improved output telemetry.",
     "Software updates retain recent packages and releases for rollback and carry a verified updater helper.",
-    "DeckLink Quad 2 retains eight independent SDI outputs with supported SD/HD video modes."
+    "DeckLink Quad 2 retains eight independent SDI outputs with supported SD/HD video modes.",
+    "Dashboard RAM usage now excludes reclaimable Linux file cache.",
+    "Dashboard update uploads and listings no longer attempt unprivileged installed-release cleanup."
   ]
 }

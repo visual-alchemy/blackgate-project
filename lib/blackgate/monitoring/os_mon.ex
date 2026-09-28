@@ -6,7 +6,7 @@ defmodule Blackgate.Monitoring.OsMon do
   @spec ram_usage() :: float()
   def ram_usage do
     mem = :memsup.get_system_memory_data()
-    100 - mem[:free_memory] / mem[:total_memory] * 100
+    100 - mem[:available_memory] / mem[:total_memory] * 100
   end
 
   @spec cpu_la() :: %{avg1: float(), avg5: float(), avg15: float()}
