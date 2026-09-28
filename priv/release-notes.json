@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.28.4",
+  "version": "2026.09.28.3",
   "released_on": "2026-09-28",
   "changes": [
     "License expiry and route-capacity limits now apply to running routes; Admins can sync entitlements immediately.",
