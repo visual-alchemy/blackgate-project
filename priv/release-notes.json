@@ -1,11 +1,9 @@
 {
-  "version": "2026.09.27.7",
-  "released_on": "2026-09-27",
+  "version": "2026.09.28.3",
+  "released_on": "2026-09-28",
   "changes": [
-    "Added AVC/H.264 and HEVC/H.265 profile, level, chroma format, bit depth, aspect ratio, and source format summary to route statistics.",
-    "Corrected HEVC SPS parsing for emulation-prevention bytes, sub-layer profile data, and chroma-dependent crop units.",
-    "Software updates now retain up to five uploaded packages and five installed releases, with retained releases available for rollback.",
-    "Updated the DeckLink Duo 2 SDI video-mode list to supported SD/HD formats and frame rates, including fractional rates.",
-    "Removed unsupported 4K SDI modes; Auto mode now falls back to a supported 1080p output when the source format is not supported."
+    "Fixed HEVC/H.265 Live Preview by decoding the continuous reference-frame sequence and rejecting decoder-marked corrupt frames.",
+    "Prevented preview queue from dropping compressed MPEG-TS packets before demux and decode; retained existing AVC/H.264 thumbnail behavior.",
+    "Signed update bundles now carry a verified updater helper so retained-release rollback support stays current."
   ]
 }

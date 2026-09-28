@@ -37,6 +37,18 @@ PLATFORM="$(awk -F= '$1=="platform" {print $2}' "$WORK/manifest.txt")"
 EXPECTED_SHA="$(awk -F= '$1=="release_sha256" {print $2}' "$WORK/manifest.txt")"
 [ "$PRODUCT" = blackgate ] && [ "$MANIFEST_VERSION" = "$VERSION" ] && [ "$PLATFORM" = ubuntu-24.04-amd64 ] || fail "manifest rejected"
 echo "$EXPECTED_SHA  $WORK/blackgate-release.tar.gz" | sha256sum -c - >/dev/null 2>&1 || fail "release checksum failed"
+
+# New signed packages carry the root updater too. Verify it now, then install
+# only after new release passes its service health check. Optional for legacy
+# packages so old retained updates remain deployable.
+UPDATER_SHA="$(awk -F= '$1=="updater_sha256" {print $2}' "$WORK/manifest.txt")"
+if tar tzf "$PACKAGE" | grep -qx blackgate-updater; then
+  [ -n "$UPDATER_SHA" ] || fail "updater checksum missing"
+  tar xzf "$PACKAGE" -C "$WORK" blackgate-updater || fail "updater extraction failed"
+  echo "$UPDATER_SHA  $WORK/blackgate-updater" | sha256sum -c - >/dev/null 2>&1 || fail "updater checksum failed"
+else
+  [ -z "$UPDATER_SHA" ] || fail "updater missing"
+fi
 status "deploying: $VERSION"
 PREVIOUS="$(readlink "$CURRENT")"
 if [ -e "$RELEASES/$VERSION" ]; then
@@ -50,7 +62,30 @@ ln -s "releases/$VERSION" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$CURRENT"
 systemctl restart blackgate.service
 sleep 8
-if systemctl is-active --quiet blackgate.service; then prune_releases; status "deployed: $VERSION"; exit 0; fi
+if systemctl is-active --quiet blackgate.service; then
+  prune_releases
+  if [ -f "$WORK/blackgate-updater" ]; then
+    UPDATER_PATH=/usr/local/libexec/blackgate-updater
+    UPDATER_NEXT="$UPDATER_PATH.next"
+    UPDATER_BACKUP="$UPDATER_PATH.backup-$VERSION"
+    if [ -f "$UPDATER_PATH" ] && ! cp -p "$UPDATER_PATH" "$UPDATER_BACKUP"; then
+      status "deployed: $VERSION (updater backup failed)"
+      echo "WARNING: release deployed, but root updater backup failed" >&2
+      exit 0
+    fi
+    if install -o root -g root -m 0750 "$WORK/blackgate-updater" "$UPDATER_NEXT" &&
+       mv -f "$UPDATER_NEXT" "$UPDATER_PATH"; then
+      status "deployed: $VERSION"
+    else
+      rm -f "$UPDATER_NEXT"
+      status "deployed: $VERSION (updater refresh failed)"
+      echo "WARNING: release deployed, but root updater refresh failed" >&2
+    fi
+  else
+    status "deployed: $VERSION"
+  fi
+  exit 0
+fi
 ln -s "$PREVIOUS" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$CURRENT"
 systemctl restart blackgate.service || true

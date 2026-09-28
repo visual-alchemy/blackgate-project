@@ -21,14 +21,18 @@ make build
 mkdir -p "$OUTPUT_DIR"
 tar czf "$STAGE/blackgate-release.tar.gz" -C _build/prod/rel blackgate
 RELEASE_SHA="$(sha256sum "$STAGE/blackgate-release.tar.gz" | awk '{print $1}')"
+cp "$PROJECT_ROOT/iso-builder/files/blackgate-updater" "$STAGE/blackgate-updater"
+chmod 0750 "$STAGE/blackgate-updater"
+UPDATER_SHA="$(sha256sum "$STAGE/blackgate-updater" | awk '{print $1}')"
 cat > "$STAGE/manifest.txt" <<EOF
 product=blackgate
 version=$VERSION
 platform=ubuntu-24.04-amd64
 release_sha256=$RELEASE_SHA
+updater_sha256=$UPDATER_SHA
 EOF
 openssl pkeyutl -sign -rawin -inkey "$PRIVATE_KEY" \
   -in "$STAGE/manifest.txt" -out "$STAGE/manifest.sig"
 tar czf "$OUTPUT_DIR/$VERSION.bgupdate" -C "$STAGE" \
-  manifest.txt manifest.sig blackgate-release.tar.gz
+  manifest.txt manifest.sig blackgate-release.tar.gz blackgate-updater
 sha256sum "$OUTPUT_DIR/$VERSION.bgupdate"

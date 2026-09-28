@@ -1376,6 +1376,7 @@ static GstElement *thumbnail_appsink = NULL;
 static pthread_t thumbnail_thread;
 static volatile gboolean thumbnail_running = FALSE;
 static gboolean thumbnail_thread_started = FALSE;
+static GMutex thumbnail_pad_mutex;
 
 // MPEG-TS parsing structures for video metadata extraction
 #define TS_PACKET_SIZE 188
@@ -1492,7 +1493,6 @@ static gboolean source_descriptions_ready_unlocked(void);
 // Forward declarations for thumbnail
 static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id);
 static void *thumbnail_worker(void *arg);
-static void on_thumbnail_pad_added(GstElement *decodebin, GstPad *pad, gpointer data);
 static void parse_h264_sps(const guint8 *data, gsize size);
 static void parse_mpeg2_sequence(const guint8 *data, gsize size);
 static GstPadProbeReturn ts_probe_callback(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
@@ -3123,8 +3123,8 @@ static GstPadProbeReturn drop_thumbnail_pad_probe(GstPad *pad, GstPadProbeInfo *
     return GST_PAD_PROBE_DROP;
 }
 
-// Keyframe gate for thumbnail: only pass IDR (non-delta-unit) frames so the
-// preview JPEG is always a clean keyframe, never a macroblocked P/B frame.
+// Keyframe gate for thumbnail: parsers mark inter-frames as delta units. Only
+// decode random-access frames to keep this optional branch cheap and clean.
 static GstPadProbeReturn thumbnail_keyframe_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
     (void)pad;
@@ -3139,36 +3139,136 @@ static GstPadProbeReturn thumbnail_keyframe_probe(GstPad *pad, GstPadProbeInfo *
 static void on_thumbnail_tsdemux_pad_added(GstElement *tsdemux, GstPad *pad, gpointer data)
 {
     (void)tsdemux;
-    GstElement *h264parse = (GstElement *)data;
+    GstElement *deinterlace = (GstElement *)data;
 
     GstCaps *caps = gst_pad_get_current_caps(pad);
     if (!caps) caps = gst_pad_query_caps(pad, NULL);
-    if (!caps) return;
-
-    GstStructure *str = gst_caps_get_structure(caps, 0);
-    const gchar *name = gst_structure_get_name(str);
-    gst_caps_unref(caps);
-
-    // Only H264 is decoded for the thumbnail. Drop everything else (audio AND
-    // non-H264 video such as H265/MPEG2) so those pads never stay unlinked:
-    // an unlinked pad returns GST_FLOW_NOT_LINKED, which propagates up to the
-    // tee and tears down the WHOLE pipeline. Non-H264 routes just lose the
-    // preview; the main sink branch (decodebin) still decodes them normally.
-    if (g_strcmp0(name, "video/x-h264") != 0) {
+    if (!caps || gst_caps_is_empty(caps) || gst_caps_is_any(caps) ||
+        gst_caps_get_size(caps) == 0) {
+        if (caps) gst_caps_unref(caps);
         gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
         return;
     }
 
-    GstPad *sink_pad = gst_element_get_static_pad(h264parse, "sink");
-    if (!gst_pad_is_linked(sink_pad)) {
-        GstPadLinkReturn ret = gst_pad_link(pad, sink_pad);
-        if (ret == GST_PAD_LINK_OK) {
-            g_print("Thumbnail: Linked video pad to h264parse\n");
-        } else {
-            g_printerr("Thumbnail: Failed to link video pad to h264parse: %d\n", ret);
+    GstStructure *str = gst_caps_get_structure(caps, 0);
+    if (!str) {
+        gst_caps_unref(caps);
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
+        return;
+    }
+    const gchar *name = gst_structure_get_name(str);
+    gboolean is_h264 = g_strcmp0(name, "video/x-h264") == 0;
+    gboolean is_h265 = g_strcmp0(name, "video/x-h265") == 0;
+    gst_caps_unref(caps);
+
+    // Audio and unsupported video pads must be consumed: a demux pad left
+    // unlinked can propagate GST_FLOW_NOT_LINKED back through the tee.
+    if (!is_h264 && !is_h265) {
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
+        return;
+    }
+
+    const char *codec = is_h264 ? "H.264" : "HEVC";
+    const char *parser_factory = is_h264 ? "h264parse" : "h265parse";
+    const char *decoder_factory = is_h264 ? "avdec_h264" : "avdec_h265";
+    const char *parser_name = is_h264 ? "thumbnail_h264parse" : "thumbnail_h265parse";
+    const char *decoder_name = is_h264 ? "thumbnail_avdec_h264" : "thumbnail_avdec_h265";
+
+    g_mutex_lock(&thumbnail_pad_mutex);
+
+    GstPad *decode_sink = gst_element_get_static_pad(deinterlace, "sink");
+    if (!decode_sink || gst_pad_is_linked(decode_sink)) {
+        if (decode_sink) gst_object_unref(decode_sink);
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
+        g_mutex_unlock(&thumbnail_pad_mutex);
+        return;
+    }
+
+    GstObject *parent = gst_object_get_parent(GST_OBJECT(deinterlace));
+    GstElement *pipeline = parent ? GST_ELEMENT(parent) : NULL;
+    GstElement *parser = gst_element_factory_make(parser_factory, parser_name);
+    GstElement *decoder = gst_element_factory_make(decoder_factory, decoder_name);
+    if (!pipeline || !parser || !decoder) {
+        g_printerr("Thumbnail: %s parser/decoder unavailable; preview disabled for this stream\n", codec);
+        if (pipeline) gst_object_unref(pipeline);
+        if (parser) gst_object_unref(parser);
+        if (decoder) gst_object_unref(decoder);
+        gst_object_unref(decode_sink);
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
+        g_mutex_unlock(&thumbnail_pad_mutex);
+        return;
+    }
+
+    // Repeat HEVC VPS/SPS/PPS at IDRs so decoder can initialize after joining
+    // a live transport stream.
+    if (is_h265 && g_object_class_find_property(G_OBJECT_GET_CLASS(parser), "config-interval")) {
+        g_object_set(parser, "config-interval", -1, NULL);
+    }
+
+    // HEVC thumbnails must decode the complete access-unit sequence: P/B
+    // pictures carry references needed to reconstruct later frames. Reject
+    // decoder-marked corrupt output instead of writing visibly damaged JPEGs.
+    if (is_h265) {
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(decoder), "output-corrupt")) {
+            g_object_set(decoder, "output-corrupt", FALSE, NULL);
+        }
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(decoder), "discard-corrupted-frames")) {
+            g_object_set(decoder, "discard-corrupted-frames", TRUE, NULL);
         }
     }
-    if (sink_pad) gst_object_unref(sink_pad);
+
+    gboolean parser_added = gst_bin_add(GST_BIN(pipeline), parser);
+    gboolean decoder_added = parser_added && gst_bin_add(GST_BIN(pipeline), decoder);
+    if (!parser_added || !decoder_added ||
+        !gst_element_link(parser, decoder) ||
+        !gst_element_link(decoder, deinterlace)) {
+        g_printerr("Thumbnail: Failed to construct %s decode chain\n", codec);
+        if (decoder_added) gst_bin_remove(GST_BIN(pipeline), decoder);
+        else gst_object_unref(decoder);
+        if (parser_added) gst_bin_remove(GST_BIN(pipeline), parser);
+        else gst_object_unref(parser);
+        gst_object_unref(decode_sink);
+        gst_object_unref(pipeline);
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
+        g_mutex_unlock(&thumbnail_pad_mutex);
+        return;
+    }
+
+    // H.264 preview keeps its existing IDR-only decode behavior. Do not gate
+    // HEVC here: dropping its inter pictures breaks reference continuity.
+    GstPad *parse_src = is_h264 ? gst_element_get_static_pad(parser, "src") : NULL;
+    if (parse_src) {
+        gst_pad_add_probe(parse_src, GST_PAD_PROBE_TYPE_BUFFER,
+                          thumbnail_keyframe_probe, NULL, NULL);
+        gst_object_unref(parse_src);
+    }
+
+    gboolean states_synced = gst_element_sync_state_with_parent(parser) &&
+                             gst_element_sync_state_with_parent(decoder);
+    GstPad *parser_sink = gst_element_get_static_pad(parser, "sink");
+    GstPadLinkReturn ret = (states_synced && parser_sink)
+        ? gst_pad_link(pad, parser_sink)
+        : GST_PAD_LINK_REFUSED;
+    if (parser_sink) gst_object_unref(parser_sink);
+
+    // Release the temporary sink-pad ref used for the linked-state check.
+    gst_object_unref(decode_sink);
+
+    if (ret == GST_PAD_LINK_OK) {
+        g_print("Thumbnail: Linked %s pad through %s → %s\n", codec,
+                parser_factory, decoder_factory);
+    } else {
+        g_printerr("Thumbnail: Failed to link %s video pad (link=%d, state-sync=%s)\n",
+                   codec, ret, states_synced ? "ok" : "failed");
+        gst_element_set_state(decoder, GST_STATE_NULL);
+        gst_element_set_state(parser, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(pipeline), decoder);
+        gst_bin_remove(GST_BIN(pipeline), parser);
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, drop_thumbnail_pad_probe, NULL, NULL);
+    }
+
+    gst_object_unref(pipeline);
+    g_mutex_unlock(&thumbnail_pad_mutex);
 }
 
 static void *thumbnail_worker(void *arg)
@@ -3230,22 +3330,20 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 {
     GstElement *queue       = gst_element_factory_make("queue",         "thumbnail_queue");
     GstElement *tsdemux     = gst_element_factory_make("tsdemux",       "thumbnail_tsdemux");
-    GstElement *h264parse   = gst_element_factory_make("h264parse",     "thumbnail_h264parse");
-    GstElement *avdec       = gst_element_factory_make("avdec_h264",    "thumbnail_avdec_h264");
     GstElement *deinterlace = gst_element_factory_make("deinterlace",   "thumbnail_deinterlace");
+    GstElement *rate        = gst_element_factory_make("videorate",      "thumbnail_rate");
     GstElement *convert     = gst_element_factory_make("videoconvert",  "thumbnail_convert");
     GstElement *scale       = gst_element_factory_make("videoscale",    "thumbnail_scale");
     GstElement *capsfilter  = gst_element_factory_make("capsfilter",    "thumbnail_capsfilter");
     GstElement *jpegenc     = gst_element_factory_make("jpegenc",       "thumbnail_jpegenc");
     GstElement *appsink     = gst_element_factory_make("appsink",       "thumbnail_appsink");
 
-    if (!queue || !tsdemux || !h264parse || !avdec || !deinterlace || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
+    if (!queue || !tsdemux || !deinterlace || !rate || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
         g_printerr("Thumbnail: One or more elements unavailable — skipping thumbnail branch\n");
         if (queue)       gst_object_unref(queue);
         if (tsdemux)     gst_object_unref(tsdemux);
-        if (h264parse)   gst_object_unref(h264parse);
-        if (avdec)       gst_object_unref(avdec);
         if (deinterlace) gst_object_unref(deinterlace);
+        if (rate)        gst_object_unref(rate);
         if (convert)     gst_object_unref(convert);
         if (scale)       gst_object_unref(scale);
         if (capsfilter)  gst_object_unref(capsfilter);
@@ -3254,12 +3352,22 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         return;
     }
 
-    // Leaky upstream queue: drops old buffers so thumbnail never blocks main stream
+    // Do not shed buffers from compressed MPEG-TS before demux/decode. Packet
+    // loss here corrupts both transport continuity and HEVC reference frames.
+    // Allow short decode/scheduling bursts to queue; sustained decoder overload
+    // can still back-pressure this tee branch once this bounded queue fills.
     g_object_set(queue,
-        "max-size-buffers", 10,
-        "max-size-bytes",   0,
-        "max-size-time",    (guint64)0,
-        "leaky",            2,  // GST_QUEUE_LEAK_UPSTREAM
+        "max-size-buffers", 0,
+        "max-size-bytes",   64 * 1024 * 1024,
+        "max-size-time",    (guint64)(8 * GST_SECOND),
+        "leaky",            0,  // GST_QUEUE_NO_LEAK
+        NULL);
+
+    // Decode continuously, then keep only one raw frame per second for preview
+    // conversion/JPEG work. This rate limiter is downstream of both decoders.
+    g_object_set(rate,
+        "max-rate", 1,
+        "drop-only", TRUE,
         NULL);
 
     // Scale target: 320x180
@@ -3272,8 +3380,8 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 
     g_object_set(jpegenc, "quality", 85, NULL);
 
-    // Optional preview may receive no frames (e.g. HEVC on this H264-only
-    // branch). Do not let its preroll hold the whole pipeline in PAUSED.
+    // Optional preview may receive no frames (unsupported codec or long GOP).
+    // Do not let its preroll hold the whole pipeline in PAUSED.
     g_object_set(appsink,
         "emit-signals", FALSE,
         "max-buffers",  2,
@@ -3282,24 +3390,18 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         "async",        FALSE,
         NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, h264parse, avdec, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, deinterlace, rate, convert, scale, capsfilter, jpegenc, appsink, NULL);
 
-    // Keyframe gate on the COMPRESSED side (h264parse output): drop P/B access
-    // units BEFORE they reach the software decoder, so only IDR frames are
-    // decoded. This cuts thumbnail decode CPU from continuous 25fps down to a
-    // keyframe every ~2s, while still producing a clean IDR-only preview.
-    GstPad *parse_src = gst_element_get_static_pad(h264parse, "src");
-    gst_pad_add_probe(parse_src, GST_PAD_PROBE_TYPE_BUFFER, thumbnail_keyframe_probe, NULL, NULL);
-    gst_object_unref(parse_src);
-
-    g_signal_connect(tsdemux, "pad-added", G_CALLBACK(on_thumbnail_tsdemux_pad_added), h264parse);
+    // Codec-specific parser/decoder is added when tsdemux exposes its video
+    // pad. Both codecs then share the same thumbnail processing and JPEG tail.
+    g_signal_connect(tsdemux, "pad-added", G_CALLBACK(on_thumbnail_tsdemux_pad_added), deinterlace);
 
     if (!gst_element_link(tee, queue) || !gst_element_link(queue, tsdemux)) {
         g_printerr("Thumbnail: Failed to link tee → queue → tsdemux\n");
         return;
     }
 
-    if (!gst_element_link_many(h264parse, avdec, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
+    if (!gst_element_link_many(deinterlace, rate, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
         g_printerr("Thumbnail: Failed to link video chain\n");
         return;
     }
