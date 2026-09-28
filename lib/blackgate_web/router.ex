@@ -48,6 +48,9 @@ defmodule BlackgateWeb.Router do
     get "/system/updates", UpdateController, :index
     post "/system/updates", UpdateController, :upload
     post "/system/updates/:version/deploy", UpdateController, :deploy
+    post "/license/activate", LicenseController, :activate
+    post "/license/sync", LicenseController, :sync
+    delete "/license/deactivate", LicenseController, :deactivate
   end
 
   scope "/api", BlackgateWeb do
@@ -93,13 +96,11 @@ defmodule BlackgateWeb.Router do
 
     # License management
     get "/license", LicenseController, :show
-    post "/license/activate", LicenseController, :activate
-    delete "/license/deactivate", LicenseController, :deactivate
   end
 
   # TODO: improve this
   scope "/api", BlackgateWeb do
-    pipe_through [:api_no_parse]
+    pipe_through [:api_no_parse, :admin]
     post "/restore", BackupController, :restore
   end
 

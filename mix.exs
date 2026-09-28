@@ -74,10 +74,19 @@ defmodule Blackgate.MixProject do
   defp releases do
     [
       blackgate: [
-        steps: [:assemble, &copy_c_app/1, &copy_web_app/1],
+        steps: [&validate_release_notes/1, :assemble, &copy_c_app/1, &copy_web_app/1],
         cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
       ]
     ]
+  end
+
+  defp validate_release_notes(release) do
+    version = "iso-builder/release-version" |> File.read!() |> String.trim()
+
+    case Blackgate.ReleaseNotes.load("priv/release-notes.json") do
+      %{version: ^version} -> release
+      _ -> raise "Release notes must be valid and match iso-builder/release-version"
+    end
   end
 
   defp copy_c_app(release) do

@@ -4,6 +4,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, Ca
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 import { useRouteStats } from '../../hooks/useRouteStats';
+import { useLicense } from '../../hooks/useLicense';
 import OutputPopover from './OutputPopover';
 
 const { Title } = Typography;
@@ -134,6 +135,7 @@ const RouteNameCell = ({ record }) => {
 };
 
 const Routes = () => {
+  const license = useLicense();
   const [routes, setRoutes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [messageApi, contextHolder] = message.useMessage();
@@ -423,6 +425,7 @@ const Routes = () => {
             icon={record.status === 'started' ? <StopOutlined style={{ color: '#ff4d4f' }} /> : <CaretRightOutlined style={{ color: '#52c41a' }} />}
             onClick={() => handleRouteStatus(record.id, record.status === 'started' ? 'stop' : 'start')}
             title={record.status === 'started' ? 'Stop' : 'Start'}
+            disabled={record.status !== 'started' && (!license || license.expired)}
           />
           <Button
             type="text"
@@ -505,6 +508,7 @@ const Routes = () => {
                     icon={<CaretRightOutlined />}
                     loading={bulkLoading}
                     onClick={() => handleBulkAction('start')}
+                    disabled={!license || license.expired}
                   >
                     Start Selected
                   </Button>
@@ -546,4 +550,4 @@ const Routes = () => {
   );
 };
 
-export default Routes; 
+export default Routes;

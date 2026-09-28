@@ -5,6 +5,18 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
+    with_route_lock(fn ->
+      with {:ok, :allowed} <- Blackgate.License.can_start_route?(id) do
+        start_route_unchecked(id)
+      end
+    end)
+  end
+
+  # All admission, restart and cutoff decisions share this lock. The requester
+  # must be self(), otherwise global treats concurrent callers as one owner.
+  def with_route_lock(fun), do: :global.trans({{__MODULE__, :admission}, self()}, fun, [node()])
+
+  defp start_route_unchecked(id) do
     supervisor = {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}}
     child_spec = {Blackgate.RoutesSupervisor, %{id: id}}
 
@@ -53,7 +65,9 @@ defmodule Blackgate do
   def stop_route(id) do
     case get_route(id) do
       {:ok, pid} ->
-        Supervisor.stop(pid, :normal)
+        result = Supervisor.stop(pid, :normal)
+        Blackgate.set_route_status(id, "stopped")
+        result
 
       other ->
         Blackgate.set_route_status(id, "stopped")
@@ -63,6 +77,14 @@ defmodule Blackgate do
 
   @spec restart_route(String.t()) :: {:ok, term()} | {:error, term()}
   def restart_route(id) do
+    with_route_lock(fn ->
+      with {:ok, :allowed} <- Blackgate.License.can_start_route?(id) do
+        restart_route_unchecked(id)
+      end
+    end)
+  end
+
+  defp restart_route_unchecked(id) do
     case stop_route(id) do
       {:error, reason} ->
         Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
@@ -71,8 +93,40 @@ defmodule Blackgate do
         nil
     end
 
-    with {:ok, _pid} <- start_route(id) do
+    with {:ok, _pid} <- start_route_unchecked(id) do
       {:ok, :restarted}
+    end
+  end
+
+  @doc "Live route supervisors, including reconnecting routes; never trust user-editable status."
+  def running_routes do
+    if Process.whereis(Blackgate.DynamicSupervisor) do
+      PartitionSupervisor.which_children(Blackgate.DynamicSupervisor)
+      |> Enum.flat_map(fn {_, partition, _, _} ->
+        DynamicSupervisor.which_children(partition)
+        |> Enum.flat_map(fn {_, supervisor, _, _} ->
+          try do
+            Supervisor.which_children(supervisor)
+            |> Enum.flat_map(fn
+              {{:route_handler, id}, pid, _, _} when is_pid(pid) or pid == :restarting ->
+                [%{id: id, pid: supervisor}]
+
+              _ ->
+                []
+            end)
+          catch
+            :exit, _ ->
+              if is_pid(supervisor) and Process.alive?(supervisor) do
+                raise "Cannot inspect live route supervisor"
+              else
+                []
+              end
+          end
+        end)
+      end)
+      |> Enum.sort_by(& &1.id)
+    else
+      []
     end
   end
 

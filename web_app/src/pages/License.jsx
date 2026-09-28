@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, Typography, Space, Input, Button, message, Tag, Statistic, Row, Col, Alert, Divider, Modal } from 'antd';
+import { Card, Typography, Space, Input, Button, message, Tag, Statistic, Row, Col, Alert, Modal, Tooltip } from 'antd';
 import {
     SafetyCertificateOutlined,
     KeyOutlined,
@@ -9,16 +9,44 @@ import {
     ExclamationCircleOutlined,
     CloseCircleOutlined,
     DeleteOutlined,
+    SyncOutlined,
 } from '@ant-design/icons';
 import { licenseApi } from '../utils/api';
+import { getUser } from '../utils/auth';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Paragraph } = Typography;
 const { TextArea } = Input;
 
+const formatLicenseTimestamp = (timestamp) => {
+    if (!timestamp) return '—';
+
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return timestamp;
+
+    return `${new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'UTC',
+    }).format(date)} UTC`;
+};
+
+const renderLicenseTimestamp = (value) => (
+    <Tooltip title={value || '—'}>
+        <span>{formatLicenseTimestamp(value)}</span>
+    </Tooltip>
+);
+
 const License = () => {
+    const isAdmin = getUser()?.role === 'admin';
     const [license, setLicense] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activating, setActivating] = useState(false);
+    const [syncing, setSyncing] = useState(false);
     const [licenseKey, setLicenseKey] = useState('');
     const [modal, modalContextHolder] = Modal.useModal();
     const [messageApi, messageContextHolder] = message.useMessage();
@@ -36,6 +64,8 @@ const License = () => {
 
     useEffect(() => {
         fetchLicense();
+        const timer = setInterval(fetchLicense, 5000);
+        return () => clearInterval(timer);
     }, []);
 
     const handleActivate = async () => {
@@ -67,7 +97,7 @@ const License = () => {
                 setLicenseKey('');
                 fetchLicense();
             }
-        } catch (error) {
+        } catch {
             modal.error({
                 title: 'Connection Error',
                 content: 'Failed to communicate with the license server. Please ensure you have an active internet connection and try again.',
@@ -81,7 +111,7 @@ const License = () => {
     const handleDeactivate = () => {
         modal.confirm({
             title: 'Deactivate License',
-            content: 'Are you sure you want to deactivate your license? This will revert to trial mode.',
+            content: 'Deactivating this license will stop all routes. Saved configurations remain. A new trial will not be granted.',
             okText: 'Deactivate',
             okType: 'danger',
             cancelText: 'Cancel',
@@ -90,18 +120,40 @@ const License = () => {
                     await licenseApi.deactivate();
                     messageApi.success('License deactivated');
                     fetchLicense();
-                } catch (error) {
+                } catch {
                     messageApi.error('Failed to deactivate license');
                 }
             },
         });
     };
 
+    const handleSync = async () => {
+        setSyncing(true);
+        try {
+            const response = await licenseApi.sync();
+
+            if (response.error) {
+                const retry = response.retry_after_seconds
+                    ? ` Try again in ${response.retry_after_seconds} seconds.`
+                    : '';
+                messageApi.error(`${response.error}${retry}`);
+                return;
+            }
+
+            setLicense(response.data);
+            messageApi.success('License synchronized');
+        } catch {
+            messageApi.error('Cannot reach the gateway. Existing license state was preserved.');
+        } finally {
+            setSyncing(false);
+        }
+    };
+
     const getStatusTag = () => {
         if (!license) return null;
 
         if (license.expired) {
-            return <Tag icon={<CloseCircleOutlined />} color="error">Expired</Tag>;
+            return <Tag icon={<CloseCircleOutlined />} color="error">Operation blocked</Tag>;
         }
 
         if (license.status === 'licensed') {
@@ -141,31 +193,41 @@ const License = () => {
             {/* License Status Card */}
             <Card>
                 <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <Space>
                             <Title level={4} style={{ margin: 0 }}>License Status</Title>
                             {getStatusTag()}
                         </Space>
-                        {license?.status === 'licensed' && (
-                            <Button
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={handleDeactivate}
-                                size="small"
-                            >
-                                Deactivate
-                            </Button>
+                        {isAdmin && (
+                            <Space>
+                                {license?.can_sync && (
+                                    <Button
+                                        icon={<SyncOutlined />}
+                                        onClick={handleSync}
+                                        loading={syncing}
+                                        size="small"
+                                    >
+                                        Sync license now
+                                    </Button>
+                                )}
+                                {license?.status === 'licensed' && (
+                                    <Button
+                                        danger
+                                        icon={<DeleteOutlined />}
+                                        onClick={handleDeactivate}
+                                        size="small"
+                                    >
+                                        Deactivate
+                                    </Button>
+                                )}
+                            </Space>
                         )}
                     </div>
 
                     {license?.expired && (
                         <Alert
-                            message={license.status === 'trial' ? 'Trial Period Expired' : 'License Expired'}
-                            description={
-                                license.status === 'trial'
-                                    ? 'Your 30-day trial has ended. Please activate a license key to continue using Blackgate.'
-                                    : 'Your license has expired. Please renew your license to start new routes.'
-                            }
+                            message="Route operation blocked"
+                            description={`${license.reason || 'A valid license is required.'} Running routes are stopped; saved configurations remain.`}
                             type="error"
                             showIcon
                         />
@@ -214,17 +276,42 @@ const License = () => {
                             />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Issued" value={license?.issued_at || '—'} />
+                            <Statistic
+                                title="Issued (UTC)"
+                                value={license?.issued_at || '—'}
+                                formatter={() => renderLicenseTimestamp(license?.issued_at)}
+                            />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Expires" value={license?.expires_at || '—'} />
+                            <Statistic
+                                title="Expires (UTC)"
+                                value={license?.expires_at || '—'}
+                                formatter={() => renderLicenseTimestamp(license?.expires_at)}
+                            />
+                        </Col>
+                        <Col xs={12} sm={8} md={6}>
+                            <Statistic title="Active routes" value={license?.active_routes ?? 0} />
+                        </Col>
+                        <Col xs={12} sm={8} md={6}>
+                            <Statistic
+                                title="Offline grace deadline (UTC)"
+                                value={license?.offline_deadline || '—'}
+                                formatter={() => renderLicenseTimestamp(license?.offline_deadline)}
+                            />
+                        </Col>
+                        <Col xs={12} sm={8} md={6}>
+                            <Statistic
+                                title="Last verified (UTC)"
+                                value={license?.last_verified_at || '—'}
+                                formatter={() => renderLicenseTimestamp(license?.last_verified_at)}
+                            />
                         </Col>
                     </Row>
                 </Space>
             </Card>
 
             {/* Activate License Card */}
-            <Card
+            {isAdmin && <Card
                 title={
                     <Space>
                         <KeyOutlined />
@@ -257,7 +344,7 @@ const License = () => {
                         Activate License
                     </Button>
                 </Space>
-            </Card>
+            </Card>}
         </Space>
     );
 };

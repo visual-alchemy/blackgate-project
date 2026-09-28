@@ -132,7 +132,7 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def start(conn, %{"route_id" => route_id}) do
-    case Blackgate.License.can_start_route?() do
+    case Blackgate.License.can_start_route?(route_id) do
       {:error, reason} ->
         conn
         |> put_status(:payment_required)

@@ -391,7 +391,15 @@ export const licenseApi = {
   activate: async (key) => {
     const response = await authFetch('/api/license/activate', {
       method: 'POST',
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ license_key: key }),
+    });
+    return response.json();
+  },
+
+  // Immediately refresh the current entitlement from the license server
+  sync: async () => {
+    const response = await authFetch('/api/license/sync', {
+      method: 'POST',
     });
     return response.json();
   },

@@ -22,6 +22,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../utils/auth';
 import { ROUTES } from '../utils/constants';
 import React from 'react';
+import LicenseExpiryWarning from './LicenseExpiryWarning';
 
 const { Header, Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
@@ -466,6 +467,7 @@ const MainLayout = ({ children }) => {
             zIndex: 1,
           }}
         >
+          <LicenseExpiryWarning />
           {children}
         </Content>
       </Layout>

@@ -39,6 +39,7 @@ defmodule Blackgate.RouteHandler do
 
   @impl true
   def init(args) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     Process.flag(:trap_exit, true)
     Logger.info("RouteHandler: init route #{args.id}")
 
@@ -83,6 +84,7 @@ defmodule Blackgate.RouteHandler do
 
   @impl true
   def handle_event(:internal, :start, _state, data) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     # For RTMP/HTTP/HLS sources, spawn ffmpeg sidecar to convert to SRT
     active_route = active_route_for_pipeline(data)
     {route_for_pipeline, ffmpeg_port} = maybe_start_ffmpeg_sidecar(active_route)
@@ -521,6 +523,7 @@ defmodule Blackgate.RouteHandler do
 
   # Reconnect timer fired — attempt to restart the pipeline
   def handle_event({:timeout, :reconnect}, :retry, :reconnecting, data) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     elapsed = System.monotonic_time(:millisecond) - data.reconnect_started_at
 
     if elapsed >= @reconnect_timeout_ms do
@@ -1470,6 +1473,7 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp start_native_pipeline(route) do
+    unless Blackgate.License.valid?(), do: exit(:normal)
     binary_path = get_binary_path()
     cmd = "#{binary_path} #{route["id"]}"
 
@@ -1718,6 +1722,12 @@ defmodule Blackgate.RouteHandler do
   # video_mode=0 is "auto" — the C pipeline will detect the source and pick the mode.
   # The width/height/framerate here serve as fallback values if auto-detect can't match.
   defp sdi_video_mode_to_gst(0), do: {"auto", 1920, 1080, "25/1"}
+  defp sdi_video_mode_to_gst(1), do: {"1080p2398", 1920, 1080, "24000/1001"}
+  defp sdi_video_mode_to_gst(2), do: {"1080p24", 1920, 1080, "24/1"}
+  defp sdi_video_mode_to_gst(3), do: {"1080p2997", 1920, 1080, "30000/1001"}
+  defp sdi_video_mode_to_gst(4), do: {"1080p5994", 1920, 1080, "60000/1001"}
+  defp sdi_video_mode_to_gst(5), do: {"1080i5994", 1920, 1080, "30000/1001"}
+  defp sdi_video_mode_to_gst(6), do: {"720p5994", 1280, 720, "60000/1001"}
   defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
   defp sdi_video_mode_to_gst(11), do: {"1080p30", 1920, 1080, "30/1"}
   defp sdi_video_mode_to_gst(12), do: {"1080p50", 1920, 1080, "50/1"}
@@ -1727,11 +1737,7 @@ defmodule Blackgate.RouteHandler do
   defp sdi_video_mode_to_gst(14), do: {"720p50", 1280, 720, "50/1"}
   defp sdi_video_mode_to_gst(15), do: {"720p60", 1280, 720, "60/1"}
   defp sdi_video_mode_to_gst(17), do: {"pal", 720, 576, "25/1"}
-  defp sdi_video_mode_to_gst(18), do: {"ntsc", 720, 480, "30/1"}
-  defp sdi_video_mode_to_gst(22), do: {"2160p25", 3840, 2160, "25/1"}
-  defp sdi_video_mode_to_gst(23), do: {"2160p30", 3840, 2160, "30/1"}
-  defp sdi_video_mode_to_gst(24), do: {"2160p50", 3840, 2160, "50/1"}
-  defp sdi_video_mode_to_gst(25), do: {"2160p60", 3840, 2160, "60/1"}
+  defp sdi_video_mode_to_gst(18), do: {"ntsc", 720, 480, "30000/1001"}
   defp sdi_video_mode_to_gst(_), do: {"1080p25", 1920, 1080, "25/1"}
 
   # ===========================================================================

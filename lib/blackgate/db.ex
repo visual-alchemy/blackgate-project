@@ -4,7 +4,7 @@ defmodule Blackgate.Db do
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
-    :global.trans({__MODULE__, :route_creation}, fn ->
+    :global.trans({{__MODULE__, :route_creation}, self()}, fn ->
       create_route_with_license(data, id)
     end)
   end
@@ -222,7 +222,9 @@ defmodule Blackgate.Db do
   def backup() do
     case :khepri.get_many("**") do
       {:ok, data} ->
-        binary_data = :erlang.term_to_binary(data)
+        binary_data =
+          :erlang.term_to_binary(Map.filter(data, fn {path, _} -> backup_path?(path) end))
+
         {:ok, binary_data}
 
       error ->
@@ -236,21 +238,62 @@ defmodule Blackgate.Db do
     Logger.warning("Restoring backup")
 
     try do
-      data = :erlang.binary_to_term(binary_data)
+      data = :erlang.binary_to_term(binary_data, [:safe])
+      if not is_map(data), do: raise(ArgumentError, "Invalid backup format")
+      allowed = Map.filter(data, fn {path, _} -> backup_path?(path) end)
 
-      :khepri.delete_many("**")
+      if map_size(allowed) == 0,
+        do: raise(ArgumentError, "Backup contains no supported configuration")
 
-      Enum.each(data, fn {path, value} ->
-        :khepri.put(path, value)
+      if not Enum.all?(allowed, fn {_, value} -> is_map(value) end),
+        do: raise(ArgumentError, "Invalid configuration values")
+
+      # Share creation lock with create/clone/import. Never import protected
+      # namespaces, even when reading a legacy full-database backup.
+      :global.trans({{__MODULE__, :route_creation}, self()}, fn ->
+        license = Blackgate.License.get_license()
+        route_count = Enum.count(allowed, fn {path, _} -> match?(["routes", _], path) end)
+
+        if license.status == :trial and route_count > 2 do
+          {:error, :trial_route_limit}
+        else
+          Blackgate.with_route_lock(fn ->
+            Enum.each(Blackgate.running_routes(), &Blackgate.stop_route(&1.id))
+
+            normalized =
+              Map.new(allowed, fn
+                {["routes", id] = path, value} ->
+                  {path, Map.merge(value, %{"id" => id, "status" => "stopped"})}
+
+                entry ->
+                  entry
+              end)
+
+            :khepri.transaction(fn ->
+              :ok = :khepri_tx.delete_many("routes/**")
+              :maps.fold(fn path, value, :ok -> :khepri_tx.put(path, value) end, :ok, normalized)
+            end)
+            |> case do
+              {:ok, :ok} -> :ok
+              other -> other
+            end
+          end)
+        end
       end)
-
-      :ok
     rescue
       e ->
         Logger.error("Failed to restore backup: #{inspect(e)}")
         {:error, e}
     end
   end
+
+  defp backup_path?(["routes", id]) when is_binary(id), do: true
+
+  defp backup_path?(["routes", id, "destinations", dest]) when is_binary(id) and is_binary(dest),
+    do: true
+
+  defp backup_path?(["network", "interface_aliases"]), do: true
+  defp backup_path?(_), do: false
 
   defp now, do: DateTime.utc_now()
 end

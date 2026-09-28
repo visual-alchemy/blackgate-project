@@ -2,6 +2,14 @@ defmodule Blackgate.RouteHandlerTest do
   use ExUnit.Case
   alias Blackgate.RouteHandler
 
+  setup_all do
+    # These unit tests replace the entire Blackgate module. Keep the real
+    # enforcement worker from calling it during meck's module reload windows.
+    :ok = Supervisor.terminate_child(Blackgate.Supervisor, Blackgate.LicenseEnforcer)
+    on_exit(fn -> Supervisor.restart_child(Blackgate.Supervisor, Blackgate.LicenseEnforcer) end)
+    :ok
+  end
+
   setup do
     # Clear registry stats for test routes if they exist
     try do
@@ -64,6 +72,8 @@ defmodule Blackgate.RouteHandlerTest do
     :meck.expect(Blackgate.Db, :update_route, fn _id, _params -> {:ok, %{}} end)
 
     :meck.new(Blackgate, [:non_strict])
+    :meck.expect(Blackgate, :with_route_lock, fn fun -> fun.() end)
+    :meck.expect(Blackgate, :running_routes, fn -> [] end)
     :meck.expect(Blackgate, :set_route_status, fn _id, _status -> {:ok, %{}} end)
     :meck.expect(Blackgate, :set_route_error, fn _id, _err -> {:ok, %{}} end)
 
