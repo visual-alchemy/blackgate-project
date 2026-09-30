@@ -110,13 +110,56 @@ typedef struct {
     gboolean interlaced;
     gboolean fps_inferred; // TRUE if framerate was inferred, not detected
     gboolean info_valid;
+    guint8 h264_profile_idc;
+    guint8 h264_level_idc;
+    guint8 h264_chroma_format_idc;
+    guint8 h264_bit_depth;
+    guint8 hevc_profile_idc;
+    guint8 hevc_level_idc;
+    guint8 hevc_chroma_format_idc;
+    guint8 hevc_bit_depth;
+    guint16 sar_num;
+    guint16 sar_den;
     guint16 pmt_pid;
     guint16 video_pid;
     guint8 video_stream_type;
     pthread_mutex_t mutex;
 } VideoInfo;
 
-static VideoInfo video_info = {0, 0, 0, 1, FALSE, FALSE, FALSE, 0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+static VideoInfo video_info = {
+    .fps_den = 1, .sar_num = 1, .sar_den = 1,
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+};
+
+static const char *h264_profile_name(guint8 idc)
+{
+    switch (idc) {
+    case 66: return "Baseline"; case 77: return "Main"; case 88: return "Extended";
+    case 100: return "High"; case 110: return "High 10"; case 122: return "High 4:2:2";
+    case 244: return "High 4:4:4 Predictive"; default: return "Unknown";
+    }
+}
+
+static const char *chroma_format_name(guint8 idc)
+{
+    switch (idc) {
+    case 0: return "4:0:0"; case 1: return "4:2:0"; case 2: return "4:2:2";
+    case 3: return "4:4:4"; default: return "Unknown";
+    }
+}
+
+static const char *hevc_profile_name(guint8 idc, guint8 chroma, guint8 depth)
+{
+    if (chroma == 2 && depth == 10) return "Main 4:2:2 10";
+    if (chroma == 2) return "Main 4:2:2";
+    if (chroma == 1 && depth == 10) return "Main 10";
+    if (chroma == 1 && depth == 8) return "Main";
+    switch (idc) {
+    case 1: return "Main"; case 2: return "Main 10";
+    case 3: return "Main Still Picture"; case 4: return "Range Extensions";
+    default: return "Unknown";
+    }
+}
 
 // Forward declarations for MPEG-TS parsing
 static void parse_pat(const guint8 *data, gsize size);
@@ -226,6 +269,36 @@ static void add_mpegts_source_stats(cJSON *root, const char *tag)
         if (!mpegts_stream_is_audio(snapshot.stream_types[i])) continue;
         cJSON_AddItemToArray(audio_pids, cJSON_CreateNumber(snapshot.stream_pids[i]));
     }
+}
+
+static void add_video_metadata_stats(cJSON *root)
+{
+    if (!root) return;
+    pthread_mutex_lock(&video_info.mutex);
+    if (video_info.info_valid) {
+        cJSON_AddNumberToObject(root, "video-width", video_info.width);
+        cJSON_AddNumberToObject(root, "video-height", video_info.height);
+        cJSON_AddNumberToObject(root, "video-framerate-num", video_info.fps_num);
+        cJSON_AddNumberToObject(root, "video-framerate-den", video_info.fps_den);
+        cJSON_AddBoolToObject(root, "video-framerate-inferred", video_info.fps_inferred);
+        cJSON_AddStringToObject(root, "video-interlace-mode", video_info.interlaced ? "interleaved" : "progressive");
+        if (video_info.video_stream_type == STREAM_TYPE_H264) {
+            cJSON_AddStringToObject(root, "video-codec", "AVC/H.264");
+            cJSON_AddStringToObject(root, "video-profile", h264_profile_name(video_info.h264_profile_idc));
+            cJSON_AddNumberToObject(root, "video-level-idc", video_info.h264_level_idc);
+            cJSON_AddStringToObject(root, "video-chroma-format", chroma_format_name(video_info.h264_chroma_format_idc));
+            cJSON_AddNumberToObject(root, "video-bit-depth", video_info.h264_bit_depth);
+        } else if (video_info.video_stream_type == STREAM_TYPE_HEVC) {
+            cJSON_AddStringToObject(root, "video-codec", "HEVC/H.265");
+            cJSON_AddStringToObject(root, "video-profile", hevc_profile_name(video_info.hevc_profile_idc, video_info.hevc_chroma_format_idc, video_info.hevc_bit_depth));
+            cJSON_AddNumberToObject(root, "video-level-idc", video_info.hevc_level_idc);
+            cJSON_AddStringToObject(root, "video-chroma-format", chroma_format_name(video_info.hevc_chroma_format_idc));
+            cJSON_AddNumberToObject(root, "video-bit-depth", video_info.hevc_bit_depth);
+        }
+        cJSON_AddNumberToObject(root, "video-sar-num", video_info.sar_num);
+        cJSON_AddNumberToObject(root, "video-sar-den", video_info.sar_den);
+    }
+    pthread_mutex_unlock(&video_info.mutex);
 }
 
 static cJSON *build_source_stats_json(GstElement *src, const char *tag)
@@ -382,35 +455,14 @@ static void *print_stats(void *src)
         // Always emit primary (keeps legacy single-source contract: one stats object with "source":"primary").
         cJSON *primary = build_source_stats_json(source, "primary");
 
-        // Metadata attaches to primary only — the MPEG-TS probe is on the shared tee sink pad.
-        pthread_mutex_lock(&video_info.mutex);
-        if (video_info.info_valid) {
-            cJSON_AddNumberToObject(primary, "video-width", video_info.width);
-            cJSON_AddNumberToObject(primary, "video-height", video_info.height);
-            cJSON_AddNumberToObject(primary, "video-framerate-num", video_info.fps_num);
-            cJSON_AddNumberToObject(primary, "video-framerate-den", video_info.fps_den);
-            cJSON_AddBoolToObject(primary, "video-framerate-inferred", video_info.fps_inferred);
-            cJSON_AddStringToObject(primary, "video-interlace-mode",
-                                    video_info.interlaced ? "interleaved" : "progressive");
-        }
-        pthread_mutex_unlock(&video_info.mutex);
+        add_video_metadata_stats(primary);
 
         send_json_to_socket(primary);
         cJSON_Delete(primary);
 
         if (dual_ingest_active && secondary_source_element) {
             cJSON *secondary = build_source_stats_json(secondary_source_element, "secondary");
-            pthread_mutex_lock(&video_info.mutex);
-            if (video_info.info_valid) {
-                cJSON_AddNumberToObject(secondary, "video-width", video_info.width);
-                cJSON_AddNumberToObject(secondary, "video-height", video_info.height);
-                cJSON_AddNumberToObject(secondary, "video-framerate-num", video_info.fps_num);
-                cJSON_AddNumberToObject(secondary, "video-framerate-den", video_info.fps_den);
-                cJSON_AddBoolToObject(secondary, "video-framerate-inferred", video_info.fps_inferred);
-                cJSON_AddStringToObject(secondary, "video-interlace-mode",
-                                        video_info.interlaced ? "interleaved" : "progressive");
-            }
-            pthread_mutex_unlock(&video_info.mutex);
+            add_video_metadata_stats(secondary);
             send_json_to_socket(secondary);
             cJSON_Delete(secondary);
         }
@@ -1245,16 +1297,18 @@ static void parse_h264_sps(const guint8 *data, gsize size)
 
     guint8 profile_idc = read_bits(&br, 8);
     read_bits(&br, 8); // constraint_set flags + reserved
-    read_bits(&br, 8); // level_idc
+    guint8 level_idc = read_bits(&br, 8);
     read_ue(&br);      // seq_parameter_set_id
 
+    guint32 chroma_format_idc = 1;
+    guint32 bit_depth_luma = 8;
     // Handle high profiles
     if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122 || profile_idc == 244 || profile_idc == 44 ||
         profile_idc == 83 || profile_idc == 86 || profile_idc == 118 || profile_idc == 128 || profile_idc == 138 ||
         profile_idc == 139 || profile_idc == 134) {
-        guint32 chroma_format_idc = read_ue(&br);
+        chroma_format_idc = read_ue(&br);
         if (chroma_format_idc == 3) read_bits(&br, 1); // separate_colour_plane_flag
-        read_ue(&br);                                  // bit_depth_luma_minus8
+        bit_depth_luma = 8 + read_ue(&br);             // bit_depth_luma_minus8
         read_ue(&br);                                  // bit_depth_chroma_minus8
         read_bits(&br, 1);                             // qpprime_y_zero_transform_bypass_flag
         if (read_bits(&br, 1)) {                       // seq_scaling_matrix_present_flag
@@ -1315,12 +1369,16 @@ static void parse_h264_sps(const guint8 *data, gsize size)
     gint fps_num = 25, fps_den = 1;
     gboolean fps_inferred = TRUE;
 
+    guint16 sar_num = 1, sar_den = 1;
     if (read_bits(&br, 1)) { // vui_parameters_present_flag
         if (read_bits(&br, 1)) { // aspect_ratio_info_present_flag
             guint32 aspect_ratio_idc = read_bits(&br, 8);
             if (aspect_ratio_idc == 255) { // extended SAR
-                read_bits(&br, 16); // sar_width
-                read_bits(&br, 16); // sar_height
+                sar_num = read_bits(&br, 16);
+                sar_den = read_bits(&br, 16);
+            } else {
+                static const guint16 sar_table[][2] = {{0,0},{1,1},{12,11},{10,11},{16,11},{40,33},{24,11},{20,11},{32,11},{80,33},{18,11},{15,11},{64,33},{160,99},{4,3},{3,2},{2,1}};
+                if (aspect_ratio_idc < G_N_ELEMENTS(sar_table)) { sar_num = sar_table[aspect_ratio_idc][0]; sar_den = sar_table[aspect_ratio_idc][1]; }
             }
         }
         if (read_bits(&br, 1)) { // overscan_info_present_flag
@@ -1366,6 +1424,13 @@ static void parse_h264_sps(const guint8 *data, gsize size)
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
     video_info.fps_inferred = fps_inferred;
+    video_info.h264_profile_idc = profile_idc;
+    video_info.h264_level_idc = level_idc;
+    video_info.h264_chroma_format_idc = chroma_format_idc;
+    video_info.h264_bit_depth = bit_depth_luma;
+    video_info.video_stream_type = STREAM_TYPE_H264;
+    video_info.sar_num = sar_num ? sar_num : 1;
+    video_info.sar_den = sar_den ? sar_den : 1;
     video_info.info_valid = TRUE;
     g_print("MPEG-TS/H.264: Resolution: %dx%d, Interlaced: %s, FPS: %d/%d (%s)\n", width, height,
             interlaced ? "yes" : "no", fps_num, fps_den,
@@ -1404,44 +1469,43 @@ static void parse_mpeg2_sequence(const guint8 *data, gsize size)
 // Parse HEVC (H.265) SPS for resolution/framerate
 static void parse_hevc_sps(const guint8 *data, gsize size)
 {
-    // HEVC NAL unit header is 2 bytes, SPS starts after that
     if (size < 20) return;
-
-    // Skip NAL unit header (2 bytes) for HEVC
-    BitReader br = {data + 2, size - 2, 0, 0};
-
+    guint8 rbsp[256];
+    gsize rbsp_size = remove_emulation_prevention(data + 2, size - 2, rbsp, sizeof(rbsp));
+    BitReader br = {rbsp, rbsp_size, 0, 0};
     read_bits(&br, 4);                             // sps_video_parameter_set_id
     guint8 max_sub_layers = read_bits(&br, 3) + 1; // sps_max_sub_layers_minus1 + 1
     read_bits(&br, 1);                             // sps_temporal_id_nesting_flag
-
-    // Skip profile_tier_level - simplified approach
-    // This is complex in full spec, but we can skip fixed bits for common profiles
     read_bits(&br, 2);  // general_profile_space
     read_bits(&br, 1);  // general_tier_flag
-    read_bits(&br, 5);  // general_profile_idc
+    guint8 profile_idc = read_bits(&br, 5);
     read_bits(&br, 32); // general_profile_compatibility_flags (32 bits)
     read_bits(&br, 1);  // general_progressive_source_flag
-    read_bits(&br, 1);  // general_interlaced_source_flag
+    gboolean interlaced = read_bits(&br, 1);
     read_bits(&br, 1);  // general_non_packed_constraint_flag
     read_bits(&br, 1);  // general_frame_only_constraint_flag
     // Skip remaining constraint flags (44 bits)
     read_bits(&br, 32);
     read_bits(&br, 12);
-    read_bits(&br, 8); // general_level_idc
-
-    // Skip sub_layer_profile/level for each sub-layer
+    guint8 level_idc = read_bits(&br, 8);
+    gboolean profile_present[7] = {FALSE}, level_present[7] = {FALSE};
     if (max_sub_layers > 1) {
         for (int i = 0; i < max_sub_layers - 1; i++) {
-            read_bits(&br, 2); // sub_layer_profile/level_present_flag
+            profile_present[i] = read_bits(&br, 1);
+            level_present[i] = read_bits(&br, 1);
         }
-        // Padding if max_sub_layers < 8
         for (int i = max_sub_layers - 1; i < 8; i++) {
-            read_bits(&br, 2); // reserved
+            read_bits(&br, 2);
+        }
+        for (int i = 0; i < max_sub_layers - 1; i++) {
+            if (profile_present[i]) { read_bits(&br, 8); read_bits(&br, 32); read_bits(&br, 32); read_bits(&br, 12); }
+            if (level_present[i]) read_bits(&br, 8);
         }
     }
 
     read_ue(&br); // sps_seq_parameter_set_id
     guint32 chroma_format_idc = read_ue(&br);
+    if (chroma_format_idc > 3) return;
     if (chroma_format_idc == 3) {
         read_bits(&br, 1); // separate_colour_plane_flag
     }
@@ -1449,6 +1513,7 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     // The key info we need!
     guint32 pic_width = read_ue(&br);  // pic_width_in_luma_samples
     guint32 pic_height = read_ue(&br); // pic_height_in_luma_samples
+    if (!pic_width || !pic_height) return;
 
     // Check for conformance_window_flag
     if (read_bits(&br, 1)) { // conformance_window_flag
@@ -1456,10 +1521,14 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
         guint32 right = read_ue(&br);
         guint32 top = read_ue(&br);
         guint32 bottom = read_ue(&br);
-        // Adjust for cropping (simplified)
-        pic_width -= (left + right) * 2;
-        pic_height -= (top + bottom) * 2;
+        static const guint8 sub_width[] = {1, 2, 2, 1}, sub_height[] = {1, 2, 1, 1};
+        guint32 crop_w = (left + right) * sub_width[chroma_format_idc];
+        guint32 crop_h = (top + bottom) * sub_height[chroma_format_idc];
+        if (crop_w >= pic_width || crop_h >= pic_height) return;
+        pic_width -= crop_w; pic_height -= crop_h;
     }
+    guint8 bit_depth = read_ue(&br) + 8;
+    read_ue(&br); // bit_depth_chroma_minus8
 
     // Infer framerate based on resolution (50fps standard for HD/UHD broadcast)
     gint fps_num = (pic_height >= 720) ? 50 : 25, fps_den = 1;
@@ -1471,7 +1540,13 @@ static void parse_hevc_sps(const guint8 *data, gsize size)
     video_info.fps_num = fps_num;
     video_info.fps_den = fps_den;
     video_info.fps_inferred = fps_inferred;
-    video_info.interlaced = FALSE; // HEVC is progressive by design for UHD
+    video_info.interlaced = interlaced;
+    video_info.hevc_profile_idc = profile_idc;
+    video_info.hevc_level_idc = level_idc;
+    video_info.hevc_chroma_format_idc = chroma_format_idc;
+    video_info.hevc_bit_depth = bit_depth;
+    video_info.video_stream_type = STREAM_TYPE_HEVC;
+    video_info.sar_num = video_info.sar_den = 1;
     video_info.info_valid = TRUE;
     g_print("MPEG-TS/HEVC: Resolution: %dx%d, FPS: ~%d (inferred)\n", pic_width, pic_height, fps_num);
     pthread_mutex_unlock(&video_info.mutex);
@@ -1727,11 +1802,14 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
 
     g_object_set(jpegenc, "quality", 85, NULL);
 
+    // Optional preview may receive no frames (e.g. HEVC on this H264-only
+    // branch). Do not let its preroll hold the whole pipeline in PAUSED.
     g_object_set(appsink,
         "emit-signals", FALSE,
         "max-buffers",  2,
         "drop",         TRUE,
         "sync",         FALSE,
+        "async",        FALSE,
         NULL);
 
     gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, h264parse, avdec, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);

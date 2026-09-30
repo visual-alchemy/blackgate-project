@@ -1,4 +1,4 @@
-import { Card, Statistic, Row, Col, Tag, Empty, Alert, Space } from 'antd';
+import { Card, Statistic, Row, Col, Tag, Empty, Alert, Space, Typography } from 'antd';
 import {
     ArrowUpOutlined,
     ArrowDownOutlined,
@@ -70,6 +70,25 @@ const formatScanType = (interlaceMode) => {
     return { label: '?', full: interlaceMode, color: 'default' };
 };
 
+const formatVideoDescription = (stats, bitrate, scanType) => {
+    const codec = stats?.['video-codec'];
+    if (codec !== 'AVC/H.264' && codec !== 'HEVC/H.265') return null;
+    const width = stats['video-width'], height = stats['video-height'];
+    const fpsNum = stats['video-framerate-num'], fpsDen = stats['video-framerate-den'];
+    const levelIdc = stats['video-level-idc'];
+    const level = levelIdc > 0 ? (levelIdc / (codec === 'HEVC/H.265' ? 30 : 10)).toFixed(1) : '?';
+    const frameRate = fpsNum && fpsDen ? fpsNum / fpsDen : null;
+    const geometry = width && height ? `${width}×${height}${scanType.label.toLowerCase()}${frameRate ? `/${Number.isInteger(frameRate) ? frameRate : frameRate.toFixed(2)}` : ''}` : null;
+    const sarNum = stats['video-sar-num'] || 1, sarDen = stats['video-sar-den'] || 1;
+    const ratio = width && height ? (width * sarNum) / (height * sarDen) : 0;
+    const aspect = ratio ? (Math.abs(ratio - 16 / 9) < .02 ? '16:9' : Math.abs(ratio - 4 / 3) < .02 ? '4:3' : `${ratio.toFixed(2)}:1`) : null;
+    return [
+        `${codec} ${stats['video-profile'] || 'Unknown'}/${level}`,
+        `${stats['video-chroma-format'] || 'Unknown'} ${stats['video-bit-depth'] || '?'}-bit`,
+        geometry, aspect, bitrate > 0 ? `Input ${bitrate.toFixed(3)} Mb/s` : null,
+    ].filter(Boolean).join(' · ');
+};
+
 const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive = true }) => {
     if (!stats) {
         return (
@@ -125,6 +144,7 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
     const fpsInferred = stats?.['video-framerate-inferred'] ?? false;
     const interlaceMode = stats?.['video-interlace-mode'] ?? null;
     const scanType = formatScanType(interlaceMode);
+    const videoDescription = formatVideoDescription(stats, bitrate, scanType);
 
     const videoPid = stats?.['video-pid'];
     const audioPids = stats?.['audio-pids'] || [];
@@ -142,6 +162,10 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
             }
             style={{ marginBottom: 16 }}
         >
+            {videoDescription && <div style={{ marginBottom: 12 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>{stats['video-codec'] === 'HEVC/H.265' ? 'HEVC VIDEO FORMAT' : 'AVC VIDEO FORMAT'}</Typography.Text>
+                <div style={{ marginTop: 2, color: '#237804', fontSize: 15, fontWeight: 600 }}>{videoDescription}</div>
+            </div>}
             <Row gutter={[16, 16]}>
                 <Col xs={12} sm={8} md={6} lg={4}>
                     <Statistic
