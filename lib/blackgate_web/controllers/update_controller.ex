@@ -4,8 +4,9 @@ defmodule BlackgateWeb.UpdateController do
   alias Blackgate.SystemControl
 
   def index(conn, _params) do
-    case SystemControl.updates() do
-      {:ok, updates} -> json(conn, %{data: updates})
+    with :ok <- SystemControl.prune_update_history(), {:ok, updates} <- SystemControl.updates() do
+      json(conn, %{data: updates})
+    else
       _ -> conn |> put_status(500) |> json(%{error: "Could not list updates"})
     end
   end
@@ -15,7 +16,8 @@ defmodule BlackgateWeb.UpdateController do
          {:ok, body, _conn} <-
            Plug.Conn.read_body(conn, length: 50_000_000, read_length: 1_000_000),
          :ok <- File.mkdir_p("/opt/blackgate/incoming"),
-         :ok <- File.write("/opt/blackgate/incoming/#{version}.bgupdate", body) do
+         :ok <- File.write("/opt/blackgate/incoming/#{version}.bgupdate", body),
+         :ok <- SystemControl.prune_update_history() do
       conn |> put_status(:created) |> json(%{version: version})
     else
       {:error, reason} ->
