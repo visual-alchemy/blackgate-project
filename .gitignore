@@ -46,9 +46,6 @@ yarn-error.log*
 *~
 .DS_Store
 
-# === Tool Output (graphify code analysis cache) ===
-graphify-out/
-
 # === Appliance Builder Cache ===
 /iso-builder/cache/
 
