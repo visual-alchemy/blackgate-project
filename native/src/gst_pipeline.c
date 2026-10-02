@@ -1895,6 +1895,10 @@ static void collect_sink_stats(void)
             cJSON_AddNumberToObject(root, "connected-callers", num_callers);
             cJSON *callers = cJSON_AddArrayToObject(root, "callers");
 
+            gdouble max_rtt = 0.0;
+            gdouble total_send_rate = 0.0;
+            gdouble total_bandwidth = 0.0;
+
             for (gint j = 0; j < num_callers; j++) {
                 GValue *caller_val = &callers_array->values[j];
                 if (!G_VALUE_HOLDS(caller_val, GST_TYPE_STRUCTURE)) {
@@ -1920,7 +1924,16 @@ static void collect_sink_stats(void)
                     } else if (G_VALUE_HOLDS(value, G_TYPE_UINT64)) {
                         cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_uint64(value));
                     } else if (G_VALUE_HOLDS(value, G_TYPE_DOUBLE)) {
-                        cJSON_AddNumberToObject(caller, field_name, g_value_get_double(value));
+                        gdouble val = g_value_get_double(value);
+                        cJSON_AddNumberToObject(caller, field_name, val);
+
+                        if (g_strcmp0(field_name, "rtt-ms") == 0 && val > max_rtt) {
+                            max_rtt = val;
+                        } else if (g_strcmp0(field_name, "send-rate-mbps") == 0) {
+                            total_send_rate += val;
+                        } else if (g_strcmp0(field_name, "bandwidth-mbps") == 0) {
+                            total_bandwidth += val;
+                        }
                     } else if (G_VALUE_HOLDS(value, G_TYPE_OBJECT) && g_strcmp0(field_name, "caller-address") == 0) {
                         GObject *addr_obj = g_value_get_object(value);
                         if (G_IS_INET_SOCKET_ADDRESS(addr_obj)) {
@@ -1937,6 +1950,18 @@ static void collect_sink_stats(void)
                 }
 
                 cJSON_AddItemToArray(callers, caller);
+            }
+
+            // Fallback top-level sink stats from active callers if the srtsink
+            // stats structure returned 0 (listener mode only reports per-caller).
+            if (rtt_ms <= 0.0 && max_rtt > 0.0) {
+                cJSON_ReplaceItemInObject(root, "rtt-ms", cJSON_CreateNumber(max_rtt));
+            }
+            if (send_rate_mbps <= 0.0 && total_send_rate > 0.0) {
+                cJSON_ReplaceItemInObject(root, "send-rate-mbps", cJSON_CreateNumber(total_send_rate));
+            }
+            if (bandwidth_mbps <= 0.0 && total_bandwidth > 0.0) {
+                cJSON_ReplaceItemInObject(root, "bandwidth-mbps", cJSON_CreateNumber(total_bandwidth));
             }
         }
 
@@ -3243,6 +3268,23 @@ static void on_thumbnail_tsdemux_pad_added(GstElement *tsdemux, GstPad *pad, gpo
         gst_object_unref(parse_src);
     }
 
+    // HEVC has no keyframe gate, so route it through the videorate limiter.
+    // Splice here, before the demuxer pad is linked, so no buffer is in flight.
+    if (is_h265) {
+        GstElement *tail_rate    = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_rate");
+        GstElement *tail_convert = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_convert");
+        if (tail_rate && tail_convert) {
+            gst_element_unlink(deinterlace, tail_convert);
+            if (!gst_element_link_many(deinterlace, tail_rate, tail_convert, NULL)) {
+                g_printerr("Thumbnail: Failed to insert HEVC rate limiter\n");
+            }
+        } else {
+            g_printerr("Thumbnail: HEVC rate limiter unavailable; preview unthrottled\n");
+        }
+        if (tail_rate)    gst_object_unref(tail_rate);
+        if (tail_convert) gst_object_unref(tail_convert);
+    }
+
     gboolean states_synced = gst_element_sync_state_with_parent(parser) &&
                              gst_element_sync_state_with_parent(decoder);
     GstPad *parser_sink = gst_element_get_static_pad(parser, "sink");
@@ -3364,7 +3406,8 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         NULL);
 
     // Decode continuously, then keep only one raw frame per second for preview
-    // conversion/JPEG work. This rate limiter is downstream of both decoders.
+    // conversion/JPEG work. HEVC needs this limiter; H.264 is throttled by the
+    // upstream keyframe gate instead (see the tail link below).
     g_object_set(rate,
         "max-rate", 1,
         "drop-only", TRUE,
@@ -3401,7 +3444,13 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         return;
     }
 
-    if (!gst_element_link_many(deinterlace, rate, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
+    // H.264 is throttled by the upstream keyframe gate only and must NOT pass
+    // through videorate: on H.264 sources whose packets carry no duration
+    // (PTS/DTS only, duration=N/A) videorate's drop-only path trips
+    // gst_video_rate_push_buffer()'s duration assert and abort()s the whole
+    // process. HEVC cannot be keyframe-gated, so its videorate limiter is
+    // spliced in once the codec is known (on_thumbnail_tsdemux_pad_added).
+    if (!gst_element_link_many(deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
         g_printerr("Thumbnail: Failed to link video chain\n");
         return;
     }

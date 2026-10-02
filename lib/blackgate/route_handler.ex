@@ -1578,10 +1578,10 @@ defmodule Blackgate.RouteHandler do
       when is_list(destinations) and destinations != [] do
     sinks =
       destinations
-      |> Enum.reduce([], fn destination, acc ->
+      |> Enum.map(fn destination ->
         case sink_from_record(destination) do
           {:ok, sink} ->
-            [sink | acc]
+            sink
 
           {:error, error} ->
             Logger.error(
@@ -1589,9 +1589,10 @@ defmodule Blackgate.RouteHandler do
                 "destination schema: #{inspect(destination["schema"])}"
             )
 
-            acc
+            nil
         end
       end)
+      |> Enum.reject(&is_nil/1)
 
     {:ok, sinks}
   end
