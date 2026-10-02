@@ -3326,24 +3326,60 @@ static void *thumbnail_worker(void *arg)
     return NULL;
 }
 
+typedef struct {
+    GstClockTime last_pts;
+    gint64       last_monotonic_us;
+    gboolean     emitted;
+} ThumbnailRateState;
+
+// Gate preview frames by PTS. Replaces videorate in the thumbnail branch:
+// videorate hard-asserts (gstvideorate.c:757, GST_BUFFER_DURATION_IS_VALID)
+// when demuxed raw frames carry no duration — which is exactly what happens
+// for a source whose decoded caps report an unknown framerate (e.g. 0/1),
+// killing the whole pipeline. A monotonic fallback covers timestamp-less input.
+static GstPadProbeReturn thumbnail_rate_probe(GstPad *pad, GstPadProbeInfo *info,
+                                              gpointer user_data)
+{
+    (void)pad;
+    GstBuffer *buffer = gst_pad_probe_info_get_buffer(info);
+    ThumbnailRateState *state = user_data;
+    if (!buffer || !state) return GST_PAD_PROBE_OK;
+
+    GstClockTime pts = GST_BUFFER_PTS(buffer);
+    gint64 now_us = g_get_monotonic_time();
+    gboolean due;
+
+    if (GST_CLOCK_TIME_IS_VALID(pts)) {
+        due = !state->emitted || !GST_CLOCK_TIME_IS_VALID(state->last_pts) ||
+              pts < state->last_pts || pts - state->last_pts >= GST_SECOND;
+        if (due) state->last_pts = pts;
+    } else {
+        due = !state->emitted || now_us - state->last_monotonic_us >= G_USEC_PER_SEC;
+        if (due) state->last_pts = GST_CLOCK_TIME_NONE;
+    }
+
+    if (!due) return GST_PAD_PROBE_DROP;
+    state->emitted = TRUE;
+    state->last_monotonic_us = now_us;
+    return GST_PAD_PROBE_OK;
+}
+
 static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id)
 {
     GstElement *queue       = gst_element_factory_make("queue",         "thumbnail_queue");
     GstElement *tsdemux     = gst_element_factory_make("tsdemux",       "thumbnail_tsdemux");
     GstElement *deinterlace = gst_element_factory_make("deinterlace",   "thumbnail_deinterlace");
-    GstElement *rate        = gst_element_factory_make("videorate",      "thumbnail_rate");
     GstElement *convert     = gst_element_factory_make("videoconvert",  "thumbnail_convert");
     GstElement *scale       = gst_element_factory_make("videoscale",    "thumbnail_scale");
     GstElement *capsfilter  = gst_element_factory_make("capsfilter",    "thumbnail_capsfilter");
     GstElement *jpegenc     = gst_element_factory_make("jpegenc",       "thumbnail_jpegenc");
     GstElement *appsink     = gst_element_factory_make("appsink",       "thumbnail_appsink");
 
-    if (!queue || !tsdemux || !deinterlace || !rate || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
+    if (!queue || !tsdemux || !deinterlace || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
         g_printerr("Thumbnail: One or more elements unavailable — skipping thumbnail branch\n");
         if (queue)       gst_object_unref(queue);
         if (tsdemux)     gst_object_unref(tsdemux);
         if (deinterlace) gst_object_unref(deinterlace);
-        if (rate)        gst_object_unref(rate);
         if (convert)     gst_object_unref(convert);
         if (scale)       gst_object_unref(scale);
         if (capsfilter)  gst_object_unref(capsfilter);
@@ -3361,13 +3397,6 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         "max-size-bytes",   64 * 1024 * 1024,
         "max-size-time",    (guint64)(8 * GST_SECOND),
         "leaky",            0,  // GST_QUEUE_NO_LEAK
-        NULL);
-
-    // Decode continuously, then keep only one raw frame per second for preview
-    // conversion/JPEG work. This rate limiter is downstream of both decoders.
-    g_object_set(rate,
-        "max-rate", 1,
-        "drop-only", TRUE,
         NULL);
 
     // Scale target: 320x180
@@ -3390,7 +3419,7 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         "async",        FALSE,
         NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, deinterlace, rate, convert, scale, capsfilter, jpegenc, appsink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
 
     // Codec-specific parser/decoder is added when tsdemux exposes its video
     // pad. Both codecs then share the same thumbnail processing and JPEG tail.
@@ -3401,9 +3430,20 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         return;
     }
 
-    if (!gst_element_link_many(deinterlace, rate, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
+    if (!gst_element_link_many(deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
         g_printerr("Thumbnail: Failed to link video chain\n");
         return;
+    }
+
+    // Rate-limit preview frames here instead of with videorate (see above).
+    static ThumbnailRateState rate_state;
+    memset(&rate_state, 0, sizeof(rate_state));
+    rate_state.last_pts = GST_CLOCK_TIME_NONE;
+    GstPad *rate_pad = gst_element_get_static_pad(deinterlace, "src");
+    if (rate_pad) {
+        gst_pad_add_probe(rate_pad, GST_PAD_PROBE_TYPE_BUFFER, thumbnail_rate_probe,
+                          &rate_state, NULL);
+        gst_object_unref(rate_pad);
     }
 
     thumbnail_appsink = appsink;

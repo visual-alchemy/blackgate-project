@@ -1,7 +1,8 @@
 {
-  "version": "2026.09.28.3",
+  "version": "2026.09.28.4",
   "released_on": "2026-09-28",
   "changes": [
+    "Fixed the pipeline aborting and reconnecting in a loop for SRT sources whose frame rate is not declared: the preview branch no longer relies on videorate, which hard-fails on frames that carry no duration.",
     "Fixed HEVC/H.265 Live Preview by decoding the continuous reference-frame sequence and rejecting decoder-marked corrupt frames.",
     "Prevented preview queue from dropping compressed MPEG-TS packets before demux and decode; retained existing AVC/H.264 thumbnail behavior.",
     "Signed update bundles now carry a verified updater helper so retained-release rollback support stays current."
