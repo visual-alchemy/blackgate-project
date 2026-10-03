@@ -1,7 +1,10 @@
 {
-  "version": "2026.10.03.4",
+  "version": "2026.10.03.5",
   "released_on": "2026-10-03",
   "changes": [
+    "Routes now ride through brief source interruptions: a short upstream gap no longer tears the route down, avoiding the multi-second blackout and mode re-detection while the source is briefly lost.",
+    "Improved source error reporting in the logs, making upstream SRT problems easier to diagnose.",
+    "Fixed received-packet statistics reading zero on listener sources and reduced repeated log noise.",
     "Fixed SRT-to-SDI routes reconnecting on sources that omit framerate metadata: the SDI output now infers the video framerate, so those streams no longer interrupt the route.",
     "Live Preview on SRT-to-SDI routes now reuses the SDI decoder instead of decoding the stream a second time, substantially reducing CPU use on those routes.",
     "Live Preview thumbnails no longer freeze on sources without periodic keyframes; previews now refresh about once per second regardless of GOP structure.",
