@@ -1948,6 +1948,10 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
             gdouble max_rtt = 0.0;
             gdouble total_receive_rate = 0.0;
             gdouble total_bandwidth = 0.0;
+            gint64 total_packets_received = 0;
+            gint64 total_packets_lost = 0;
+            gint64 total_packets_dropped = 0;
+            gint64 total_packets_retransmitted = 0;
 
             for (gint i = 0; i < num_callers; i++) {
                 GValue *caller_val = &callers_array->values[i];
@@ -1968,7 +1972,17 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
                     const GValue *value = gst_structure_get_value(caller_stats, field_name);
 
                     if (G_VALUE_HOLDS(value, G_TYPE_INT64)) {
-                        cJSON_AddNumberToObject(caller, field_name, (double)g_value_get_int64(value));
+                        gint64 ival = g_value_get_int64(value);
+                        cJSON_AddNumberToObject(caller, field_name, (double)ival);
+                        if (g_strcmp0(field_name, "packets-received") == 0) {
+                            total_packets_received += ival;
+                        } else if (g_strcmp0(field_name, "packets-received-lost") == 0) {
+                            total_packets_lost += ival;
+                        } else if (g_strcmp0(field_name, "packets-received-dropped") == 0) {
+                            total_packets_dropped += ival;
+                        } else if (g_strcmp0(field_name, "packets-received-retransmitted") == 0) {
+                            total_packets_retransmitted += ival;
+                        }
                     } else if (G_VALUE_HOLDS(value, G_TYPE_INT)) {
                         cJSON_AddNumberToObject(caller, field_name, g_value_get_int(value));
                     } else if (G_VALUE_HOLDS(value, G_TYPE_UINT64)) {
@@ -2011,6 +2025,18 @@ static cJSON *build_source_stats_json(GstElement *src, const char *tag)
             }
             if (bandwidth_mbps <= 0.0 && total_bandwidth > 0.0) {
                 cJSON_ReplaceItemInObject(root, "bandwidth-mbps", cJSON_CreateNumber(total_bandwidth));
+            }
+            if (packets_received <= 0 && total_packets_received > 0) {
+                cJSON_ReplaceItemInObject(root, "packets-received", cJSON_CreateNumber((double)total_packets_received));
+            }
+            if (packets_lost <= 0 && total_packets_lost > 0) {
+                cJSON_ReplaceItemInObject(root, "packets-received-lost", cJSON_CreateNumber((double)total_packets_lost));
+            }
+            if (packets_dropped <= 0 && total_packets_dropped > 0) {
+                cJSON_ReplaceItemInObject(root, "packets-received-dropped", cJSON_CreateNumber((double)total_packets_dropped));
+            }
+            if (packets_retransmitted <= 0 && total_packets_retransmitted > 0) {
+                cJSON_ReplaceItemInObject(root, "packets-received-retransmitted", cJSON_CreateNumber((double)total_packets_retransmitted));
             }
         }
     } else {
@@ -2246,7 +2272,12 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
             GError *err;
             gchar *debug;
             gst_message_parse_warning(msg, &err, &debug);
-            g_print("Pipeline Warning from %s: %s\n", GST_OBJECT_NAME(msg->src), err->message);
+            if (debug && *debug)
+                g_print("Pipeline Warning from %s: %s [debug: %s]\n",
+                        GST_OBJECT_NAME(msg->src), err->message, debug);
+            else
+                g_print("Pipeline Warning from %s: %s\n",
+                        GST_OBJECT_NAME(msg->src), err->message);
 
             // Send warning stats via Unix socket if from decoder/demuxer
             const gchar *src_name = GST_OBJECT_NAME(msg->src);
@@ -2270,10 +2301,23 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
 
             // srtsrc WARNING = degraded source; emit SOURCE_INVALID for Elixir health flag.
             if (src_name) {
+                const char *tag = NULL;
                 if (g_strcmp0(src_name, "secondary_source") == 0)
-                    g_print("SOURCE_INVALID:secondary %s\n", err ? err->message : "");
+                    tag = "secondary";
                 else if (g_strcmp0(src_name, "source") == 0)
-                    g_print("SOURCE_INVALID:primary %s\n", err ? err->message : "");
+                    tag = "primary";
+                if (tag) {
+                    // Include the GStreamer debug string when present: libsrt's
+                    // process-global last-error can be clobbered by concurrent SRT
+                    // sockets (seen as "(0) Unknown or erroneous"), so the debug
+                    // text is often the only real failure detail available.
+                    if (debug && *debug)
+                        g_print("SOURCE_INVALID:%s %s [debug: %s]\n", tag,
+                                err ? err->message : "", debug);
+                    else
+                        g_print("SOURCE_INVALID:%s %s\n", tag,
+                                err ? err->message : "");
+                }
 
                 // Do NOT engage the SDI local fallback on a warning: srtsrc warns for
                 // every transient SRT hiccup, including ones that recover within the
@@ -2307,9 +2351,11 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
                 recoverable = TRUE;
             } else if (src_name &&
                        (g_strcmp0(src_name, "source") == 0 ||
-                        g_strcmp0(src_name, "secondary_source") == 0) &&
-                       (strstr(err_msg, "Internal data stream error") != NULL ||
-                        strstr(err_msg, "Socket is being closed") != NULL)) {
+                        g_strcmp0(src_name, "secondary_source") == 0)) {
+                // Any source-element error is recoverable: a brief upstream blip
+                // must never tear the route down. Elixir owns the bounded
+                // give-up decision via byte-liveness (source-gap grace); the
+                // 60s watchdog backstops a permanently-dead source.
                 recoverable = TRUE;
             } else if (src_name &&
                        (g_str_has_prefix(src_name, "videotestsrc") ||

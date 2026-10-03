@@ -22,6 +22,10 @@ defmodule Blackgate.RouteHandler do
   @watchdog_stall_threshold_ms 60_000
   # Don't check for first 30 seconds after start
   @watchdog_grace_period_ms 30_000
+  # Bounded grace for a brief source gap before falling back to a restart. A
+  # single-source route holds through a short upstream blip and only reconnects
+  # if byte-liveness has not resumed within this window.
+  @source_gap_grace_ms 15_000
   @switch_ack_timeout_ms 5_000
   @seamless_switch_ack_timeout_ms 12_000
 
@@ -71,7 +75,8 @@ defmodule Blackgate.RouteHandler do
       auto_join: Map.get(route, "auto_join", true),
       last_secondary_bytes_at: nil,
       last_secondary_bytes_received: 0,
-      both_dead_reported: false
+      both_dead_reported: false,
+      source_gap_token: nil
     }
 
     # Backfill active_source for routes created before failover feature
@@ -115,7 +120,8 @@ defmodule Blackgate.RouteHandler do
              last_sdi_frames: %{},
              consecutive_startup_crashes: 0,
              sdi_audio_last_restart_at: nil,
-             failover_switched: false
+             failover_switched: false,
+             source_gap_token: nil
          }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
       {:error, reason} ->
@@ -254,7 +260,7 @@ defmodule Blackgate.RouteHandler do
               {:keep_state, final_data} = evaluate_failover(new_acc)
               final_data
             else
-              new_acc
+              maybe_arm_source_gap_grace(new_acc, state)
             end
           else
             acc
@@ -269,6 +275,15 @@ defmodule Blackgate.RouteHandler do
               if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
 
             put_in(acc, [:source_health, tag], :valid)
+          else
+            acc
+          end
+
+        # A recoverable source-gap ERROR (held alive by the C pipeline) arms the
+        # same bounded give-up as a SOURCE_INVALID warning.
+        acc =
+          if String.contains?(line, "Recoverable source-gap error") do
+            maybe_arm_source_gap_grace(acc, state)
           else
             acc
           end
@@ -875,6 +890,25 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # Source-gap grace expired. If bytes have resumed the gap self-cancels;
+  # otherwise fall back to today's reconnect. This is the bounded give-up that
+  # guarantees a source gap never wedges the route.
+  def handle_event(:info, {:source_gap_expired, token}, :started, %{source_gap_token: token} = data) do
+    if get_total_bytes_received(data.id) > data.last_bytes_received do
+      {:keep_state, %{data | source_gap_token: nil},
+       {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+    else
+      Logger.warning(
+        "RouteHandler: source gap exceeded #{div(@source_gap_grace_ms, 1000)}s grace, restarting route"
+      )
+
+      trigger_restart(%{data | source_gap_token: nil})
+    end
+  end
+
+  # Stale grace token (route already recovered/restarted) — ignore.
+  def handle_event(:info, {:source_gap_expired, _token}, _state, _data), do: :keep_state_and_data
+
   def handle_event(type, content, state, data) do
     Logger.error(
       "RouteHandler: Undefined msg type=#{inspect(type)} state=#{inspect(state)} " <>
@@ -1080,6 +1114,26 @@ defmodule Blackgate.RouteHandler do
         else: enter_reconnecting(cleared)
     end
   end
+
+  # Brief source gaps must not tear a route down. Arm a bounded grace the first
+  # time a single-source route reports SOURCE_INVALID; if byte-liveness has not
+  # resumed by expiry the grace handler restarts (today's reconnect). Dual-ingest
+  # routes are excluded by the caller so in-process failover always wins.
+  defp maybe_arm_source_gap_grace(%{source_gap_token: token} = data, _state)
+       when not is_nil(token),
+       do: data
+
+  defp maybe_arm_source_gap_grace(data, :started) do
+    if is_port(data.port) do
+      token = make_ref()
+      Process.send_after(self(), {:source_gap_expired, token}, @source_gap_grace_ms)
+      %{data | source_gap_token: token}
+    else
+      data
+    end
+  end
+
+  defp maybe_arm_source_gap_grace(data, _state), do: data
 
   # Dual-ingest stats-driven health refresh. Pulls primary + secondary stats
   # from RouteStatsRegistry, advances the byte-change timestamps, and writes

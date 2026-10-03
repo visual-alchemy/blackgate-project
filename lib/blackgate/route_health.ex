@@ -94,8 +94,19 @@ defmodule Blackgate.RouteHealth do
   # --- private ---
 
   defp packet_loss_pct(stats, caller) do
-    received = stats["packets-received"] || caller["packets-received"] || 0
-    lost     = stats["packets-received-lost"] || caller["packets-received-lost"] || 0
+    # 0 is truthy in Elixir, so `||` would never fall through to the caller
+    # stats. Prefer the aggregate only when it is actually positive.
+    received =
+      case stats["packets-received"] do
+        n when is_number(n) and n > 0 -> n
+        _ -> caller["packets-received"] || 0
+      end
+
+    lost =
+      case stats["packets-received-lost"] do
+        n when is_number(n) and n > 0 -> n
+        _ -> caller["packets-received-lost"] || 0
+      end
 
     if received + lost == 0 do
       0.0

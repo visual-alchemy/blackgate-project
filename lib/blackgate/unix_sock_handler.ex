@@ -107,6 +107,11 @@ defmodule Blackgate.UnixSockHandler do
         {:ok, %{"type" => "warning"} = warning} ->
           RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
 
+        {:ok, %{"type" => "source_gap"}} ->
+          # Recoverable source-gap error: not stats. The route is held alive and
+          # byte-liveness (grace / 60s watchdog) owns the bounded give-up.
+          :ok
+
         {:ok, stats} ->
           case stats["source"] do
             "secondary" ->
@@ -150,6 +155,10 @@ defmodule Blackgate.UnixSockHandler do
       case Jason.decode(source_json) do
         {:ok, %{"type" => "warning"} = warning} ->
           RouteStatsRegistry.put_warning(warning["route_id"], warning["element"], warning["message"])
+
+        {:ok, %{"type" => "source_gap"}} ->
+          # Recoverable source-gap error: not stats. See the exportStats clause.
+          :ok
 
         {:ok, stats} ->
           case stats["source"] do
@@ -214,6 +223,13 @@ defmodule Blackgate.UnixSockHandler do
 
   def handle_event(:info, {:tcp_error, _port, reason}, _state, _data) do
     Logger.warning("SocketHandler: unix socket error #{inspect(reason)}")
+    :keep_state_and_data
+  end
+
+  # Active-mode flow control: the socket reports itself momentarily busy when the
+  # native stats sender outpaces this process. It stays active and delivery
+  # resumes on its own, so this is an expected transport event, not an error.
+  def handle_event(:info, {:tcp_passive, _port}, _state, _data) do
     :keep_state_and_data
   end
 
