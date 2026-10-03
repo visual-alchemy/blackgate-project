@@ -25,6 +25,9 @@ static void on_sdi_tsdemux_pad_added(GstElement *src, GstPad *new_pad, gpointer 
 static void on_sdi_decodebin_video_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 static void on_sdi_decodebin_audio_pad_added(GstElement *decodebin, GstPad *pad, gpointer user_data);
 
+// Attaches the JPEG preview tail to an SDI video chain's tapped tee.
+static void add_sdi_preview_branch(GstElement *pipeline, GstElement *src, int slot, int device, const char *route_id);
+
 // =============================================================================
 // Decoder policy + interlace-mode helpers
 // =============================================================================
@@ -163,6 +166,10 @@ typedef struct {
     int fallback_width;
     int fallback_height;
     char fallback_framerate[16];
+    // Fallback framerate as a fraction (parsed from fallback_framerate), used
+    // as a bias when inferring the rate of a VUI-less source.
+    int fallback_fps_num;
+    int fallback_fps_den;
 } SdiAutoDetectCtx;
 
 // INVARIANT: switch_source() clears s_sdi_applied_caps[slot]; the vqueue-sink
@@ -173,14 +180,40 @@ static GstElement      *s_sdi_vinterlace[8]    = {0};
 static GstElement      *s_sdi_vcapssetter[8]   = {0};
 static char             s_sdi_applied_caps[8][256] = {{0}};
 
+// Framerate inference for sources whose decoded caps report an UNKNOWN rate
+// (fps 0/1) — e.g. OBS/x264 with no H.264 SPS VUI timing. Such sources still
+// carry monotonic buffer PTS at the true rate, so the vqueue-sink probe
+// accumulates PTS deltas here and derives a standard broadcast rate. That rate
+// then relabels the caps (so videorate can negotiate a valid rate) and drives
+// the DeckLink mode lookup so it takes the MATCHED path instead of falling
+// back and leaking frames until the sink's ScheduleVideoFrame pool overflows.
+typedef struct {
+    GstClockTime last_pts;    // last valid PTS seen (GST_CLOCK_TIME_NONE = none)
+    gint64       delta_sum;   // sum of (pts - last_pts) deltas, in ns
+    gint         delta_count; // number of deltas accumulated
+    gint         fps_num;     // inferred rate (0 until a stable rate is derived)
+    gint         fps_den;
+    gboolean     unknown;     // TRUE while the flowing caps report unknown fps
+} SdiRateInfer;
+static SdiRateInfer s_sdi_rate_infer[8];
+
+// Single-decode preview: when a route has >=1 SDI destination the JPEG preview
+// reuses the SDI branch's already-decoded frames instead of decoding the
+// compressed stream a second time. s_sdi_preview_slot/s_sdi_preview_tee point
+// at the tee spliced into the first SDI video chain (after videoconvert).
+static gboolean s_route_has_sdi = FALSE;
+static int s_sdi_preview_slot = -1;
+static GstElement *s_sdi_preview_tee = NULL;
+
 // SDI branch registry per sink slot. switch_source() rebuilds branches through
 // add_sink_to_pipeline(); tsdemux/decodebin pad churn across different-muxer
 // feeds is not reliably migratable pad-by-pad, so teardown+rebuild is the
 // strategy. Element[0] is always the branch's input queue (tee peer).
-// Normal SDI branch has 19 elements. Video and audio gap fallbacks add three
-// each, so reserve headroom for future branch elements rather than silently
-// dropping an element from teardown tracking.
-#define SDI_BRANCH_MAX_ELEMS 32
+// Normal SDI branch has 19 elements; video/audio gap fallbacks add a further
+// seven, and the single-decode preview tap adds a tee + queue + 6-element JPEG
+// tail (8 more). Reserve headroom so teardown tracks every element rather than
+// silently dropping one.
+#define SDI_BRANCH_MAX_ELEMS 48
 static GstElement *s_sdi_branch_elems[8][SDI_BRANCH_MAX_ELEMS];
 static int         s_sdi_branch_n[8] = {0};
 static int         s_sdi_branch_device[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
@@ -572,25 +605,42 @@ static gboolean sdi_gap_watchdog_cb(gpointer data)
 static void sdi_branch_track(int slot, int device_num, GstElement *first, ...);
 static void sdi_branch_untrack(int slot, GstElement *elem);
 
-// Relabel interlace-mode "mixed"→"interleaved" for the VA-API vah264dec path.
-// vah264dec labels any field-coded H.264 as "mixed" (a catch-all, not a true
-// mixed-progressive signal), but downstream videoconvert cannot convert
-// "mixed"→"interleaved" (GST_FLOW_NOT_NEGOTIATED). capssetter OVERWRITES the
-// caps field (unlike capsfilter which intersects), so the relabel is lossless
-// when the buffer is actually field-interleaved — which it is for standard
-// broadcast interlace. Only active for "mixed"; otherwise passthrough
-// (caps=NULL) so progressive and software-decode "interleaved" inputs are
-// untouched.
-static void sdi_set_capssetter(int slot, const gchar *ims)
+// Relabel interlace-mode "mixed"→"interleaved" for the VA-API vah264dec path,
+// and optionally relabel an unknown framerate with the PTS-inferred rate (see
+// s_sdi_rate_infer). vah264dec labels any field-coded H.264 as "mixed" (a
+// catch-all, not a true mixed-progressive signal), but downstream videoconvert
+// cannot convert "mixed"→"interleaved" (GST_FLOW_NOT_NEGOTIATED). capssetter
+// OVERWRITES the caps field (unlike capsfilter which intersects), so the
+// relabel is lossless when the buffer is actually field-interleaved — which it
+// is for standard broadcast interlace. fps_num/fps_den > 0 force the framerate
+// field (for VUI-less sources whose decoded caps report 0/1); 0/0 leaves the
+// framerate untouched. With neither relabel active, pass through (caps=NULL).
+static void sdi_set_capssetter(int slot, const gchar *ims, gint fps_num, gint fps_den)
 {
     if (slot < 0 || slot >= 8) return;
     GstElement *css = s_sdi_vcapssetter[slot];
     if (!css) return;
-    if (ims && g_strcmp0(ims, "mixed") == 0) {
-        GstCaps *c = gst_caps_from_string("video/x-raw,interlace-mode=interleaved");
+
+    gboolean relabel_im  = ims && g_strcmp0(ims, "mixed") == 0;
+    gboolean relabel_fps = (fps_num > 0 && fps_den > 0);
+
+    if (relabel_im || relabel_fps) {
+        char caps_str[128];
+        if (relabel_im && relabel_fps)
+            snprintf(caps_str, sizeof(caps_str),
+                     "video/x-raw,interlace-mode=interleaved,framerate=%d/%d", fps_num, fps_den);
+        else if (relabel_im)
+            snprintf(caps_str, sizeof(caps_str), "video/x-raw,interlace-mode=interleaved");
+        else
+            snprintf(caps_str, sizeof(caps_str), "video/x-raw,framerate=%d/%d", fps_num, fps_den);
+
+        GstCaps *c = gst_caps_from_string(caps_str);
         g_object_set(css, "caps", c, NULL);
         gst_caps_unref(c);
-        g_print("SDI: capssetter slot %d relabel mixed→interleaved\n", slot);
+        g_print("SDI: capssetter slot %d relabel%s%s%s\n", slot,
+                relabel_im ? " mixed→interleaved" : "",
+                (relabel_im && relabel_fps) ? "+" : "",
+                relabel_fps ? " framerate" : "");
     } else {
         g_object_set(css, "caps", NULL, NULL);
     }
@@ -615,7 +665,19 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
     gst_structure_get_fraction(s, "framerate", &fps_num, &fps_den);
     const gchar *ims = gst_structure_get_string(s, "interlace-mode");
     interlaced = caps_interlace_is_interlaced(ims);
-    sdi_set_capssetter(slot, ims);
+
+    // Unknown source framerate (0/1 — no H.264 VUI timing): substitute the
+    // PTS-inferred rate so the DeckLink mode lookup matches, and force that
+    // rate into the caps via capssetter so videorate/negotiation downstream
+    // sees a valid rate instead of 0/1.
+    gint relabel_num = 0, relabel_den = 0;
+    if (s_sdi_rate_infer[slot].unknown && s_sdi_rate_infer[slot].fps_num > 0) {
+        fps_num = s_sdi_rate_infer[slot].fps_num;
+        fps_den = s_sdi_rate_infer[slot].fps_den;
+        relabel_num = fps_num;
+        relabel_den = fps_den;
+    }
+    sdi_set_capssetter(slot, ims, relabel_num, relabel_den);
     gst_caps_unref(nc);
 
     if (width <= 0 || height <= 0 || fps_num <= 0) return;
@@ -734,11 +796,37 @@ static void sdi_reapply_mode(int slot, GstCaps *caps)
             mode_str);
 }
 
+// Map an average frame interval (ns) to the closest DeckLink-supported rate,
+// returned via num/den. Integer-only so no libm dependency is needed.
+static void sdi_infer_standard_rate(gint64 avg_delta_ns, gint *num, gint *den)
+{
+    *num = 0; *den = 1;
+    if (avg_delta_ns <= 0) return;
+
+    static const struct { gint n; gint d; } cands[] = {
+        {24000, 1001}, {24, 1}, {25, 1}, {30000, 1001}, {30, 1},
+        {50, 1}, {60000, 1001}, {60, 1},
+    };
+
+    gint64 best_diff = G_MAXINT64;
+    for (size_t i = 0; i < G_N_ELEMENTS(cands); i++) {
+        gint64 interval = (gint64)cands[i].d * G_GINT64_CONSTANT(1000000000) / cands[i].n;
+        gint64 diff = avg_delta_ns - interval;
+        if (diff < 0) diff = -diff;
+        if (diff < best_diff) {
+            best_diff = diff;
+            *num = cands[i].n;
+            *den = cands[i].d;
+        }
+    }
+}
+
 // vqueue-sink probe: s_sdi_applied_caps[slot] is cleared by switch_source();
 // when flowing caps differ from the stored set, re-apply mode + capsfilter.
+// Also infers a valid framerate from buffer PTS deltas when the decoded caps
+// report 0/1 (no H.264 VUI timing), then triggers the corrected re-apply.
 static GstPadProbeReturn sdi_caps_reapply_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 {
-    (void)info;
     int slot = GPOINTER_TO_INT(user_data);
     SdiAutoDetectCtx *ctx = s_sdi_auto_ctx[slot];
     if (!ctx) return GST_PAD_PROBE_OK;
@@ -759,10 +847,74 @@ static GstPadProbeReturn sdi_caps_reapply_probe(GstPad *pad, GstPadProbeInfo *in
     interlaced = caps_interlace_is_interlaced(ims);
     gst_caps_unref(nc);
 
-    if (width <= 0 || height <= 0 || fps_num <= 0) {
+    if (width <= 0 || height <= 0) {
         gst_caps_unref(caps);
         return GST_PAD_PROBE_OK;
     }
+
+    // Unknown framerate (0/1 — VUI-less H.264): accumulate monotonic PTS
+    // deltas and, once stable, derive a broadcast rate and re-apply.
+    if (fps_num <= 0 || fps_den <= 0) {
+        SdiRateInfer *ri = &s_sdi_rate_infer[slot];
+        ri->unknown = TRUE;
+        GstBuffer *buf = gst_pad_probe_info_get_buffer(info);
+        GstClockTime pts = buf ? GST_BUFFER_PTS(buf) : GST_CLOCK_TIME_NONE;
+        if (GST_CLOCK_TIME_IS_VALID(pts)) {
+            if (GST_CLOCK_TIME_IS_VALID(ri->last_pts) && pts > ri->last_pts) {
+                gint64 d = (gint64)(pts - ri->last_pts);
+                if (d > 0 && d < 500 * GST_MSECOND) {
+                    ri->delta_sum += d;
+                    ri->delta_count++;
+                }
+            }
+            ri->last_pts = pts;
+        }
+        if (ri->fps_num == 0 && ri->delta_count >= 12) {
+            sdi_infer_standard_rate(ri->delta_sum / ri->delta_count,
+                                    &ri->fps_num, &ri->fps_den);
+            // Bias toward the operator's fallback rate when the PTS-derived
+            // rate is within ~10% of it. VFR sources (e.g. ~24.5fps) would
+            // otherwise flip between 24/25 and force a mid-stream DeckLink
+            // mode change that wedges the sink's frame scheduler.
+            if (ri->fps_num > 0 && ctx && ctx->fallback_fps_num > 0) {
+                gint64 infer_int = (gint64)ri->fps_den * G_GINT64_CONSTANT(1000000000) / ri->fps_num;
+                gint64 fb_int = (gint64)ctx->fallback_fps_den * G_GINT64_CONSTANT(1000000000) / ctx->fallback_fps_num;
+                gint64 diff = infer_int - fb_int;
+                if (diff < 0) diff = -diff;
+                if (diff * 10 <= fb_int) {
+                    ri->fps_num = ctx->fallback_fps_num;
+                    ri->fps_den = ctx->fallback_fps_den;
+                }
+            }
+            if (ri->fps_num > 0)
+                g_print("SDI AUTO-DETECT: inferred framerate %d/%d from %d PTS deltas\n",
+                        ri->fps_num, ri->fps_den, ri->delta_count);
+        }
+        if (ri->fps_num > 0) {
+            // Normalize the inferred rate the same way sdi_reapply_mode does so
+            // the key matches the stored s_sdi_applied_caps and the re-apply
+            // fires exactly once for this rate (e.g. 30000/1001 → "30/1").
+            int lk_num = ri->fps_num, lk_den = ri->fps_den;
+            if (lk_den == 1001 && (lk_num == 24000 || lk_num == 30000 || lk_num == 60000)) {
+                lk_num = lk_num / 1000; lk_den = 1;
+            } else if (lk_den == 1001 && lk_num == 50000) {
+                lk_num = 50; lk_den = 1;
+            } else if (lk_den != 1 && lk_den != 0) {
+                lk_num = (lk_num + lk_den / 2) / lk_den; lk_den = 1;
+            }
+            char key[64];
+            snprintf(key, sizeof(key), "%dx%d@%d/%d%s",
+                     width, height, lk_num, lk_den, interlaced ? "i" : "p");
+            if (g_strcmp0(key, s_sdi_applied_caps[slot]) != 0)
+                sdi_reapply_mode(slot, caps);
+        }
+        gst_caps_unref(caps);
+        return GST_PAD_PROBE_OK;
+    }
+
+    // Known framerate: clear any prior inference from a VUI-less source.
+    if (s_sdi_rate_infer[slot].unknown || s_sdi_rate_infer[slot].fps_num > 0)
+        memset(&s_sdi_rate_infer[slot], 0, sizeof(s_sdi_rate_infer[slot]));
 
     int lookup_num = fps_num, lookup_den = fps_den;
     if (fps_den == 1001 && (fps_num == 24000 || fps_num == 30000 || fps_num == 60000)) {
@@ -917,6 +1069,7 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
             g_print("SDI AUTO-DETECT: decodebin video → vqueue re-linked after switch\n");
         }
         s_sdi_applied_caps[slot][0] = '\0';
+        memset(&s_sdi_rate_infer[slot], 0, sizeof(s_sdi_rate_infer[slot]));
         return;
     }
 
@@ -944,7 +1097,9 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
 
     const gchar *interlace_mode_str = gst_structure_get_string(s, "interlace-mode");
     interlaced = caps_interlace_is_interlaced(interlace_mode_str);
-    sdi_set_capssetter(ctx->sink_index, interlace_mode_str);
+    // Framerate relabel is applied later by the re-apply probe once PTS deltas
+    // are available; here only the interlace-mode relabel is known.
+    sdi_set_capssetter(ctx->sink_index, interlace_mode_str, 0, 0);
 
     gst_caps_unref(caps);
 
@@ -1075,8 +1230,46 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     }
 
     // --- Step 7: Link the full video chain ---
+    // Single-decode preview: on the first SDI video chain of an SDI route,
+    // splice a tee after videoconvert and drive the JPEG preview from those
+    // decoded frames (one decode for both SDI playout and preview). Non-SDI
+    // routes keep the compressed-side thumbnail branch instead.
+    gboolean use_tap = (s_route_has_sdi && s_sdi_preview_slot < 0);
+    GstElement *preview_tee = NULL;
+    if (use_tap) {
+        preview_tee = gst_element_factory_make("tee", "thumbnail_sdi_tee");
+        if (!preview_tee) {
+            g_printerr("SDI AUTO-DETECT: preview tee unavailable — preview disabled\n");
+            use_tap = FALSE;
+        } else {
+            g_object_set(preview_tee, "allow-not-linked", TRUE, NULL);
+            gst_bin_add(GST_BIN(ctx->pipeline), preview_tee);
+            // Elements inserted after preroll starts must be state-synced or
+            // they stay NULL and stall the video chain.
+            gst_element_sync_state_with_parent(preview_tee);
+            sdi_branch_track(ctx->sink_index, ctx->device_number, preview_tee, NULL);
+            s_sdi_preview_tee = preview_tee;
+            s_sdi_preview_slot = ctx->sink_index;
+        }
+    }
+
     gboolean video_link_ok;
-    if (need_interlace_element && vinterlace) {
+    if (use_tap && preview_tee) {
+        video_link_ok =
+            gst_element_link_many(ctx->vqueue, ctx->vcapssetter, ctx->vconvert, preview_tee, NULL);
+        if (video_link_ok) {
+            if (need_interlace_element && vinterlace) {
+                video_link_ok = gst_element_link_many(
+                    preview_tee, ctx->vrate, ctx->vscale, vinterlace, ctx->vcaps, NULL);
+            } else {
+                video_link_ok = gst_element_link_many(
+                    preview_tee, ctx->vrate, ctx->vscale, ctx->vcaps, NULL);
+            }
+        }
+        video_link_ok = video_link_ok &&
+            sdi_video_fallback_link(ctx->sink_index, ctx->vcaps, ctx->vid_identity) &&
+            gst_element_link(ctx->vid_identity, ctx->videosink);
+    } else if (need_interlace_element && vinterlace) {
         video_link_ok =
             gst_element_link_many(
                 ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
@@ -1110,10 +1303,17 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
                 g_object_set(s_sdi_vid_fallback_caps[ctx->sink_index], "caps", out_caps, NULL);
             gst_caps_unref(out_caps);
 
-            video_link_ok =
-                gst_element_link_many(
-                    ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
-                    ctx->vcaps, NULL) &&
+            if (use_tap && preview_tee) {
+                video_link_ok =
+                    gst_element_link_many(ctx->vqueue, ctx->vcapssetter, ctx->vconvert, preview_tee, NULL) &&
+                    gst_element_link_many(preview_tee, ctx->vrate, ctx->vscale, ctx->vcaps, NULL);
+            } else {
+                video_link_ok =
+                    gst_element_link_many(
+                        ctx->vqueue, ctx->vcapssetter, ctx->vconvert, ctx->vrate, ctx->vscale,
+                        ctx->vcaps, NULL);
+            }
+            video_link_ok = video_link_ok &&
                 sdi_video_fallback_link(ctx->sink_index, ctx->vcaps, ctx->vid_identity) &&
                 gst_element_link(ctx->vid_identity, ctx->videosink);
 
@@ -1127,6 +1327,13 @@ static void on_sdi_decodebin_video_pad_added_autodetect(GstElement *decodebin, G
     }
 
     g_print("SDI AUTO-DETECT: video chain linked successfully\n");
+
+    // Attach the JPEG preview to the tapped tee's spare output pad. This reuses
+    // the SDI branch's decode, so no second decoder runs for the preview.
+    if (use_tap && preview_tee) {
+        add_sdi_preview_branch(ctx->pipeline, preview_tee, ctx->sink_index,
+                               ctx->device_number, global_route_id);
+    }
 
     // --- Step 8: Sync new elements to pipeline state (PLAYING) ---
     if (vinterlace) {
@@ -1215,6 +1422,13 @@ static GstPadProbeReturn tee_idle_detach_cb(GstPad *pad, GstPadProbeInfo *info, 
     return GST_PAD_PROBE_REMOVE;
 }
 
+// Thumbnail capture state
+static GstElement *thumbnail_appsink = NULL;
+static pthread_t thumbnail_thread;
+static volatile gboolean thumbnail_running = FALSE;
+static gboolean thumbnail_thread_started = FALSE;
+static GMutex thumbnail_pad_mutex;
+
 static void teardown_sdi_branch(int slot)
 {
     if (slot < 0 || slot > 7 || s_sdi_branch_n[slot] == 0 || !g_pipeline) return;
@@ -1229,6 +1443,29 @@ static void teardown_sdi_branch(int slot)
     if (s_sdi_branch_vsink[slot])    g_object_set(s_sdi_branch_vsink[slot],    "sync", FALSE, NULL);
     if (s_sdi_branch_asink[slot])    g_object_set(s_sdi_branch_asink[slot],    "sync", FALSE, NULL);
     g_usleep(100000);
+
+    // Detach the SDI single-decode preview leg first: its tee sits INSIDE the
+    // SDI video chain (not off the main tee), so the generic unlink below does
+    // not cover it. Release the tee request pad feeding the preview queue.
+    if (slot == s_sdi_preview_slot && s_sdi_preview_tee) {
+        GstElement *pqueue = gst_bin_get_by_name(GST_BIN(g_pipeline), "thumbnail_queue");
+        if (pqueue) {
+            GstPad *qsink = gst_element_get_static_pad(pqueue, "sink");
+            GstPad *tee_src = qsink ? gst_pad_get_peer(qsink) : NULL;
+            if (tee_src) {
+                gst_pad_unlink(tee_src, qsink);
+                gst_element_release_request_pad(s_sdi_preview_tee, tee_src);
+                gst_object_unref(tee_src);
+            }
+            if (qsink) gst_object_unref(qsink);
+            gst_object_unref(pqueue);
+        }
+        // The worker idles once its appsink is cleared; the tail elements are
+        // freed by the registry loop below.
+        thumbnail_appsink = NULL;
+        s_sdi_preview_slot = -1;
+        s_sdi_preview_tee = NULL;
+    }
 
     // Unlink only while the tee pad is idle; releasing a request pad that is
     // mid-push is what crashed the pipeline before. Outcome is checked via
@@ -1305,6 +1542,7 @@ static void teardown_sdi_branch(int slot)
     s_sdi_vinterlace[slot] = NULL;
     s_sdi_vcapssetter[slot] = NULL;
     s_sdi_applied_caps[slot][0] = '\0';
+    memset(&s_sdi_rate_infer[slot], 0, sizeof(s_sdi_rate_infer[slot]));
     s_sdi_branch_identity[slot] = NULL;
     s_sdi_branch_vsink[slot] = NULL;
     s_sdi_branch_asink[slot] = NULL;
@@ -1399,13 +1637,6 @@ static GMutex seamless_switch_mutex;
 static BgTsNormalizer ts_timeline_normalizer;
 static GMutex ts_timeline_mutex;
 static GQuark source_index_quark = 0;
-
-// Thumbnail capture state
-static GstElement *thumbnail_appsink = NULL;
-static pthread_t thumbnail_thread;
-static volatile gboolean thumbnail_running = FALSE;
-static gboolean thumbnail_thread_started = FALSE;
-static GMutex thumbnail_pad_mutex;
 
 // MPEG-TS parsing structures for video metadata extraction
 #define TS_PACKET_SIZE 188
@@ -2079,6 +2310,16 @@ static gboolean bus_callback(GstBus *bus, GstMessage *msg, gpointer data)
                         g_strcmp0(src_name, "secondary_source") == 0) &&
                        (strstr(err_msg, "Internal data stream error") != NULL ||
                         strstr(err_msg, "Socket is being closed") != NULL)) {
+                recoverable = TRUE;
+            } else if (src_name &&
+                       (g_str_has_prefix(src_name, "videotestsrc") ||
+                        g_str_has_prefix(src_name, "audiotestsrc"))) {
+                // The local gap-fallback sources (black video / silence audio)
+                // can error when they feed a DeckLink sink that is still
+                // recovering from a source-gap (e.g. a 0/1-fps feed overflowing
+                // the frame pool). A fallback error must never tear down the
+                // whole route: keep the loop alive so the live-frame watchdog
+                // can return to the real source once it recovers.
                 recoverable = TRUE;
             }
 
@@ -3177,16 +3418,41 @@ static GstPadProbeReturn drop_thumbnail_pad_probe(GstPad *pad, GstPadProbeInfo *
     return GST_PAD_PROBE_DROP;
 }
 
-// Keyframe gate for thumbnail: parsers mark inter-frames as delta units. Only
-// decode random-access frames to keep this optional branch cheap and clean.
-static GstPadProbeReturn thumbnail_keyframe_probe(GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+// Preview rate limiter: emit at most one decoded frame per second. This is a
+// buffer probe, not videorate: videorate's drop-only path asserts on buffers
+// with an invalid duration (duration=N/A sources) and aborts the process.
+// Throttling on the decoded deinterlace src pad also keeps the preview
+// independent of the source GOP structure — a keyframe-only gate starves on
+// streams that do not emit periodic IDRs.
+typedef struct {
+    GstClockTime last_pts;
+    gint64       last_monotonic_us;
+    gboolean     emitted;
+} ThumbnailRateState;
+
+static GstPadProbeReturn thumbnail_rate_probe(GstPad *pad, GstPadProbeInfo *info,
+                                              gpointer user_data)
 {
     (void)pad;
-    (void)user_data;
     GstBuffer *buffer = gst_pad_probe_info_get_buffer(info);
-    if (buffer && GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DELTA_UNIT)) {
-        return GST_PAD_PROBE_DROP;
+    ThumbnailRateState *state = user_data;
+    if (!buffer || !state) return GST_PAD_PROBE_OK;
+
+    GstClockTime pts = GST_BUFFER_PTS(buffer);
+    gint64 now_us = g_get_monotonic_time();
+    gboolean due;
+    if (GST_CLOCK_TIME_IS_VALID(pts)) {
+        due = !state->emitted || !GST_CLOCK_TIME_IS_VALID(state->last_pts) ||
+              pts < state->last_pts || pts - state->last_pts >= GST_SECOND;
+        if (due) state->last_pts = pts;
+    } else {
+        due = !state->emitted || now_us - state->last_monotonic_us >= G_USEC_PER_SEC;
+        if (due) state->last_pts = GST_CLOCK_TIME_NONE;
     }
+    if (!due) return GST_PAD_PROBE_DROP;
+
+    state->emitted = TRUE;
+    state->last_monotonic_us = now_us;
     return GST_PAD_PROBE_OK;
 }
 
@@ -3288,32 +3554,6 @@ static void on_thumbnail_tsdemux_pad_added(GstElement *tsdemux, GstPad *pad, gpo
         return;
     }
 
-    // H.264 preview keeps its existing IDR-only decode behavior. Do not gate
-    // HEVC here: dropping its inter pictures breaks reference continuity.
-    GstPad *parse_src = is_h264 ? gst_element_get_static_pad(parser, "src") : NULL;
-    if (parse_src) {
-        gst_pad_add_probe(parse_src, GST_PAD_PROBE_TYPE_BUFFER,
-                          thumbnail_keyframe_probe, NULL, NULL);
-        gst_object_unref(parse_src);
-    }
-
-    // HEVC has no keyframe gate, so route it through the videorate limiter.
-    // Splice here, before the demuxer pad is linked, so no buffer is in flight.
-    if (is_h265) {
-        GstElement *tail_rate    = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_rate");
-        GstElement *tail_convert = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_convert");
-        if (tail_rate && tail_convert) {
-            gst_element_unlink(deinterlace, tail_convert);
-            if (!gst_element_link_many(deinterlace, tail_rate, tail_convert, NULL)) {
-                g_printerr("Thumbnail: Failed to insert HEVC rate limiter\n");
-            }
-        } else {
-            g_printerr("Thumbnail: HEVC rate limiter unavailable; preview unthrottled\n");
-        }
-        if (tail_rate)    gst_object_unref(tail_rate);
-        if (tail_convert) gst_object_unref(tail_convert);
-    }
-
     gboolean states_synced = gst_element_sync_state_with_parent(parser) &&
                              gst_element_sync_state_with_parent(decoder);
     GstPad *parser_sink = gst_element_get_static_pad(parser, "sink");
@@ -3397,50 +3637,30 @@ static void *thumbnail_worker(void *arg)
     return NULL;
 }
 
-static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id)
+// Builds the shared JPEG preview tail (deinterlace → videoconvert → videoscale
+// → capsfilter 320x180 → jpegenc → appsink), adds it to the pipeline, and
+// starts the thumbnail worker. Used by BOTH the compressed (SRT-only) branch
+// and the SDI single-decode branch. Returns the deinterlace element (the sink
+// end the caller links upstream), or NULL on failure.
+static GstElement *build_preview_tail(GstElement *pipeline, const char *route_id)
 {
-    GstElement *queue       = gst_element_factory_make("queue",         "thumbnail_queue");
-    GstElement *tsdemux     = gst_element_factory_make("tsdemux",       "thumbnail_tsdemux");
     GstElement *deinterlace = gst_element_factory_make("deinterlace",   "thumbnail_deinterlace");
-    GstElement *rate        = gst_element_factory_make("videorate",      "thumbnail_rate");
     GstElement *convert     = gst_element_factory_make("videoconvert",  "thumbnail_convert");
     GstElement *scale       = gst_element_factory_make("videoscale",    "thumbnail_scale");
     GstElement *capsfilter  = gst_element_factory_make("capsfilter",    "thumbnail_capsfilter");
     GstElement *jpegenc     = gst_element_factory_make("jpegenc",       "thumbnail_jpegenc");
     GstElement *appsink     = gst_element_factory_make("appsink",       "thumbnail_appsink");
 
-    if (!queue || !tsdemux || !deinterlace || !rate || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
+    if (!deinterlace || !convert || !scale || !capsfilter || !jpegenc || !appsink) {
         g_printerr("Thumbnail: One or more elements unavailable — skipping thumbnail branch\n");
-        if (queue)       gst_object_unref(queue);
-        if (tsdemux)     gst_object_unref(tsdemux);
         if (deinterlace) gst_object_unref(deinterlace);
-        if (rate)        gst_object_unref(rate);
         if (convert)     gst_object_unref(convert);
         if (scale)       gst_object_unref(scale);
         if (capsfilter)  gst_object_unref(capsfilter);
         if (jpegenc)     gst_object_unref(jpegenc);
         if (appsink)     gst_object_unref(appsink);
-        return;
+        return NULL;
     }
-
-    // Do not shed buffers from compressed MPEG-TS before demux/decode. Packet
-    // loss here corrupts both transport continuity and HEVC reference frames.
-    // Allow short decode/scheduling bursts to queue; sustained decoder overload
-    // can still back-pressure this tee branch once this bounded queue fills.
-    g_object_set(queue,
-        "max-size-buffers", 0,
-        "max-size-bytes",   64 * 1024 * 1024,
-        "max-size-time",    (guint64)(8 * GST_SECOND),
-        "leaky",            0,  // GST_QUEUE_NO_LEAK
-        NULL);
-
-    // Decode continuously, then keep only one raw frame per second for preview
-    // conversion/JPEG work. HEVC needs this limiter; H.264 is throttled by the
-    // upstream keyframe gate instead (see the tail link below).
-    g_object_set(rate,
-        "max-rate", 1,
-        "drop-only", TRUE,
-        NULL);
 
     // Scale target: 320x180
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
@@ -3462,26 +3682,20 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         "async",        FALSE,
         NULL);
 
-    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, deinterlace, rate, convert, scale, capsfilter, jpegenc, appsink, NULL);
+    gst_bin_add_many(GST_BIN(pipeline), deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
 
-    // Codec-specific parser/decoder is added when tsdemux exposes its video
-    // pad. Both codecs then share the same thumbnail processing and JPEG tail.
-    g_signal_connect(tsdemux, "pad-added", G_CALLBACK(on_thumbnail_tsdemux_pad_added), deinterlace);
-
-    if (!gst_element_link(tee, queue) || !gst_element_link(queue, tsdemux)) {
-        g_printerr("Thumbnail: Failed to link tee → queue → tsdemux\n");
-        return;
-    }
-
-    // H.264 is throttled by the upstream keyframe gate only and must NOT pass
-    // through videorate: on H.264 sources whose packets carry no duration
-    // (PTS/DTS only, duration=N/A) videorate's drop-only path trips
-    // gst_video_rate_push_buffer()'s duration assert and abort()s the whole
-    // process. HEVC cannot be keyframe-gated, so its videorate limiter is
-    // spliced in once the codec is known (on_thumbnail_tsdemux_pad_added).
+    // No videorate in the preview tail: its drop-only path aborts the process
+    // on duration-less buffers. The PTS probe throttles the branch instead.
     if (!gst_element_link_many(deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL)) {
         g_printerr("Thumbnail: Failed to link video chain\n");
-        return;
+        gst_bin_remove_many(GST_BIN(pipeline), deinterlace, convert, scale, capsfilter, jpegenc, appsink, NULL);
+        gst_object_unref(deinterlace);
+        gst_object_unref(convert);
+        gst_object_unref(scale);
+        gst_object_unref(capsfilter);
+        gst_object_unref(jpegenc);
+        gst_object_unref(appsink);
+        return NULL;
     }
 
     thumbnail_appsink = appsink;
@@ -3494,8 +3708,129 @@ static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const ch
         free(route_id_copy);
     } else {
         thumbnail_thread_started = TRUE;
-        g_print("Thumbnail: Branch ready for route %s\n", route_id);
     }
+
+    return deinterlace;
+}
+
+// Installs the ≤1 fps PTS-gated preview throttle on an element's src pad. The
+// rate state is a function-local static: only one preview branch is ever active
+// per process (SDI tap XOR compressed branch).
+static void attach_rate_probe(GstElement *element)
+{
+    static ThumbnailRateState rate_state;
+    memset(&rate_state, 0, sizeof(rate_state));
+    rate_state.last_pts = GST_CLOCK_TIME_NONE;
+    GstPad *rate_pad = gst_element_get_static_pad(element, "src");
+    if (rate_pad) {
+        gst_pad_add_probe(rate_pad, GST_PAD_PROBE_TYPE_BUFFER, thumbnail_rate_probe,
+                          &rate_state, NULL);
+        gst_object_unref(rate_pad);
+    }
+}
+
+static void add_thumbnail_branch(GstElement *pipeline, GstElement *tee, const char *route_id)
+{
+    GstElement *deint = build_preview_tail(pipeline, route_id);
+    if (!deint) return;
+
+    GstElement *queue   = gst_element_factory_make("queue",   "thumbnail_queue");
+    GstElement *tsdemux = gst_element_factory_make("tsdemux", "thumbnail_tsdemux");
+    if (!queue || !tsdemux) {
+        g_printerr("Thumbnail: queue/tsdemux unavailable — skipping thumbnail branch\n");
+        if (queue)   gst_object_unref(queue);
+        if (tsdemux) gst_object_unref(tsdemux);
+        return;
+    }
+
+    // Do not shed buffers from compressed MPEG-TS before demux/decode. Packet
+    // loss here corrupts both transport continuity and HEVC reference frames.
+    // Allow short decode/scheduling bursts to queue; sustained decoder overload
+    // can still back-pressure this tee branch once this bounded queue fills.
+    g_object_set(queue,
+        "max-size-buffers", 0,
+        "max-size-bytes",   64 * 1024 * 1024,
+        "max-size-time",    (guint64)(8 * GST_SECOND),
+        "leaky",            0,  // GST_QUEUE_NO_LEAK
+        NULL);
+
+    gst_bin_add_many(GST_BIN(pipeline), queue, tsdemux, NULL);
+
+    // Codec-specific parser/decoder is added when tsdemux exposes its video
+    // pad. Both codecs then share the same thumbnail processing and JPEG tail.
+    g_signal_connect(tsdemux, "pad-added", G_CALLBACK(on_thumbnail_tsdemux_pad_added), deint);
+
+    if (!gst_element_link(tee, queue) || !gst_element_link(queue, tsdemux)) {
+        g_printerr("Thumbnail: Failed to link tee → queue → tsdemux\n");
+        return;
+    }
+
+    attach_rate_probe(deint);
+    g_print("Thumbnail: Branch ready for route %s\n", route_id);
+}
+
+// Attaches the preview tail to an SDI video chain's preview tee: tee → queue →
+// tail. The rate probe sits on the queue (pre-deinterlace) so throttling drops
+// frames at the cheapest point, before deinterlace/scale/JPEG encode.
+static void add_sdi_preview_branch(GstElement *pipeline, GstElement *src, int slot, int device, const char *route_id)
+{
+    GstElement *queue = gst_element_factory_make("queue", "thumbnail_queue");
+    if (!queue) {
+        g_printerr("Thumbnail: queue unavailable — SDI preview disabled\n");
+        return;
+    }
+
+    g_object_set(queue,
+        "max-size-buffers", 0,
+        "max-size-bytes",   64 * 1024 * 1024,
+        "max-size-time",    (guint64)(8 * GST_SECOND),
+        "leaky",            0,  // GST_QUEUE_NO_LEAK
+        NULL);
+
+    gst_bin_add(GST_BIN(pipeline), queue);
+
+    GstElement *deint = build_preview_tail(pipeline, route_id);
+    if (!deint) {
+        gst_bin_remove(GST_BIN(pipeline), queue);
+        gst_object_unref(queue);
+        return;
+    }
+
+    if (!gst_element_link(src, queue) || !gst_element_link(queue, deint)) {
+        g_printerr("Thumbnail: Failed to link SDI preview branch\n");
+        return;
+    }
+
+    attach_rate_probe(queue);
+
+    // Register the preview leg with the slot so teardown_sdi_branch frees it.
+    // The tail elements live in the pipeline under fixed names; fetch them so
+    // the registry holds raw (bin-owned) pointers, then drop our lookup refs.
+    GstElement *convert    = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_convert");
+    GstElement *scale      = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_scale");
+    GstElement *capsfilter = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_capsfilter");
+    GstElement *jpegenc    = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_jpegenc");
+    GstElement *appsink    = gst_bin_get_by_name(GST_BIN(pipeline), "thumbnail_appsink");
+
+    // The branch is attached after preroll begins; sync every element out of
+    // NULL so the preview actually receives frames.
+    gst_element_sync_state_with_parent(queue);
+    gst_element_sync_state_with_parent(deint);
+    gst_element_sync_state_with_parent(convert);
+    gst_element_sync_state_with_parent(scale);
+    gst_element_sync_state_with_parent(capsfilter);
+    gst_element_sync_state_with_parent(jpegenc);
+    gst_element_sync_state_with_parent(appsink);
+
+    sdi_branch_track(slot, device, queue, deint, convert, scale, capsfilter, jpegenc, appsink, NULL);
+
+    gst_object_unref(convert);
+    gst_object_unref(scale);
+    gst_object_unref(capsfilter);
+    gst_object_unref(jpegenc);
+    gst_object_unref(appsink);
+
+    g_print("SDI preview: reusing SDI decode for JPEG thumbnails (device %d)\n", device);
 }
 
 // Build a single source element from its JSON config. Mirrors the source setup
@@ -3764,6 +4099,24 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
     thumbnail_thread_started = FALSE;
     thumbnail_appsink = NULL;
 
+    // Scan sinks up front: an SDI route must not build the compressed-side
+    // thumbnail branch (its preview taps the SDI decode instead).
+    s_route_has_sdi = FALSE;
+    s_sdi_preview_slot = -1;
+    s_sdi_preview_tee = NULL;
+    {
+        cJSON *scan_sink;
+        cJSON_ArrayForEach(scan_sink, sinks_array)
+        {
+            cJSON *scan_type = cJSON_GetObjectItem(scan_sink, "type");
+            if (scan_type && cJSON_IsString(scan_type) &&
+                strcmp(scan_type->valuestring, "sdisink") == 0) {
+                s_route_has_sdi = TRUE;
+                break;
+            }
+        }
+    }
+
     cJSON *sink;
     int sink_idx = 0;
     cJSON_ArrayForEach(sink, sinks_array)
@@ -3784,8 +4137,10 @@ GstElement *create_pipeline(cJSON *json, const char *route_id)
         sink_idx++;
     }
 
-    // Add thumbnail capture branch (gracefully skipped if elements unavailable)
-    if (route_id && route_id[0] != '\0') {
+    // Add thumbnail capture branch (gracefully skipped if elements unavailable).
+    // SDI routes skip this compressed-side branch: their preview reuses the SDI
+    // branch's decoded frames via the tee spliced into the SDI video chain.
+    if (route_id && route_id[0] != '\0' && !s_route_has_sdi) {
         add_thumbnail_branch(pipeline, tee, route_id);
     }
 
@@ -4080,6 +4435,10 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             auto_ctx->fallback_width  = width;
             auto_ctx->fallback_height = height;
             snprintf(auto_ctx->fallback_framerate, sizeof(auto_ctx->fallback_framerate), "%s", framerate);
+            auto_ctx->fallback_fps_num = 25;
+            auto_ctx->fallback_fps_den = 1;
+            sscanf(framerate, "%d/%d", &auto_ctx->fallback_fps_num, &auto_ctx->fallback_fps_den);
+            if (auto_ctx->fallback_fps_den <= 0) auto_ctx->fallback_fps_den = 1;
             auto_ctx->sink_index = sink_index;
 
             if (sink_index >= 0 && sink_index < 8) {
@@ -4319,6 +4678,7 @@ void cleanup_pipeline(GstElement *pipeline)
         sdi_video_last_buffer_time[i] = 0;
         sdi_video_buffer_count[i] = 0;
         sdi_vrate_elements[i] = NULL;
+        memset(&s_sdi_rate_infer[i], 0, sizeof(s_sdi_rate_infer[i]));
 
         if (s_sdi_vid_selector_live_pad[i])     { gst_object_unref(s_sdi_vid_selector_live_pad[i]);     s_sdi_vid_selector_live_pad[i] = NULL; }
         if (s_sdi_vid_selector_fallback_pad[i]) { gst_object_unref(s_sdi_vid_selector_fallback_pad[i]); s_sdi_vid_selector_fallback_pad[i] = NULL; }
