@@ -1,8 +1,9 @@
 {
-  "version": "2026.10.02.2",
-  "released_on": "2026-10-02",
+  "version": "2026.10.03.1",
+  "released_on": "2026-10-03",
   "changes": [
     "Fixed Live Preview aborting the pipeline on some AVC/H.264 sources; HEVC previews remain rate-limited and stable.",
-    "Destination statistics now attribute connected clients to the correct output and report send rate and round-trip time for listener destinations."
+    "Destination statistics now attribute connected clients to the correct output and report send rate and round-trip time for listener destinations.",
+    "Improved SDI output resilience during source changes: the black fallback now engages only once the selector is linked, preventing a pipeline error that could interrupt the route."
   ]
 }
