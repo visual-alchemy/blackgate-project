@@ -209,6 +209,8 @@ static GstPad     *s_sdi_aud_selector_fallback_pad[8] = {NULL};
 static GstElement *s_sdi_vid_fallback_caps[8]         = {NULL};
 static GstElement *s_sdi_vid_fallback_valve[8]        = {NULL};
 static GstElement *s_sdi_aud_fallback_valve[8]        = {NULL};
+static GstElement *s_sdi_vid_fallback_testsrc[8]      = {NULL};
+static gboolean    s_sdi_vid_fallback_linked[8]       = {FALSE};  /* per slot: selector src linked (live branch established) */
 static gint64      s_sdi_vid_live_grace_until[8]      = {0};
 static guint       s_sdi_gap_watchdog_source_id       = 0;
 static gint64      s_sdi_live_buf_time[8]         = {0};  /* per slot: live-branch frame time (pre-selector) */
@@ -255,6 +257,15 @@ static GstElement *sdi_video_fallback_create(int slot, GstElement *pipeline)
                  NULL);
     g_object_set(testsrc, "is-live", TRUE, NULL);
     gst_util_set_object_arg(G_OBJECT(testsrc), "pattern", "black");
+    // The video selector's src pad is only linked once the live branch
+    // supplies its first caps (sdi_video_fallback_link). An is-live
+    // videotestsrc running before that link exists pushes its first buffer
+    // into an unlinked selector and fails with "Internal data stream error",
+    // killing the whole route. Lock it in READY at startup (PAUSED would
+    // still preroll a buffer and crash); the watchdog unlocks and starts it
+    // only when it actually engages the fallback.
+    gst_element_set_locked_state(testsrc, TRUE);
+    gst_element_set_state(testsrc, GST_STATE_READY);
     // Inactive selector pads can return a flow error to an always-running
     // source. Valve absorbs fallback buffers until watchdog selects it, while
     // still forwarding sticky caps/segment events for fast activation.
@@ -303,6 +314,7 @@ static GstElement *sdi_video_fallback_create(int slot, GstElement *pipeline)
     s_sdi_vid_selector_fallback_pad[slot] = fallback_pad;
     s_sdi_vid_fallback_caps[slot]         = fbcaps;
     s_sdi_vid_fallback_valve[slot]        = valve;
+    s_sdi_vid_fallback_testsrc[slot]      = testsrc;
 
     // Start on live. Some DeckLink/GStreamer combinations cannot negotiate an
     // active synthetic source before the real branch has supplied its first
@@ -351,6 +363,11 @@ static gboolean sdi_video_fallback_link(int slot, GstElement *vcaps, GstElement 
         }
         s_sdi_live_probe_added[slot] = TRUE;
     }
+
+    // The watchdog may only switch to fallback once the selector src is
+    // linked (live branch established). Engaging it earlier would feed the
+    // fallback videotestsrc into a still-unlinked selector and crash it.
+    s_sdi_vid_fallback_linked[slot] = ok;
 
     return ok;
 }
@@ -459,7 +476,14 @@ static void sdi_fallback_select_slot(int slot, gboolean fallback)
 
     if (!vsel || !vlive || !vfb) return;
 
-    if (fallback && vvalve) g_object_set(vvalve, "drop", FALSE, NULL);
+    if (fallback && vvalve) {
+        GstElement *testsrc = s_sdi_vid_fallback_testsrc[slot];
+        if (testsrc) {
+            gst_element_set_locked_state(testsrc, FALSE);
+            gst_element_sync_state_with_parent(testsrc);
+        }
+        g_object_set(vvalve, "drop", FALSE, NULL);
+    }
     g_object_set(vsel, "active-pad", fallback ? vfb : vlive, NULL);
     if (!fallback && vvalve) g_object_set(vvalve, "drop", TRUE, NULL);
     g_print("SDI_GAP: slot %d video -> %s\n", slot,
@@ -514,7 +538,7 @@ static gboolean sdi_gap_watchdog_cb(gpointer data)
 
         if (!s_sdi_wd_on_fallback[slot]) {
             /* on live: engage black fallback when live frames stall */
-            if (!fresh && now > s_sdi_vid_live_grace_until[slot]) {
+            if (!fresh && now > s_sdi_vid_live_grace_until[slot] && s_sdi_vid_fallback_linked[slot]) {
                 s_sdi_wd_on_fallback[slot] = TRUE;
                 s_sdi_live_fresh_since[slot] = 0;
                 switch_to_fallback = TRUE;
@@ -1247,6 +1271,10 @@ static void teardown_sdi_branch(int slot)
     s_sdi_vid_fallback_caps[slot] = NULL;
     s_sdi_vid_fallback_valve[slot] = NULL;
     s_sdi_aud_fallback_valve[slot] = NULL;
+    if (s_sdi_vid_fallback_testsrc[slot]) {
+        gst_element_set_locked_state(s_sdi_vid_fallback_testsrc[slot], FALSE);
+        s_sdi_vid_fallback_testsrc[slot] = NULL;
+    }
     g_mutex_lock(&s_sdi_gap_state_mutex);
     s_sdi_vid_live_grace_until[slot] = 0;
     s_sdi_live_buf_time[slot] = 0;
@@ -1254,6 +1282,7 @@ static void teardown_sdi_branch(int slot)
     s_sdi_wd_on_fallback[slot] = FALSE;
     g_mutex_unlock(&s_sdi_gap_state_mutex);
     s_sdi_live_probe_added[slot] = FALSE;
+    s_sdi_vid_fallback_linked[slot] = FALSE;
     for (int i = 0; i < s_sdi_branch_n[slot]; i++) {
         GstElement *e = s_sdi_branch_elems[slot][i];
         gst_bin_remove(GST_BIN(g_pipeline), e);
@@ -4300,6 +4329,10 @@ void cleanup_pipeline(GstElement *pipeline)
         s_sdi_vid_fallback_caps[i] = NULL;
         s_sdi_vid_fallback_valve[i] = NULL;
         s_sdi_aud_fallback_valve[i] = NULL;
+        if (s_sdi_vid_fallback_testsrc[i]) {
+            gst_element_set_locked_state(s_sdi_vid_fallback_testsrc[i], FALSE);
+            s_sdi_vid_fallback_testsrc[i] = NULL;
+        }
         g_mutex_lock(&s_sdi_gap_state_mutex);
         s_sdi_vid_live_grace_until[i] = 0;
         s_sdi_live_buf_time[i] = 0;
@@ -4307,6 +4340,7 @@ void cleanup_pipeline(GstElement *pipeline)
         s_sdi_wd_on_fallback[i] = FALSE;
         g_mutex_unlock(&s_sdi_gap_state_mutex);
         s_sdi_live_probe_added[i] = FALSE;
+        s_sdi_vid_fallback_linked[i] = FALSE;
     }
 
     // Set pipeline to NULL first — this flushes appsink, unblocking try_pull_sample
