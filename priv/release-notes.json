@@ -1,7 +1,10 @@
 {
-  "version": "2026.10.03.1",
+  "version": "2026.10.03.4",
   "released_on": "2026-10-03",
   "changes": [
+    "Fixed SRT-to-SDI routes reconnecting on sources that omit framerate metadata: the SDI output now infers the video framerate, so those streams no longer interrupt the route.",
+    "Live Preview on SRT-to-SDI routes now reuses the SDI decoder instead of decoding the stream a second time, substantially reducing CPU use on those routes.",
+    "Live Preview thumbnails no longer freeze on sources without periodic keyframes; previews now refresh about once per second regardless of GOP structure.",
     "Fixed Live Preview aborting the pipeline on some AVC/H.264 sources; HEVC previews remain rate-limited and stable.",
     "Destination statistics now attribute connected clients to the correct output and report send rate and round-trip time for listener destinations.",
     "Improved SDI output resilience during source changes: the black fallback now engages only once the selector is linked, preventing a pipeline error that could interrupt the route."
