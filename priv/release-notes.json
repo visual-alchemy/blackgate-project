@@ -1,7 +1,13 @@
 {
-  "version": "2026.10.03.5",
-  "released_on": "2026-10-03",
+  "version": "2026.10.03.8",
+  "released_on": "2026-10-04",
   "changes": [
+    "SDI output no longer hits hardware schedule failures on sources whose muxer carries a large audio-ahead offset: the initial backlog now buffers in software and drains instead of forcing the card into an error, so affected streams play continuously instead of dropping to black.",
+    "SDI output recovers by itself if the first seconds of a stream overload the output path; the brief fallback now returns to live automatically.",
+    "Routes now stop and restart pipelines gracefully, returning SDI hardware resources immediately instead of leaking them, which prevents the card from running out of video frames after repeated restarts.",
+    "Failed source reconnections now back off gradually (up to two minutes) instead of retrying every ten seconds, reducing log noise and hardware churn during upstream outages.",
+    "SDI output now locks onto 23.98/24 fps sources at their exact cadence instead of forcing 25 fps, so those streams no longer play at the wrong rate.",
+    "SDI framerate detection is now robust against stream-join transients, preventing a wrong rate from being inferred in the first seconds of a stream.",
     "Routes now ride through brief source interruptions: a short upstream gap no longer tears the route down, avoiding the multi-second blackout and mode re-detection while the source is briefly lost.",
     "Improved source error reporting in the logs, making upstream SRT problems easier to diagnose.",
     "Fixed received-packet statistics reading zero on listener sources and reduced repeated log noise.",
