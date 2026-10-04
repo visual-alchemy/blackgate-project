@@ -14,7 +14,13 @@ defmodule Blackgate.Helpers do
     Process.flag(:max_heap_size, %{size: max_heap_words})
   end
 
-  def sys_kill(process_id) do
+  # SIGTERM (not -9): SIGKILL orphans DeckLink driver frames ("Ran out of free
+  # frames") and exhausts the card pool until the driver is reloaded.
+  def sys_kill(process_id, signal \\ "TERM") do
+    System.cmd("kill", ["-#{signal}", "#{process_id}"])
+  end
+
+  def sys_kill9(process_id) do
     System.cmd("kill", ["-9", "#{process_id}"])
   end
 end

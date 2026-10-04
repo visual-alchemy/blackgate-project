@@ -12,6 +12,8 @@ defmodule Blackgate.RouteHandler do
   # Reconnect configuration
   # Retry every 10 seconds
   @reconnect_interval_ms 10_000
+  # Failed attempts double the delay up to this cap (limits churn on dead sources)
+  @reconnect_interval_max_ms 120_000
   # Give up after 3 minutes
   @reconnect_timeout_ms 180_000
 
@@ -670,7 +672,7 @@ defmodule Blackgate.RouteHandler do
             else
               {:keep_state,
                %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
-               {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+               {{:timeout, :reconnect}, next_reconnect_delay(count), :retry}}
             end
         end
       rescue
@@ -703,7 +705,7 @@ defmodule Blackgate.RouteHandler do
           else
             {:keep_state,
              %{data | reconnect_count: count, consecutive_startup_crashes: consecutive},
-             {{:timeout, :reconnect}, @reconnect_interval_ms, :retry}}
+             {{:timeout, :reconnect}, next_reconnect_delay(count), :retry}}
           end
       end
     end
@@ -711,6 +713,21 @@ defmodule Blackgate.RouteHandler do
 
   # Ignore port messages during reconnecting state
   def handle_event(:info, _content, :reconnecting, _data) do
+    :keep_state_and_data
+  end
+
+  # Delayed follow-up to close_port: force-kill + close if SIGTERM grace lapsed.
+  def handle_event(:info, {:escalate_kill, port, pid}, _state, _data) do
+    still_alive? =
+      match?({_, 0}, System.cmd("kill", ["-0", "#{pid}"], stderr_to_stdout: true))
+
+    if still_alive? do
+      Logger.warning("RouteHandler: Pipeline still alive after SIGTERM, force killing PID #{pid}")
+      Helpers.sys_kill9(pid)
+    end
+
+    if is_port(port) and port_open?(port), do: Port.close(port)
+
     :keep_state_and_data
   end
 
@@ -1450,6 +1467,10 @@ defmodule Blackgate.RouteHandler do
   end
 
   # retry_ms: intentional switches (manual switch, auto-failover) pass a short
+  defp next_reconnect_delay(count) do
+    min(@reconnect_interval_ms * 2 ** max(count - 1, 0), @reconnect_interval_max_ms)
+  end
+
   # interval — the 10s default is a crash-loop backoff, not a switch delay.
   defp enter_reconnecting(data, retry_ms \\ @reconnect_interval_ms) do
     Blackgate.set_route_status(data.id, "reconnecting")
@@ -1605,8 +1626,11 @@ defmodule Blackgate.RouteHandler do
     try do
       case Port.info(port, :os_pid) do
         {:os_pid, pid} when is_integer(pid) ->
-          Logger.info("RouteHandler: Killing external process with PID #{pid}")
+          Logger.info("RouteHandler: Sending SIGTERM to external process with PID #{pid}")
           Helpers.sys_kill(pid)
+          # Pipeline teardown (DeckLink sink NULL transition) can take seconds;
+          # escalate only if the process is still alive after the grace period.
+          Process.send_after(self(), {:escalate_kill, port, pid}, 5_000)
 
         _ ->
           Logger.warning("RouteHandler: Could not get OS PID, relying on Port.close/1")

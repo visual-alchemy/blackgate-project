@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #include <gio/gio.h>
+#include <glib-unix.h>
 #include <unistd.h>
 
 #include "gst_pipeline.h"
@@ -63,6 +65,15 @@ static char *read_stdin_line(GIOChannel *channel)
     }
 
     return line;
+}
+
+// Graceful on SIGTERM/SIGINT: cleanup_pipeline() must run or DeckLink frames leak.
+static gboolean on_signal(gpointer user_data)
+{
+    GMainLoop *loop = (GMainLoop *)user_data;
+    g_print("Termination signal received, shutting down pipeline\n");
+    if (loop) g_main_loop_quit(loop);
+    return G_SOURCE_REMOVE;
 }
 
 static gboolean stdin_watch_cb(GIOChannel *channel, GIOCondition cond, gpointer user_data)
@@ -170,6 +181,10 @@ int main(int argc, char* argv[])
 
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     set_main_loop(loop);
+
+    // Note: a SIGTERM before this point (during blocking init) still default-dies.
+    g_unix_signal_add(SIGTERM, on_signal, loop);
+    g_unix_signal_add(SIGINT, on_signal, loop);
 
     g_io_add_watch(stdin_channel, G_IO_IN | G_IO_HUP | G_IO_ERR, stdin_watch_cb, loop);
 
