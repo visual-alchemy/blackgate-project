@@ -166,10 +166,6 @@ typedef struct {
     int fallback_width;
     int fallback_height;
     char fallback_framerate[16];
-    // Fallback framerate as a fraction (parsed from fallback_framerate), used
-    // as a bias when inferring the rate of a VUI-less source.
-    int fallback_fps_num;
-    int fallback_fps_den;
 } SdiAutoDetectCtx;
 
 // INVARIANT: switch_source() clears s_sdi_applied_caps[slot]; the vqueue-sink
@@ -189,7 +185,10 @@ static char             s_sdi_applied_caps[8][256] = {{0}};
 // back and leaking frames until the sink's ScheduleVideoFrame pool overflows.
 typedef struct {
     GstClockTime last_pts;    // last valid PTS seen (GST_CLOCK_TIME_NONE = none)
-    gint64       delta_sum;   // sum of (pts - last_pts) deltas, in ns
+    gint64       ring[16];    // last PTS deltas (ns); slides over join transients
+    gint         ring_len;
+    gint         ring_pos;
+    gint         ring_fills;  // non-uniform full windows seen (give-up counter)
     gint         delta_count; // number of deltas accumulated
     gint         fps_num;     // inferred rate (0 until a stable rate is derived)
     gint         fps_den;
@@ -863,32 +862,36 @@ static GstPadProbeReturn sdi_caps_reapply_probe(GstPad *pad, GstPadProbeInfo *in
             if (GST_CLOCK_TIME_IS_VALID(ri->last_pts) && pts > ri->last_pts) {
                 gint64 d = (gint64)(pts - ri->last_pts);
                 if (d > 0 && d < 500 * GST_MSECOND) {
-                    ri->delta_sum += d;
                     ri->delta_count++;
+                    ri->ring[ri->ring_pos] = d;
+                    ri->ring_pos = (ri->ring_pos + 1) % 16;
+                    if (ri->ring_len < 16) ri->ring_len++;
                 }
             }
             ri->last_pts = pts;
         }
-        if (ri->fps_num == 0 && ri->delta_count >= 12) {
-            sdi_infer_standard_rate(ri->delta_sum / ri->delta_count,
-                                    &ri->fps_num, &ri->fps_den);
-            // Bias toward the operator's fallback rate when the PTS-derived
-            // rate is within ~10% of it. VFR sources (e.g. ~24.5fps) would
-            // otherwise flip between 24/25 and force a mid-stream DeckLink
-            // mode change that wedges the sink's frame scheduler.
-            if (ri->fps_num > 0 && ctx && ctx->fallback_fps_num > 0) {
-                gint64 infer_int = (gint64)ri->fps_den * G_GINT64_CONSTANT(1000000000) / ri->fps_num;
-                gint64 fb_int = (gint64)ctx->fallback_fps_den * G_GINT64_CONSTANT(1000000000) / ctx->fallback_fps_num;
-                gint64 diff = infer_int - fb_int;
-                if (diff < 0) diff = -diff;
-                if (diff * 10 <= fb_int) {
-                    ri->fps_num = ctx->fallback_fps_num;
-                    ri->fps_den = ctx->fallback_fps_den;
-                }
+        if (ri->fps_num == 0 && ri->ring_len == 16) {
+            gint64 mn = ri->ring[0], mx = ri->ring[0], sum = 0;
+            for (int k = 0; k < 16; k++) {
+                if (ri->ring[k] < mn) mn = ri->ring[k];
+                if (ri->ring[k] > mx) mx = ri->ring[k];
+                sum += ri->ring[k];
             }
-            if (ri->fps_num > 0)
-                g_print("SDI AUTO-DETECT: inferred framerate %d/%d from %d PTS deltas\n",
-                        ri->fps_num, ri->fps_den, ri->delta_count);
+            // Decide only on a steady cadence: stream-join transients (decoder
+            // reorder bursts) poison the first deltas and mislabel a 24fps
+            // source as 25fps, which wedges the DeckLink scheduler. A
+            // non-uniform window is discarded; after 8 failed windows decide
+            // on the latest window anyway.
+            if (mx - mn <= 2 * GST_MSECOND || ri->ring_fills >= 8) {
+                sdi_infer_standard_rate(sum / 16, &ri->fps_num, &ri->fps_den);
+                if (ri->fps_num > 0)
+                    g_print("SDI AUTO-DETECT: inferred framerate %d/%d from %d PTS deltas\n",
+                            ri->fps_num, ri->fps_den, ri->delta_count);
+            } else {
+                ri->ring_fills++;
+                ri->ring_len = 0;
+                ri->ring_pos = 0;
+            }
         }
         if (ri->fps_num > 0) {
             // Normalize the inferred rate the same way sdi_reapply_mode does so
@@ -4319,15 +4322,19 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
 
         // --- Configure DeckLink sinks (common to both auto and manual) ---
         g_object_set(videosink, "device-number", device_number, NULL);
-        // DeckLink video runs with sync=FALSE (pacing is handled by the identity element).
+        // videosink sync=TRUE is REQUIRED: with sync=FALSE + identity pacing, senders
+        // whose mux offsets video from audio drove the sink to schedule the whole
+        // startup backlog into the driver's 65-frame pool -> ScheduleVideoFrame
+        // E_FAIL 0x80000008. With sync=TRUE the backlog waits in software. Do NOT
+        // move pacing back to the identity (this overrides the AGENTS.md rule).
         // DeckLink audio runs with sync=TRUE. This allows GStreamer's master clock-slaving
         // mechanism to pace and resample audio buffers properly, preventing stuttering and underruns.
-        g_object_set(videosink, "sync", FALSE, NULL);
+        g_object_set(videosink, "sync", TRUE, NULL);
         g_object_set(audiosink, "device-number", device_number, "sync", TRUE, "max-lateness", (gint64)200000000, NULL);
 
-        // Create identity element for video frame pacing via system clock
+        // identity kept only for gap-fallback wiring; pacing is the sink's job now.
         GstElement *vid_identity = gst_element_factory_make("identity", NULL);
-        g_object_set(vid_identity, "sync", TRUE, NULL);
+        g_object_set(vid_identity, "sync", FALSE, NULL);
 
         // Configure audiomixmatrix: upmix stereo to 8ch for SDI broadcast compatibility.
         // We configure it to manual mode and set a transformation matrix that duplicates
@@ -4481,10 +4488,6 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
             auto_ctx->fallback_width  = width;
             auto_ctx->fallback_height = height;
             snprintf(auto_ctx->fallback_framerate, sizeof(auto_ctx->fallback_framerate), "%s", framerate);
-            auto_ctx->fallback_fps_num = 25;
-            auto_ctx->fallback_fps_den = 1;
-            sscanf(framerate, "%d/%d", &auto_ctx->fallback_fps_num, &auto_ctx->fallback_fps_den);
-            if (auto_ctx->fallback_fps_den <= 0) auto_ctx->fallback_fps_den = 1;
             auto_ctx->sink_index = sink_index;
 
             if (sink_index >= 0 && sink_index < 8) {
