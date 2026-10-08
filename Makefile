@@ -67,15 +67,18 @@ install:
 	@echo "Step 3: Installing Elixir & Erlang..."
 	@echo "=============================================="
 	@if [ "$$(uname)" = "Linux" ]; then \
-		ELIXIR_VERSION=$$(elixir -v 2>/dev/null | grep Elixir | cut -d' ' -f2 || echo "0.0.0"); \
-		ELIXIR_MINOR=$$(echo $$ELIXIR_VERSION | cut -d'.' -f2 || echo "0"); \
+		ELIXIR_VERSION=$$(elixir -v 2>/dev/null | grep -i Elixir | cut -d' ' -f2); \
+		ELIXIR_VERSION=$${ELIXIR_VERSION:-0.0.0}; \
+		ELIXIR_MINOR=$$(echo "$$ELIXIR_VERSION" | cut -d'.' -f2); \
+		ELIXIR_MINOR=$${ELIXIR_MINOR:-0}; \
 		if [ "$$ELIXIR_MINOR" -lt 17 ]; then \
 			echo "Elixir version ($$ELIXIR_VERSION) is too old or missing. Upgrading using precompiled binaries..."; \
 			if command -v apt-get > /dev/null; then \
 				sudo apt-get update; \
 				sudo apt-get purge -y elixir || true; \
 				sudo apt-get install -y erlang unzip wget || true; \
-				OTP_VERSION=$$(erl -noshell -eval 'io:format("~s", [erlang:system_info(otp_release)]), halt().' || echo "24"); \
+				OTP_VERSION=$$(erl -noshell -eval 'io:format("~s", [erlang:system_info(otp_release)]), halt().' 2>/dev/null); \
+				OTP_VERSION=$${OTP_VERSION:-25}; \
 				ELIXIR_DL="v1.17.3/elixir-otp-$$OTP_VERSION.zip"; \
 				if [ "$$OTP_VERSION" -lt 25 ]; then ELIXIR_DL="v1.16.3/elixir-otp-$$OTP_VERSION.zip"; fi; \
 				echo "Downloading Elixir $$ELIXIR_DL..."; \
