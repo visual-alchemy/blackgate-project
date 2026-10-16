@@ -142,14 +142,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let selector_state: Arc<Mutex<Option<SelectorState>>> =
         Arc::new(Mutex::new(match (&built.selector, &built.secondary) {
-            (Some(sel), Some(sec)) => Some(SelectorState::new(sel.clone(), sec.clone())),
+            (Some(sel), Some(sec)) => Some(SelectorState::new(
+                sel.clone(),
+                sec.clone(),
+                config.auto_join,
+            )),
             _ => None,
         }));
 
     // stdin command thread (C stdin_watch_cb + handle_command_line)
     let stop_for_stdin = stop.clone();
     let selector_for_stdin = selector_state.clone();
-    let config_auto_join = config.auto_join;
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
@@ -221,7 +224,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Bad command JSON: {}", trimmed);
                 }
             }
-            let _ = config_auto_join;
             let _ = std::io::stdout().flush();
         }
     });

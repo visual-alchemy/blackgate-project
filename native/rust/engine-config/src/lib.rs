@@ -154,6 +154,10 @@ pub struct RouteConfig {
     pub sinks: Vec<SinkConfig>,
     pub secondary: Option<SecondaryConfig>,
     pub auto_join: bool,
+    /// Persisted logical selection ("primary"|"secondary"). C lite 2061-2068:
+    /// keeps primary/secondary slots stable so later switch-source commands keep
+    /// their meaning across an engine restart.
+    pub active_source: Option<String>,
 }
 
 impl RouteConfig {
@@ -174,6 +178,9 @@ struct ElixirInit {
     secondary_source: Option<serde_json::Value>,
     #[serde(default = "default_true")]
     auto_join: bool,
+    /// Persisted logical source selection after a switch (C lite 2061).
+    #[serde(default)]
+    active_source: Option<String>,
     #[serde(default)]
     sinks: Option<Vec<serde_json::Value>>,
 }
@@ -542,6 +549,7 @@ impl RouteConfig {
             sinks,
             secondary,
             auto_join: init.auto_join,
+            active_source: init.active_source,
         })
     }
 
@@ -586,6 +594,8 @@ impl RouteConfig {
             sinks,
             secondary,
             auto_join: init.auto_join,
+            // Simple/test shape carries no persisted selection; default to primary.
+            active_source: None,
         })
     }
 
@@ -676,6 +686,23 @@ mod tests {
         assert_eq!(sdi.height, 1080);
         assert_eq!(sdi.framerate, "25/1");
         assert!(!sdi.interlaced);
+    }
+
+    /// C lite 2061-2068: persisted selection survives restart so later
+    /// switch-source commands keep their meaning.
+    #[test]
+    fn active_source_is_parsed_and_defaults_none() {
+        let cfg = RouteConfig::from_json(
+            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"secondary_source":{"type":"srtsrc","uri":"srt://0.0.0.0:7002"},"active_source":"secondary","sinks":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.active_source.as_deref(), Some("secondary"));
+
+        let none = RouteConfig::from_json(
+            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"sinks":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(none.active_source, None);
     }
 
     #[test]

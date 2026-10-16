@@ -1240,6 +1240,7 @@ defmodule Blackgate.RouteHandler do
                 "route_id" => route["id"],
                 "primary_source" => source,
                 "secondary_source" => secondary,
+                "active_source" => active_source_from_route(route),
                 "auto_join" => Map.get(route, "auto_join", true),
                 "sinks" => sinks
               }

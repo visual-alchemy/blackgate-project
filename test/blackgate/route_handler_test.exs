@@ -915,6 +915,9 @@ defmodule Blackgate.RouteHandlerTest do
 
       assert payload["auto_join"] == true
       assert is_list(payload["sinks"])
+      # Persisted selection must ride the init payload, or the engine cannot
+      # restore the active source across a restart (blackgate-lite parity).
+      assert payload["active_source"] == "primary"
       refute Map.has_key?(payload, "source")
     end
 

@@ -65,6 +65,11 @@ pub struct SourceStats {
     pub source: String,
     #[serde(rename = "total-bytes-received")]
     pub total_bytes_received: u64,
+    /// Bytes since the previous report (C lite 234-235 emits this alongside the
+    /// running total; the oracle omitted it, which silently zeroed
+    /// route_controller.ex:31 "is data flowing?" fallback).
+    #[serde(rename = "bytes-received")]
+    pub bytes_received: i64,
     #[serde(rename = "packets-received")]
     pub packets_received: i64,
     #[serde(rename = "packets-received-lost")]
@@ -100,6 +105,9 @@ pub struct SinkStats {
     pub packets_sent_dropped: i64,
     #[serde(rename = "packets-sent-retransmitted")]
     pub packets_sent_retransmitted: i64,
+    /// C lite 354: srtsink "bytes-received" (this sink's inbound byte count).
+    #[serde(rename = "bytes-received")]
+    pub bytes_received: i64,
     #[serde(rename = "rtt-ms")]
     pub rtt_ms: f64,
     #[serde(rename = "send-rate-mbps")]
@@ -126,6 +134,18 @@ pub struct SdiVideoStatsItem {
 }
 
 // ── gst stats extraction ─────────────────────────────────────────────────
+
+// Per-tag last-seen totals for the source `bytes-received` delta (C lite
+// `last_report_bytes`, source_ts_info[] slot 0=primary, 1=secondary).
+static LAST_SOURCE_BYTES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+fn source_slot(tag: &str) -> usize {
+    if tag == "secondary" {
+        1
+    } else {
+        0
+    }
+}
 
 fn struct_get_i64(s: &gst::Structure, name: &str) -> i64 {
     s.get::<i64>(name)
@@ -238,6 +258,7 @@ pub fn build_source_stats(element: &gst::Element, tag: &str) -> SourceStats {
     let mut stats = SourceStats {
         source: tag.to_string(),
         total_bytes_received: 0,
+        bytes_received: 0,
         packets_received: 0,
         packets_received_lost: 0,
         packets_received_dropped: 0,
@@ -255,6 +276,10 @@ pub fn build_source_stats(element: &gst::Element, tag: &str) -> SourceStats {
     };
 
     stats.total_bytes_received = struct_get_u64(&s, "total-bytes-received");
+    // C lite 217-239: bytes since the previous 1s report for this source slot.
+    let slot = source_slot(tag);
+    let prev = LAST_SOURCE_BYTES[slot].swap(stats.total_bytes_received, Ordering::Relaxed);
+    stats.bytes_received = stats.total_bytes_received.saturating_sub(prev) as i64;
     stats.packets_received = struct_get_i64(&s, "packets-received");
     stats.packets_received_lost = struct_get_i64(&s, "packets-received-lost");
     stats.packets_received_dropped = struct_get_i64(&s, "packets-received-dropped");
@@ -312,6 +337,7 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
         packets_sent_lost: 0,
         packets_sent_dropped: 0,
         packets_sent_retransmitted: 0,
+        bytes_received: 0,
         rtt_ms: 0.0,
         send_rate_mbps: 0.0,
         bandwidth_mbps: 0.0,
@@ -329,6 +355,7 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
     out.packets_sent_lost = struct_get_i64(&s, "packets-sent-lost");
     out.packets_sent_dropped = struct_get_i64(&s, "packets-sent-dropped");
     out.packets_sent_retransmitted = struct_get_i64(&s, "packets-sent-retransmitted");
+    out.bytes_received = struct_get_i64(&s, "bytes-received");
     out.rtt_ms = struct_get_f64(&s, "rtt-ms");
     out.send_rate_mbps = struct_get_f64(&s, "send-rate-mbps");
     out.bandwidth_mbps = struct_get_f64(&s, "bandwidth-mbps");
@@ -375,6 +402,45 @@ pub fn attach_video_info(value: &mut serde_json::Value, info: &VideoInfo) {
         } else {
             "progressive"
         }),
+    );
+
+    // Codec detail panel (C add_video_metadata_stats 285-299). Only emitted for
+    // codecs the C engine names; unknown/mpeg2 emit the codec string alone.
+    let codec_name = engine_metadata::codec_display_name(info.codec);
+    if !codec_name.is_empty() {
+        obj.insert("video-codec".into(), serde_json::Value::from(codec_name));
+        let profile = match info.codec {
+            engine_metadata::VideoCodec::H264 => {
+                engine_metadata::h264_profile_name(info.profile_idc)
+            }
+            engine_metadata::VideoCodec::HEVC => engine_metadata::hevc_profile_name(
+                info.profile_idc,
+                info.chroma_format_idc,
+                info.bit_depth,
+            ),
+            _ => "Unknown",
+        };
+        obj.insert("video-profile".into(), serde_json::Value::from(profile));
+        obj.insert(
+            "video-level-idc".into(),
+            serde_json::Value::from(info.level_idc as i64),
+        );
+        obj.insert(
+            "video-chroma-format".into(),
+            serde_json::Value::from(engine_metadata::chroma_format_name(info.chroma_format_idc)),
+        );
+        obj.insert(
+            "video-bit-depth".into(),
+            serde_json::Value::from(info.bit_depth as i64),
+        );
+    }
+    obj.insert(
+        "video-sar-num".into(),
+        serde_json::Value::from(if info.sar_num == 0 { 1 } else { info.sar_num } as i64),
+    );
+    obj.insert(
+        "video-sar-den".into(),
+        serde_json::Value::from(if info.sar_den == 0 { 1 } else { info.sar_den } as i64),
     );
 }
 
@@ -556,6 +622,7 @@ mod tests {
         SourceStats {
             source: "primary".into(),
             total_bytes_received: 123456789,
+            bytes_received: 0,
             packets_received: 1000,
             packets_received_lost: 10,
             packets_received_dropped: 5,
@@ -576,6 +643,7 @@ mod tests {
         let expected_keys = [
             "source",
             "total-bytes-received",
+            "bytes-received",
             "packets-received",
             "packets-received-lost",
             "packets-received-dropped",
@@ -609,9 +677,29 @@ mod tests {
         assert!(v.get("connected-callers").is_some());
         // Keys the old Rust format emitted must NOT exist (silent-zero bug)
         assert!(v.get("packets-lost").is_none());
-        assert!(v.get("bytes-received").is_none());
         assert!(v.get("stream-id").is_none());
         assert!(v.get("packets-retransmitted").is_none());
+        // But `bytes-received` is REQUIRED: blackgate-lite emits it and
+        // route_controller.ex:31 uses it as the "is data flowing?" fallback.
+        assert!(v.get("bytes-received").is_some());
+    }
+
+    /// lite's bytes-received is a per-report delta, not the running total.
+    #[test]
+    fn source_bytes_received_is_a_delta() {
+        let mut a = source_stats_fixture();
+        a.total_bytes_received = 1_000;
+        let mut b = a.clone();
+        b.total_bytes_received = 1_750;
+        assert_eq!(
+            b.total_bytes_received
+                .saturating_sub(a.total_bytes_received),
+            750
+        );
+        // The delta is carried on the wire, so the key must serialize.
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(v.get("bytes-received").is_some());
+        assert_eq!(v["bytes-received"], 0_i64);
     }
 
     #[test]
@@ -623,6 +711,7 @@ mod tests {
             packets_sent_lost: 1,
             packets_sent_dropped: 0,
             packets_sent_retransmitted: 2,
+            bytes_received: 4,
             rtt_ms: 5.0,
             send_rate_mbps: 6.0,
             bandwidth_mbps: 7.0,
@@ -634,9 +723,9 @@ mod tests {
         assert!(json.starts_with(concat!(
             r#"{"sink-index":2,"bytes-sent-total":999,"packets-sent":100,"#,
             r#""packets-sent-lost":1,"packets-sent-dropped":0,"#,
-            r#""packets-sent-retransmitted":2,"rtt-ms":5.0,"send-rate-mbps":6.0,"#,
-            r#""bandwidth-mbps":7.0,"negotiated-latency-ms":90,"connected-callers":1,"#,
-            r#""callers":[]}"#
+            r#""packets-sent-retransmitted":2,"bytes-received":4,"#,
+            r#""rtt-ms":5.0,"send-rate-mbps":6.0,"bandwidth-mbps":7.0,"#,
+            r#""negotiated-latency-ms":90,"connected-callers":1,"callers":[]}"#
         )));
     }
 
@@ -650,6 +739,12 @@ mod tests {
             fps_den: 1,
             interlaced: true,
             codec: engine_metadata::VideoCodec::H264,
+            profile_idc: 100,
+            level_idc: 41,
+            chroma_format_idc: 1,
+            bit_depth: 8,
+            sar_num: 1,
+            sar_den: 1,
         };
         attach_video_info(&mut v, &info);
         assert_eq!(v["video-width"], 1920);
@@ -657,6 +752,28 @@ mod tests {
         assert_eq!(v["video-framerate-num"], 25);
         assert_eq!(v["video-framerate-den"], 1);
         assert_eq!(v["video-interlace-mode"], "interleaved");
+        // Blackgate-lite codec detail panel (C add_video_metadata_stats).
+        assert_eq!(v["video-codec"], "AVC/H.264");
+        assert_eq!(v["video-profile"], "High");
+        assert_eq!(v["video-level-idc"], 41);
+        assert_eq!(v["video-chroma-format"], "4:2:0");
+        assert_eq!(v["video-bit-depth"], 8);
+        assert_eq!(v["video-sar-num"], 1);
+        assert_eq!(v["video-sar-den"], 1);
+    }
+
+    #[test]
+    fn hevc_profile_and_chroma_names_match_c() {
+        use engine_metadata::{chroma_format_name, h264_profile_name, hevc_profile_name};
+        assert_eq!(h264_profile_name(100), "High");
+        assert_eq!(h264_profile_name(66), "Baseline");
+        assert_eq!(chroma_format_name(1), "4:2:0");
+        assert_eq!(chroma_format_name(2), "4:2:2");
+        // Chroma/depth win over the raw idc, as in C hevc_profile_name().
+        assert_eq!(hevc_profile_name(1, 2, 10), "Main 4:2:2 10");
+        assert_eq!(hevc_profile_name(1, 2, 8), "Main 4:2:2");
+        assert_eq!(hevc_profile_name(1, 1, 10), "Main 10");
+        assert_eq!(hevc_profile_name(1, 1, 8), "Main");
     }
 
     #[test]

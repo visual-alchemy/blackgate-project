@@ -26,6 +26,74 @@ pub struct VideoInfo {
     pub fps_den: u32,
     pub interlaced: bool,
     pub codec: VideoCodec,
+    /// Codec profile idc (H.264 profile_idc / HEVC general_profile_idc).
+    pub profile_idc: u8,
+    /// Codec level idc (H.264 level_idc / HEVC general_level_idc).
+    pub level_idc: u8,
+    /// Chroma format idc: 0=4:0:0, 1=4:2:0, 2=4:2:2, 3=4:4:4.
+    pub chroma_format_idc: u8,
+    /// Bit depth (luma), 8/10/12.
+    pub bit_depth: u8,
+    /// Sample aspect ratio numerator/denominator (video-sar-*).
+    pub sar_num: u16,
+    pub sar_den: u16,
+}
+
+/// C h264_profile_name() — idc → display name.
+pub fn h264_profile_name(idc: u8) -> &'static str {
+    match idc {
+        66 => "Baseline",
+        77 => "Main",
+        88 => "Extended",
+        100 => "High",
+        110 => "High 10",
+        122 => "High 4:2:2",
+        244 => "High 4:4:4 Predictive",
+        _ => "Unknown",
+    }
+}
+
+/// C chroma_format_name().
+pub fn chroma_format_name(idc: u8) -> &'static str {
+    match idc {
+        0 => "4:0:0",
+        1 => "4:2:0",
+        2 => "4:2:2",
+        3 => "4:4:4",
+        _ => "Unknown",
+    }
+}
+
+/// C hevc_profile_name() — chroma/depth win over the profile idc when set.
+pub fn hevc_profile_name(idc: u8, chroma: u8, depth: u8) -> &'static str {
+    if chroma == 2 && depth == 10 {
+        return "Main 4:2:2 10";
+    }
+    if chroma == 2 {
+        return "Main 4:2:2";
+    }
+    if chroma == 1 && depth == 10 {
+        return "Main 10";
+    }
+    if chroma == 1 && depth == 8 {
+        return "Main";
+    }
+    match idc {
+        1 => "Main",
+        2 => "Main 10",
+        3 => "Main Still Picture",
+        4 => "Range Extensions",
+        _ => "Unknown",
+    }
+}
+
+/// C video-codec field: "AVC/H.264" | "HEVC/H.265" (empty when unknown).
+pub fn codec_display_name(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "AVC/H.264",
+        VideoCodec::HEVC => "HEVC/H.265",
+        _ => "",
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -45,6 +113,16 @@ impl VideoCodec {
             VideoCodec::Mpeg2 => "mpeg2",
             VideoCodec::Unknown => "unknown",
         }
+    }
+}
+
+/// MPEG-TS stream_type → VideoCodec (PMT mapping, C STREAM_TYPE_*).
+pub fn codec_from_stream_type(stream_type: u8) -> VideoCodec {
+    match stream_type {
+        STREAM_TYPE_H264 => VideoCodec::H264,
+        STREAM_TYPE_HEVC => VideoCodec::HEVC,
+        STREAM_TYPE_MPEG2 => VideoCodec::Mpeg2,
+        _ => VideoCodec::Unknown,
     }
 }
 
@@ -231,6 +309,34 @@ fn parse_pmt(data: &[u8], elementary_pid: &mut u32, stream_type: &mut u8) -> boo
     false
 }
 
+// ─── Aspect Ratio Idc (H.264 Table E-1) ────────────────────────────────────
+
+/// H.264 aspect_ratio_idc → (sar_num, sar_den) when the SPS carries an extended
+/// sample aspect ratio. Only E-1 (SAR) entries map here; the 0..16 range in the
+/// spec includes pixel-aspect entries, which byte-parity with the C engine
+/// resolves via the same VUI fields.
+fn sar_from_aspect_ratio_idc(idc: u32) -> (u16, u16) {
+    match idc {
+        1 => (1, 1),
+        2 => (12, 11),
+        3 => (10, 11),
+        4 => (16, 11),
+        5 => (40, 33),
+        6 => (24, 11),
+        7 => (20, 11),
+        8 => (32, 11),
+        9 => (80, 33),
+        10 => (18, 11),
+        11 => (15, 11),
+        12 => (64, 33),
+        13 => (160, 99),
+        14 => (4, 3),
+        15 => (3, 2),
+        16 => (2, 1),
+        _ => (1, 1),
+    }
+}
+
 // ─── H.264 SPS Parser ──────────────────────────────────────────────────────
 
 fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
@@ -248,10 +354,11 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
 
     let profile_idc = br.read_bits(8);
     br.read_bits(8); // constraint + reserved
-    br.read_bits(8); // level_idc
+    let level_idc = br.read_bits(8);
     br.read_ue(); // seq_parameter_set_id
 
     let mut chroma_format_idc = 1u32;
+    let mut bit_depth = 8u32;
     let high_profile = matches!(
         profile_idc,
         100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
@@ -261,7 +368,7 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
         if chroma_format_idc == 3 {
             br.read_bits(1);
         }
-        br.read_ue(); // bit_depth_luma_minus8
+        bit_depth = 8 + br.read_ue(); // bit_depth_luma_minus8
         br.read_ue(); // bit_depth_chroma_minus8
         br.read_bits(1); // qpprime_y_zero_transform_bypass_flag
         let scaling_present = br.read_bits(1);
@@ -326,16 +433,21 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
     let height =
         height.saturating_sub((crop_top + crop_bottom) * (2 - frame_mbs_only_flag) * sub_h);
 
-    // VUI — framerate
+    // VUI — framerate + sample aspect ratio
     let (mut fps_num, mut fps_den) = (0u32, 1u32);
+    let (mut sar_num, mut sar_den) = (1u16, 1u16);
     if br.read_bits(1) != 0 {
         // aspect_ratio
         let ar_present = br.read_bits(1);
         if ar_present != 0 {
             let ar_idc = br.read_bits(8);
             if ar_idc == 255 {
-                br.read_bits(16);
-                br.read_bits(16);
+                sar_num = br.read_bits(16) as u16;
+                sar_den = br.read_bits(16) as u16;
+            } else {
+                let (n, d) = sar_from_aspect_ratio_idc(ar_idc);
+                sar_num = n;
+                sar_den = d;
             }
         }
         // overscan
@@ -375,6 +487,12 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
         fps_den,
         interlaced,
         codec: VideoCodec::H264,
+        profile_idc: profile_idc as u8,
+        level_idc: level_idc as u8,
+        chroma_format_idc: chroma_format_idc as u8,
+        bit_depth: bit_depth as u8,
+        sar_num,
+        sar_den,
     })
 }
 
@@ -421,6 +539,14 @@ fn parse_mpeg2_sequence(data: &[u8]) -> Option<VideoInfo> {
         fps_den,
         interlaced,
         codec: VideoCodec::Mpeg2,
+        // MPEG-2 sequence header carries no profile/level/chroma/SAR idc; C resets
+        // sar to 1:1 and leaves the codec-detail fields empty.
+        profile_idc: 0,
+        level_idc: 0,
+        chroma_format_idc: 1,
+        bit_depth: 8,
+        sar_num: 1,
+        sar_den: 1,
     })
 }
 
@@ -446,17 +572,17 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
     let max_sub_layers = br.read_bits(3);
     br.read_bits(1); // sps_temporal_id_nesting_flag
 
-    // profile_tier_level (bulk skip)
+    // profile_tier_level
     br.read_bits(2); // general_profile_space
     br.read_bits(1); // general_tier_flag
-    br.read_bits(5); // general_profile_idc
+    let general_profile_idc = br.read_bits(5);
     for _ in 0..32 {
         br.read_bits(1);
     }
     br.read_bits(1); // general_progressive_source_flag
     br.read_bits(1); // general_interlaced_source_flag
     br.read_bits(3); // non_packed + frame_only
-    br.read_bits(8); // general_level_idc
+    let general_level_idc = br.read_bits(8);
     let mut sub_layer_profile_present = 0u32;
     let mut sub_layer_level_present = 0u32;
     for _ in 0..max_sub_layers {
@@ -489,7 +615,32 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
 
     let pic_width = br.read_ue();
     let pic_height = br.read_ue();
-    br.read_bits(1); // conformance_window_flag
+    let conformance_window = br.read_bits(1);
+
+    // Conformance window crop (sub_width/sub_height per chroma_format_idc).
+    // The C engine (lite 1540-1552) applies this crop; it must be consumed here
+    // so the bit depths that follow are read from the correct offset.
+    let (mut width, mut height) = (pic_width, pic_height);
+    if conformance_window != 0 {
+        let left = br.read_ue();
+        let right = br.read_ue();
+        let top = br.read_ue();
+        let bottom = br.read_ue();
+        let (sub_w, sub_h) = match chroma_format_idc {
+            1 => (2u32, 2u32),
+            2 => (2, 1),
+            _ => (1, 1),
+        };
+        let crop_w = (left + right) * sub_w;
+        let crop_h = (top + bottom) * sub_h;
+        if crop_w < width && crop_h < height {
+            width -= crop_w;
+            height -= crop_h;
+        }
+    }
+
+    let bit_depth = br.read_ue() + 8; // bit_depth_luma_minus8
+    br.read_ue(); // bit_depth_chroma_minus8
 
     // VUI — framerate
     let (mut fps_num, mut fps_den) = (0u32, 1u32);
@@ -512,12 +663,19 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
     }
 
     Some(VideoInfo {
-        width: pic_width,
-        height: pic_height,
+        width,
+        height,
         fps_num,
         fps_den,
         interlaced: false,
         codec: VideoCodec::HEVC,
+        profile_idc: general_profile_idc as u8,
+        level_idc: general_level_idc as u8,
+        chroma_format_idc: chroma_format_idc as u8,
+        bit_depth: bit_depth as u8,
+        // C resets HEVC SAR to 1:1 (lite 1553).
+        sar_num: 1,
+        sar_den: 1,
     })
 }
 

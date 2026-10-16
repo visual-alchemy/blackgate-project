@@ -66,14 +66,23 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
                 .map_err(|e| format!("Failed to create input-selector: {}", e))?;
             let secondary = make_source(&sec.source, "secondary_source", has_sdi, &ctx)?;
 
-            // C: sync-mode=1 (GstInputSelectorSyncMode "clock"), cache-buffers, drop-backwards
-            selector.set_property_from_str("sync-mode", "clock");
+            // sync-mode=active-segment (0). The C oracle carries stale sync-mode=1
+            // ("clock"), which blocks the primary pad waiting on an idle secondary and
+            // stalls the srtsrc listener into SRT socket overflow + connection drop.
+            // Blackgate-lite fixed this (8cca10e); match lite, not the oracle.
+            // GstInputSelectorSyncMode: 0=active-segment, 1=clock (gst-inspect-1.0).
+            selector.set_property_from_str("sync-mode", "active-segment");
             selector.set_property("cache-buffers", true);
             selector.set_property("drop-backwards", true);
 
             pipeline
                 .add_many([&source, &secondary, &selector, &tee])
                 .map_err(|e| format!("dual add: {}", e))?;
+
+            // C lite 2055-2068: persist the logical selection across restarts by
+            // selecting sink_1 when Elixir reports active_source="secondary".
+            // Runtime-only — the element is still PLAYING from construction.
+            let start_on_secondary = config.active_source.as_deref() == Some("secondary");
 
             let primary_pad = selector
                 .request_pad_simple("sink_%u")
@@ -100,10 +109,17 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
             gst::Element::link(&selector, &tee)
                 .map_err(|_| "DUAL-INGEST: failed to link input-selector → tee".to_string())?;
 
-            if let Some(active) = selector.static_pad("sink_0") {
+            if let Some(active) = selector.static_pad(if start_on_secondary {
+                "sink_1"
+            } else {
+                "sink_0"
+            }) {
                 selector.set_property("active-pad", &active);
             }
 
+            if start_on_secondary {
+                println!("DUAL-INGEST: starting on secondary (persisted active_source)");
+            }
             println!("DUAL-INGEST Pipeline: primary+secondary → input-selector → tee");
             (Some(selector), Some(secondary))
         }
@@ -162,9 +178,13 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
         None
     };
 
-    // C: auto_join=false → hold secondary at NULL (primary still plays)
+    // C lite join_secondary/leave_secondary use locked-state, not set_state:
+    // gst_element_set_locked_state + sync_state_with_parent so the source joins
+    // the pipeline's state machine atomically. Plain set_state(NULL) also strips
+    // the lock, so join-secondary could never restore the source — live bug.
     if let Some(sec) = &secondary {
         if !config.auto_join {
+            sec.set_locked_state(true);
             let _ = sec.set_state(gst::State::Null);
             println!("DUAL-INGEST: secondary held at NULL (auto_join=false)");
         }

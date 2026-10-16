@@ -1,0 +1,13 @@
+FROM blackgate:builder
+
+# Runtime plugins the builder stage lacks (dev headers only there).
+# Mirrors the runner EXCEPT nothing here is needed for production.
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-vaapi \
+    libsrt1.5-gnutls \
+    libcjson1 \
+    && rm -rf /var/lib/apt/lists/*
