@@ -59,3 +59,6 @@ docs/superpowers/skills/
 
 # === Editor backups ===
 *.bak
+
+# === Local dev helpers (machine-specific, never commit) ===
+/scripts/sudoers.d/
