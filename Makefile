@@ -135,8 +135,24 @@ start:
 .PHONY: stop
 stop:
 	@echo "Stopping Blackgate..."
-	RELEASE_COOKIE=blackgate_production_cookie \
+	@RELEASE_COOKIE=blackgate_production_cookie \
 	_build/prod/rel/blackgate/bin/blackgate stop || true
+	@# A node started from a release directory that was later rebuilt (`make build`
+	@# wipes _build/prod/rel/blackgate) can no longer be reached by
+	@# `bin/blackgate stop` — its pid file went with the directory — and keeps the
+	@# old engine binary loaded, so a "restart" silently kept running stale code.
+	@# Kill any surviving release node by pid; `pgrep -x` cannot match this shell.
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		left=0; \
+		for p in $$(pgrep -x beam.smp 2>/dev/null); do \
+			if tr '\0' ' ' < /proc/$$p/cmdline 2>/dev/null | grep -q 'rel/blackgate'; then \
+				left=1; kill $$p 2>/dev/null || true; \
+			fi; \
+		done; \
+		[ $$left -eq 0 ] && break; \
+		sleep 1; \
+	done
+	@echo "Blackgate stopped."
 
 .PHONY: restart
 restart: stop
