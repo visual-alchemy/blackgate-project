@@ -244,6 +244,24 @@ defmodule Blackgate.UnixSockHandlerTest do
     UnixSockHandler.stats_to_metrics(stats, data)
   end
 
+  test "stats_to_metrics with a list of scalars (audio-pids)" do
+    # audio-pids is a list of integers; walking it as if it held maps raised
+    # BadMapError on every stats report.
+    stats = %{
+      "audio-pids" => [66],
+      "video-pid" => 65,
+      "callers" => [%{"rtt-ms" => 0.5}]
+    }
+
+    data = %{
+      route_id: "test_route",
+      route_record: %{"name" => "test"},
+      source_stream_id: "test_stream"
+    }
+
+    UnixSockHandler.stats_to_metrics(stats, data)
+  end
+
   test "norm_names normalizes metric names" do
     assert "test_metric" = UnixSockHandler.norm_names("test-metric")
     assert "test_metric" = UnixSockHandler.norm_names("TEST_METRIC")

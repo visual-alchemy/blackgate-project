@@ -228,26 +228,39 @@ defmodule Blackgate.UnixSockHandler do
     stats
     |> Map.keys()
     |> Enum.map(fn key ->
+      value = stats[key]
+
       cond do
-        is_list(stats[key]) ->
-          Enum.each(stats[key], fn item ->
-            stats_to_metrics(item, data)
+        is_list(value) ->
+          # Lists hold nested stats maps (callers, sink_stats, sdi_video_stats) but
+          # also plain values such as audio-pids (a list of PIDs), so only recurse
+          # into maps — recursing into an integer raised BadMapError once per report.
+          Enum.each(value, fn item ->
+            if is_map(item) do
+              stats_to_metrics(item, data)
+            else
+              emit_metric(key, item, data)
+            end
           end)
 
-        is_map(stats[key]) ->
-          stats_to_metrics(stats[key], data)
+        is_map(value) ->
+          stats_to_metrics(value, data)
 
         true ->
-          tags = %{
-            type: "source",
-            route_id: data.route_id,
-            route_name: data.route_record["name"],
-            source_stream_id: data.source_stream_id
-          }
-
-          Metrics.event(norm_names(key), stats[key], tags)
+          emit_metric(key, value, data)
       end
     end)
+  end
+
+  defp emit_metric(key, value, data) do
+    tags = %{
+      type: "source",
+      route_id: data.route_id,
+      route_name: data.route_record["name"],
+      source_stream_id: data.source_stream_id
+    }
+
+    Metrics.event(norm_names(key), value, tags)
   end
 
   def norm_names(name) do
