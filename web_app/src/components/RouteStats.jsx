@@ -107,9 +107,20 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
         ? stats['bandwidth-mbps']
         : (caller['bandwidth-mbps'] || 0);
 
-    const packetsReceived = stats?.['packets-received'] ?? caller['packets-received'] ?? 0;
-    const packetsLost = stats?.['packets-received-lost'] ?? caller['packets-received-lost'] ?? 0;
-    const packetsDropped = stats?.['packets-received-dropped'] ?? caller['packets-received-dropped'] ?? 0;
+    // Aggregate fields read 0 in caller mode, where SRT reports per-caller
+    // values instead; fall back to the caller entry (duo2 parity). Without this
+    // a caller-mode route showed all-zero packet counters.
+    const sourceMetric = (key) => {
+        const aggregate = stats?.[key];
+        const callerValue = caller?.[key];
+        return aggregate > 0 ? aggregate : (callerValue ?? aggregate ?? 0);
+    };
+
+    const packetsReceived = sourceMetric('packets-received');
+    const packetsRetransmitted = sourceMetric('packets-received-retransmitted');
+    const packetsLost = sourceMetric('packets-received-lost');
+    const packetsDropped = sourceMetric('packets-received-dropped');
+    const receiveLatency = sourceMetric('negotiated-latency-ms');
 
     const packetLoss = calculatePacketLoss(packetsReceived, packetsLost);
 
@@ -186,6 +197,20 @@ const SingleSourceMetrics = ({ sourceTitle, stats, tagColor = 'blue', isActive =
                         title="Dropped"
                         value={packetsDropped}
                         valueStyle={{ color: packetsDropped > 0 ? '#ff4d4f' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Retransmitted"
+                        value={packetsRetransmitted}
+                        valueStyle={{ color: packetsRetransmitted > 0 ? '#faad14' : '#52c41a', ...statisticStyle }}
+                    />
+                </Col>
+                <Col xs={12} sm={8} md={6} lg={4}>
+                    <Statistic
+                        title="Receive Latency"
+                        value={`${receiveLatency} ms`}
+                        valueStyle={{ color: '#1890ff', ...statisticStyle }}
                     />
                 </Col>
                 <Col xs={12} sm={8} md={6} lg={4}>
