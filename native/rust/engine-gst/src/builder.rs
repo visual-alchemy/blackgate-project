@@ -163,7 +163,12 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
         }
     }
 
-    let thumbnail = if !config.route_id.is_empty() {
+    // BLACKGATE_NO_THUMBNAIL=1 skips the preview branch entirely. Kept as a
+    // diagnostic switch (and for hosts that do not need previews): A/B runs with
+    // and without the branch show the same SRT receive loss, so the preview is
+    // not what stalls the source — do not "fix" receive loss by removing it.
+    let thumbnails_enabled = std::env::var("BLACKGATE_NO_THUMBNAIL").is_err();
+    let thumbnail = if !config.route_id.is_empty() && thumbnails_enabled {
         match ThumbnailBranch::new(&pipeline, &tee, &config.route_id) {
             Ok(t) => {
                 println!("Thumbnail: Branch ready for route {}", config.route_id);
