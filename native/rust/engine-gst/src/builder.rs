@@ -293,7 +293,7 @@ pub fn apply_extra_props(el: &gst::Element, props: &std::collections::BTreeMap<S
         };
         let ok = match value {
             PropValue::Bool(b) => {
-                if pspec.type_() == bool::static_type() {
+                if pspec.value_type() == bool::static_type() {
                     el.set_property(name, *b);
                     true
                 } else {
@@ -321,7 +321,7 @@ pub fn apply_extra_props(el: &gst::Element, props: &std::collections::BTreeMap<S
 }
 
 fn set_numeric_property(el: &gst::Element, name: &str, v: i64, pspec: &glib::ParamSpec) {
-    let t = pspec.type_();
+    let t = pspec.value_type();
     if t == i32::static_type() || t.is_a(glib::Type::ENUM) {
         el.set_property(name, v as i32);
     } else if t == u32::static_type() {
@@ -1139,4 +1139,28 @@ fn now_monotonic_us() -> i64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let start = START.get_or_init(Instant::now);
     start.elapsed().as_micros() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: pspec.type_() is the param-spec CLASS type (e.g. GParamBoolean),
+    // not the property value type. Dispatching on it made every bool prop fall
+    // through to an i32 set and panic ("expected gboolean, got gint"), which
+    // crash-looped real SRT routes carrying auto-reconnect/keep-listening.
+    #[test]
+    fn extra_props_dispatch_on_value_type() {
+        gst::init().unwrap();
+        let el = gst::ElementFactory::make("fakesink").build().unwrap();
+
+        let mut props = std::collections::BTreeMap::new();
+        props.insert("sync".to_string(), PropValue::Bool(false));
+        props.insert("num-buffers".to_string(), PropValue::Int(3));
+
+        apply_extra_props(&el, &props);
+
+        assert!(!el.property::<bool>("sync"));
+        assert_eq!(el.property::<i32>("num-buffers"), 3);
+    }
 }

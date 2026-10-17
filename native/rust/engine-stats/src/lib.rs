@@ -255,7 +255,18 @@ fn extract_callers(
 
 /// C build_source_stats_json: fixed keys in fixed order + caller fallbacks.
 pub fn build_source_stats(element: &gst::Element, tag: &str) -> SourceStats {
-    let mut stats = SourceStats {
+    let mut stats = empty_source_stats(tag);
+
+    let Some(s) = stats_structure(element) else {
+        return stats;
+    };
+
+    apply_source_stats_structure(&s, tag, &mut stats);
+    stats
+}
+
+fn empty_source_stats(tag: &str) -> SourceStats {
+    SourceStats {
         source: tag.to_string(),
         total_bytes_received: 0,
         bytes_received: 0,
@@ -269,27 +280,34 @@ pub fn build_source_stats(element: &gst::Element, tag: &str) -> SourceStats {
         negotiated_latency_ms: 0,
         connected_callers: 0,
         callers: Vec::new(),
-    };
+    }
+}
 
-    let Some(s) = stats_structure(element) else {
-        return stats;
-    };
-
-    stats.total_bytes_received = struct_get_u64(&s, "total-bytes-received");
+/// Map an srtsrc `stats` GstStructure onto `stats`. This is the step that looks
+/// up GstStructure FIELD names — which are not the JSON wire keys.
+fn apply_source_stats_structure(s: &gst::Structure, tag: &str, stats: &mut SourceStats) {
+    // GstStructure field on srtsrc is `bytes-received-total` (libgstsrt.so);
+    // `total-bytes-received` is only the JSON wire key — lite reads the struct
+    // and renames on emit. Reading the wire name here silently yielded 0.
+    stats.total_bytes_received = struct_get_u64(s, "bytes-received-total");
     // C lite 217-239: bytes since the previous 1s report for this source slot.
     let slot = source_slot(tag);
     let prev = LAST_SOURCE_BYTES[slot].swap(stats.total_bytes_received, Ordering::Relaxed);
-    stats.bytes_received = stats.total_bytes_received.saturating_sub(prev) as i64;
-    stats.packets_received = struct_get_i64(&s, "packets-received");
-    stats.packets_received_lost = struct_get_i64(&s, "packets-received-lost");
-    stats.packets_received_dropped = struct_get_i64(&s, "packets-received-dropped");
-    stats.packets_received_retransmitted = struct_get_i64(&s, "packets-received-retransmitted");
-    stats.rtt_ms = struct_get_f64(&s, "rtt-ms");
-    stats.receive_rate_mbps = struct_get_f64(&s, "receive-rate-mbps");
-    stats.bandwidth_mbps = struct_get_f64(&s, "bandwidth-mbps");
-    stats.negotiated_latency_ms = struct_get_i64(&s, "negotiated-latency-ms") as i32;
+    let delta = stats.total_bytes_received.saturating_sub(prev) as i64;
+    // lite build_source_stats_json emits the element's own per-report counter;
+    // fall back to the total delta when the element does not expose it.
+    let per_report = struct_get_i64(s, "bytes-received");
+    stats.bytes_received = if per_report != 0 { per_report } else { delta };
+    stats.packets_received = struct_get_i64(s, "packets-received");
+    stats.packets_received_lost = struct_get_i64(s, "packets-received-lost");
+    stats.packets_received_dropped = struct_get_i64(s, "packets-received-dropped");
+    stats.packets_received_retransmitted = struct_get_i64(s, "packets-received-retransmitted");
+    stats.rtt_ms = struct_get_f64(s, "rtt-ms");
+    stats.receive_rate_mbps = struct_get_f64(s, "receive-rate-mbps");
+    stats.bandwidth_mbps = struct_get_f64(s, "bandwidth-mbps");
+    stats.negotiated_latency_ms = struct_get_i64(s, "negotiated-latency-ms") as i32;
 
-    let (n, callers) = extract_callers(&s);
+    let (n, callers) = extract_callers(s);
     stats.connected_callers = n;
     stats.callers = callers;
 
@@ -324,8 +342,6 @@ pub fn build_source_stats(element: &gst::Element, tag: &str) -> SourceStats {
             stats.bandwidth_mbps = total;
         }
     }
-
-    stats
 }
 
 /// C collect_sink_stats: fixed keys in fixed order.
@@ -501,12 +517,14 @@ pub fn check_sdi_audio_silence(sdi: &SdiState, now_us: i64) -> Vec<(i32, f64, i6
 pub type SharedSocket = Arc<Mutex<UnixStream>>;
 
 /// Send a JSON line over the socket (C send_json_to_socket: json + "\n").
+/// Written in a single call so a socket chunk boundary can never split the
+/// record: the reader is prefix-delimited, and an orphaned payload would be
+/// parsed as the wrong message type.
 pub fn send_json_line(socket: &SharedSocket, json: &str) {
-    if let Ok(mut s) = socket.lock() {
-        let _ = s.write_all(json.as_bytes());
-        let _ = s.write_all(b"\n");
-        let _ = s.flush();
-    }
+    let mut record = Vec::with_capacity(json.len() + 1);
+    record.extend_from_slice(json.as_bytes());
+    record.push(b'\n');
+    send_raw(socket, &record);
 }
 
 /// Send raw bytes over the socket (C send_message_to_unix_socket).
@@ -576,9 +594,16 @@ pub fn start_stats_thread(
             for (i, sink) in sinks.iter().enumerate() {
                 let s = build_sink_stats(sink, i as i32);
                 if let Ok(json) = serde_json::to_string(&s) {
-                    send_raw(&socket, b"stats_sink:");
-                    send_raw(&socket, json.as_bytes());
-                    send_raw(&socket, b"\n");
+                    // Single write per record (same bytes as the C engine's
+                    // prefix/payload/newline sends). Separate writes let a chunk
+                    // boundary land between "stats_sink:" and its JSON, and the
+                    // orphaned JSON was then parsed as source stats by the
+                    // control plane, corrupting the source telemetry slot.
+                    let mut record = Vec::with_capacity(11 + json.len() + 1);
+                    record.extend_from_slice(b"stats_sink:");
+                    record.extend_from_slice(json.as_bytes());
+                    record.push(b'\n');
+                    send_raw(&socket, &record);
                 }
             }
         }
@@ -606,6 +631,35 @@ mod tests {
         assert_eq!(stats.source, "primary");
         assert_eq!(stats.receive_rate_mbps, 0.0);
         assert_eq!(stats.packets_received, 0);
+    }
+
+    /// GstStructure FIELD names are not the JSON wire keys: the srtsrc struct
+    /// exposes `bytes-received-total` / `bytes-received`, while the wire carries
+    /// `total-bytes-received` / `bytes-received`. Reading the wire name out of
+    /// the struct returned 0 forever, which stalled the control plane's
+    /// "is data flowing?" fallback and its stall watchdog.
+    #[test]
+    fn source_stats_read_srt_struct_field_names() {
+        gst::init().unwrap();
+        let s = gst::Structure::builder("application/x-srt-statistics")
+            .field("bytes-received-total", 4096u64)
+            .field("bytes-received", 512i64)
+            .field("packets-received", 10i64)
+            .field("receive-rate-mbps", 8.0f64)
+            .build();
+
+        let mut stats = empty_source_stats("primary");
+        apply_source_stats_structure(&s, "primary", &mut stats);
+
+        assert_eq!(stats.total_bytes_received, 4096);
+        assert_eq!(stats.bytes_received, 512);
+        assert_eq!(stats.packets_received, 10);
+        assert_eq!(stats.receive_rate_mbps, 8.0);
+
+        // ...and the wire keeps the C key names.
+        let v = serde_json::to_value(&stats).unwrap();
+        assert_eq!(v["total-bytes-received"], 4096);
+        assert_eq!(v["bytes-received"], 512);
     }
 
     fn source_stats_fixture() -> SourceStats {
