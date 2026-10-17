@@ -37,7 +37,11 @@ defmodule Blackgate.RouteHealth do
     if not has_signal do
       "disconnected"
     else
-      loss = packet_loss_pct(stats, caller)
+      # Prefer the loss over the last report window: the cumulative counters keep
+      # the connection-startup burst in the ratio for the whole life of the
+      # connection, which reported "warning" on a route whose steady-state loss is
+      # well under the threshold.
+      loss = stats["loss-window-pct"] || packet_loss_pct(stats, caller)
       rtt = stats["rtt-ms"] || caller["rtt-ms"] || 0.0
 
       # `drops_per_sec` in `sdi_video_stats` is deliberately excluded here:

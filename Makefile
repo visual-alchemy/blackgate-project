@@ -116,6 +116,12 @@ build:
 
 .PHONY: start
 start:
+	@if RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate pid > /dev/null 2>&1; then \
+		echo "Blackgate is already running — run 'make stop' first."; \
+		echo "(two nodes at once leave a stale /tmp/hydra_unix_sock behind; every engine then fails to connect with ECONNREFUSED and the routes crash-loop)"; \
+		exit 1; \
+	fi
+	@rm -f /tmp/hydra_unix_sock
 	@echo "Starting Blackgate in Production Mode..."
 	PHX_SERVER=true \
 	PORT=4000 \
@@ -133,7 +139,15 @@ stop:
 	_build/prod/rel/blackgate/bin/blackgate stop || true
 
 .PHONY: restart
-restart: stop start
+restart: stop
+	@# Wait for the node to actually release its name and stats socket: starting the
+	@# new node while the old one is still shutting down fails with
+	@# "name blackgate@dvls seems to be in use by another Erlang node".
+	@for i in $$(seq 1 30); do \
+		RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate pid > /dev/null 2>&1 || break; \
+		sleep 1; \
+	done
+	@$(MAKE) start
 
 .PHONY: status
 status:

@@ -60,12 +60,32 @@ defmodule Blackgate.RouteStatsRegistry do
               end
             end)
 
+          # Source loss over this report window. The cumulative counters keep the
+          # connection-startup burst in the ratio for the whole life of the
+          # connection, so a route with ~0.5% steady-state loss kept reporting
+          # "warning" long after it had settled; the health check uses this window.
+          loss_window_pct =
+            if prev_updated_at < updated_at do
+              d_rx =
+                max(0, (stats["packets-received"] || 0) - (prev_stats["packets-received"] || 0))
+
+              d_lost =
+                max(
+                  0,
+                  (stats["packets-received-lost"] || 0) -
+                    (prev_stats["packets-received-lost"] || 0)
+                )
+
+              if d_rx + d_lost > 0, do: Float.round(d_lost / (d_rx + d_lost) * 100, 3)
+            end
+
           warning_count = prev_stats["warning_count"] || 0
           prev_health = prev_stats["health"] || "disconnected"
 
           stats =
             stats
             |> Map.put("sdi_video_stats", updated_sdi_stats)
+            |> Map.put("loss-window-pct", loss_window_pct)
             # Reset to 0 for next window
             |> Map.put("warning_count", 0)
             |> Map.put("last_warning_element", prev_stats["last_warning_element"])
