@@ -27,6 +27,11 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Stats socket the Rust engines dial (see Blackgate.stats_socket_path/0). Overridable
+# per environment so a dev/test node cannot unbind a running release's socket.
+config :blackgate,
+  stats_socket_path: System.get_env("BLACKGATE_STATS_SOCKET") || "/tmp/hydra_unix_sock"
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

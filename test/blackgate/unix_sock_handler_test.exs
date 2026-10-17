@@ -268,6 +268,14 @@ defmodule Blackgate.UnixSockHandlerTest do
     assert "test_metric" = UnixSockHandler.norm_names("Test-Metric")
   end
 
+  test "test runs never bind the production stats socket" do
+    # Binding /tmp/hydra_unix_sock from a test run unlinked the live listener's
+    # socket and left a dead file behind, so every new engine failed to connect
+    # and its route crash-looped while already-connected routes kept running.
+    refute Blackgate.stats_socket_path() == "/tmp/hydra_unix_sock"
+    assert String.ends_with?(Blackgate.stats_socket_path(), ".sock")
+  end
+
   test "norm_names with various special characters" do
     assert "test_metric_name" = UnixSockHandler.norm_names("test-metric-name")
     assert "test_metric_name" = UnixSockHandler.norm_names("test.metric.name")

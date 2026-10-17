@@ -92,4 +92,18 @@ defmodule Blackgate do
       {:ok, route}
     end
   end
+
+  @doc """
+  Path of the stats socket the Rust engines dial.
+
+  Configurable so a development or test node can never bind the same path as a
+  running release. A `mix test` run used to bind `/tmp/hydra_unix_sock`, which
+  unlinked the live listener's socket and left a dead file behind: every new
+  engine then exited with `connect: Connection refused (os error 111)` and its
+  route crash-looped while already-connected routes kept running.
+  """
+  @spec stats_socket_path() :: String.t()
+  def stats_socket_path do
+    Application.get_env(:blackgate, :stats_socket_path, "/tmp/hydra_unix_sock")
+  end
 end

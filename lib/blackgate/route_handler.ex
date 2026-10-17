@@ -1217,12 +1217,20 @@ defmodule Blackgate.RouteHandler do
       :stream
     ]
 
-    opts =
+    # The engine must dial the socket this node listens on (see
+    # Blackgate.stats_socket_path/0) — a test run binds its own path.
+    engine_env = [
+      {~c"BLACKGATE_STATS_SOCKET", String.to_charlist(Blackgate.stats_socket_path())}
+    ]
+
+    engine_env =
       if is_binary(route["gstDebug"]) do
-        opts ++ [env: [{~c"GST_DEBUG", ~c"#{route["gstDebug"]}"}]]
+        engine_env ++ [{~c"GST_DEBUG", ~c"#{route["gstDebug"]}"}]
       else
-        opts
+        engine_env
       end
+
+    opts = opts ++ [env: engine_env]
 
     Logger.info("RouteHandler: start_native_pipeline: #{cmd}: #{inspect(route["gstDebug"])}")
 

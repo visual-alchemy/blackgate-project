@@ -28,7 +28,7 @@ defmodule Blackgate.Application do
           max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS") || "75000"),
           num_acceptors: String.to_integer(System.get_env("NUM_ACCEPTORS") || "100"),
           socket_opts: [
-            ip: {:local, "/tmp/hydra_unix_sock"},
+            ip: {:local, Blackgate.stats_socket_path()},
             port: 0,
             keepalive: true
           ]

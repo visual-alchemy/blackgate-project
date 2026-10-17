@@ -18,13 +18,25 @@ use engine_config::RouteConfig;
 use engine_failover::{SelectorState, SourceTarget};
 use engine_stats::SharedSocket;
 
-fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
-    let socket_path = if shadow {
-        "/tmp/hydra_unix_sock_rust"
+/// Stats socket the engine dials.
+///
+/// The release passes BLACKGATE_STATS_SOCKET so a development or test node can
+/// never bind the same path as a running appliance: a `mix test` run used to
+/// unlink the live listener's socket and leave a dead file behind, after which
+/// every new engine exited with `connect: Connection refused (os error 111)`.
+fn stats_socket_path(shadow: bool) -> String {
+    let base = std::env::var("BLACKGATE_STATS_SOCKET")
+        .unwrap_or_else(|_| "/tmp/hydra_unix_sock".to_string());
+    if shadow {
+        format!("{}_rust", base)
     } else {
-        "/tmp/hydra_unix_sock"
-    };
-    match UnixStream::connect(socket_path) {
+        base
+    }
+}
+
+fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
+    let socket_path = stats_socket_path(shadow);
+    match UnixStream::connect(&socket_path) {
         Ok(mut stream) => {
             println!("Connected to the socket.");
             // C: two raw sends — "route_id:" + argv[1], no newline
@@ -34,7 +46,7 @@ fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
             Arc::new(Mutex::new(stream))
         }
         Err(e) => {
-            eprintln!("connect: {}", e);
+            eprintln!("connect: {} ({})", e, socket_path);
             process::exit(1);
         }
     }
