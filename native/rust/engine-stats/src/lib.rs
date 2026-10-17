@@ -389,7 +389,14 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
     out.packets_sent = struct_get_i64(&s, "packets-sent");
     out.packets_sent_lost = struct_get_i64(&s, "packets-sent-lost");
     out.packets_sent_dropped = struct_get_i64(&s, "packets-sent-dropped");
-    out.packets_sent_retransmitted = struct_get_i64(&s, "packets-sent-retransmitted");
+    // GStreamer names this field `packets-retransmitted` (no `sent`); reading
+    // `packets-sent-retransmitted` silently yielded 0 for every sink.
+    let retransmitted = struct_get_i64(&s, "packets-retransmitted");
+    out.packets_sent_retransmitted = if retransmitted != 0 {
+        retransmitted
+    } else {
+        struct_get_i64(&s, "packets-sent-retransmitted")
+    };
     out.bytes_received = struct_get_i64(&s, "bytes-received");
     out.rtt_ms = struct_get_f64(&s, "rtt-ms");
     out.send_rate_mbps = struct_get_f64(&s, "send-rate-mbps");
