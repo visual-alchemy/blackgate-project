@@ -55,3 +55,25 @@ Distinguish the two remaining "route looks broken" cases:
 - Source silent or a wrong URI/passphrase → route stays `reconnecting` while the
   engine itself is healthy; check with `ffprobe`/`ffmpeg` against the source URI
   first.
+
+## Diagnostic switches in the Rust engine
+
+Both are env vars on the engine process, so they work standalone (`printf '%s\n' "$CONFIG_JSON" | BLACKGATE_X=1 ./native/build/blackgate-engine <route-id>`) and are the
+cheap way to A/B a suspect without touching code:
+
+- `BLACKGATE_NO_THUMBNAIL=1` — skips the preview branch. A/B proved it does not affect
+  SRT receive loss, so do not "fix" loss by removing the preview.
+- `BLACKGATE_DUMP_PROPS=1` — prints `PROP name=value` for every readable property of the
+  source element, so the Rust engine's element setup can be diffed against the C
+  engine's (blackgate-lite prints the same format from `set_element_properties`; add
+  that block in a throwaway `git worktree` of the C branch, never in the branch).
+  Diffing them showed the `srtsrc` elements are configured identically — read the
+  properties through the param spec's READABLE flag, or write-only ones like
+  `passphrase` panic.
+
+To compare engines on one host: build the C engine from a worktree of the blackgate-lite
+branch (`make -C native CFLAGS="-Wall -Wextra -g $(pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0)" LDFLAGS="$(pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 gio-2.0) -lsrt-gnutls"`),
+drop cJSON.c/cJSON.h into `src/`+`include/` (the system dev headers are absent), run both
+standalone against the same source and compare the SRT counters. Both engines talk to
+the live stats socket, so give them probe route ids — the release stores their stats and
+you read them back with `Blackgate.RouteStatsRegistry.get_stats/1`.
