@@ -108,6 +108,12 @@ build:
 	MIX_ENV=prod mix phx.digest
 	rm -rf _build/prod/rel/blackgate
 	MIX_ENV=prod mix release --overwrite
+	@test -d _build/prod/rel/blackgate/lib && ls _build/prod/rel/blackgate/lib | grep -q '^blackgate-' || { \
+		echo "ERROR: release is incomplete — no blackgate app under _build/prod/rel/blackgate/lib."; \
+		echo "       Booting it fails with load_failed for core modules. Recover with:"; \
+		echo "       MIX_ENV=prod mix compile && MIX_ENV=prod mix release --overwrite"; \
+		exit 1; }
+	@echo "Release verified: blackgate app present, $$(ls _build/prod/rel/blackgate/lib | wc -l) applications"
 	@echo ""
 	@echo "=============================================="
 	@echo "Build Complete!"
@@ -131,6 +137,20 @@ start:
 	LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app \
 	RELEASE_COOKIE=blackgate_production_cookie \
 	_build/prod/rel/blackgate/bin/blackgate daemon
+	@echo "Waiting for Blackgate to become ready..."
+	@for i in $$(seq 1 60); do \
+		if RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate rpc \
+			'IO.puts(inspect(Process.whereis(Blackgate.DynamicSupervisor) != nil and Process.whereis(Blackgate.RouteStatsRegistry) != nil))' \
+			2>/dev/null | grep -q true; then \
+			echo "Blackgate is ready (supervision tree up)."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "ERROR: Blackgate did not report ready within 60s — the node answers RPC before its"; \
+	echo "       supervision tree is up, so starting routes now fails with PartitionSupervisor"; \
+	echo "       exits. Check the logs, then start routes once 'make start' reports ready."; \
+	exit 1
 
 .PHONY: stop
 stop:

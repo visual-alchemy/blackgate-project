@@ -4,6 +4,10 @@
 //   Non-failover: {"route_id":.., "source":{...}, "sinks":[...]}
 //   Failover:     {"type":"init", "route_id":.., "primary_source":{...},
 //                  "secondary_source":{...}, "auto_join":bool, "sinks":[...]}
+//   Either shape may carry "preview":bool. The preview/thumbnail branch is built only
+//   when it is true: the C engine likewise builds its thumbnail chain only on request,
+//   and a benchmark or headless route that never asked must not pay ~33 MB of decoder
+//   frame pool. route_handler sends "preview": true for every real route.
 //
 // Element objects: {"type":"srtsrc","uri":"srt://...?mode=..&latency=..", ...extra numeric props}
 //                  {"type":"udpsink","host":"..","port":..}
