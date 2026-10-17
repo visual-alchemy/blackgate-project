@@ -409,7 +409,7 @@ pub fn attach_video_info(value: &mut serde_json::Value, info: &VideoInfo) {
     );
     obj.insert(
         "video-framerate-inferred".into(),
-        serde_json::Value::from(info.fps_num == 0),
+        serde_json::Value::from(info.fps_inferred),
     );
     obj.insert(
         "video-interlace-mode".into(),
@@ -457,6 +457,23 @@ pub fn attach_video_info(value: &mut serde_json::Value, info: &VideoInfo) {
     obj.insert(
         "video-sar-den".into(),
         serde_json::Value::from(if info.sar_den == 0 { 1 } else { info.sar_den } as i64),
+    );
+    // Stream PIDs from the PMT (C add_mpegts_source_stats): video-pid only when
+    // known, audio-pids always as an array.
+    if info.video_pid > 0 {
+        obj.insert(
+            "video-pid".into(),
+            serde_json::Value::from(info.video_pid as i64),
+        );
+    }
+    obj.insert(
+        "audio-pids".into(),
+        serde_json::Value::from(
+            info.audio_pids
+                .iter()
+                .map(|p| serde_json::Value::from(*p as i64))
+                .collect::<Vec<_>>(),
+        ),
     );
 }
 
@@ -799,6 +816,9 @@ mod tests {
             bit_depth: 8,
             sar_num: 1,
             sar_den: 1,
+            fps_inferred: false,
+            video_pid: 256,
+            audio_pids: vec![257],
         };
         attach_video_info(&mut v, &info);
         assert_eq!(v["video-width"], 1920);
@@ -814,6 +834,9 @@ mod tests {
         assert_eq!(v["video-bit-depth"], 8);
         assert_eq!(v["video-sar-num"], 1);
         assert_eq!(v["video-sar-den"], 1);
+        // PMT stream PIDs (C add_mpegts_source_stats).
+        assert_eq!(v["video-pid"], 256);
+        assert_eq!(v["audio-pids"][0], 257);
     }
 
     #[test]

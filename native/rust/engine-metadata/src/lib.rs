@@ -12,6 +12,13 @@ const PAT_PID: u16 = 0x0000;
 const STREAM_TYPE_H264: u8 = 0x1B;
 const STREAM_TYPE_HEVC: u8 = 0x24;
 const STREAM_TYPE_MPEG2: u8 = 0x02;
+// Audio stream types — C mpegts_stream_is_audio; collected for "audio-pids".
+const STREAM_TYPE_MPEG1_AUDIO: u8 = 0x03;
+const STREAM_TYPE_MPEG2_AUDIO: u8 = 0x04;
+const STREAM_TYPE_AAC_ADTS: u8 = 0x0F;
+const STREAM_TYPE_AAC_LATM: u8 = 0x11;
+const STREAM_TYPE_AC3: u8 = 0x81;
+const STREAM_TYPE_EAC3: u8 = 0x87;
 const TS_PACKET_SIZE: usize = 188;
 const TS_HEADER_SIZE: usize = 4;
 const MAX_PES_PAYLOAD: usize = 192 * 1024;
@@ -37,6 +44,14 @@ pub struct VideoInfo {
     /// Sample aspect ratio numerator/denominator (video-sar-*).
     pub sar_num: u16,
     pub sar_den: u16,
+    /// True when the framerate was inferred rather than read from the stream.
+    /// H.264 SPS often carries no VUI timing_info (C: fps_inferred, emitted as
+    /// "video-framerate-inferred" and rendered by the UI with a "~" prefix).
+    pub fps_inferred: bool,
+    /// Video elementary stream PID from the PMT (0 when unknown) — "video-pid".
+    pub video_pid: u16,
+    /// Audio elementary stream PIDs from the PMT — "audio-pids".
+    pub audio_pids: Vec<u16>,
 }
 
 /// C h264_profile_name() — idc → display name.
@@ -252,7 +267,12 @@ fn parse_pat(data: &[u8], pmt_pid: &mut u32) -> bool {
 
 // ─── PMT Parser ────────────────────────────────────────────────────────────
 
-fn parse_pmt(data: &[u8], elementary_pid: &mut u32, stream_type: &mut u8) -> bool {
+fn parse_pmt(
+    data: &[u8],
+    elementary_pid: &mut u32,
+    stream_type: &mut u8,
+    audio_pids: &mut Vec<u16>,
+) -> bool {
     let af_control = (data[3] >> 4) & 0x3;
     let has_payload = af_control == 1 || af_control == 3;
     if !has_payload {
@@ -280,7 +300,12 @@ fn parse_pmt(data: &[u8], elementary_pid: &mut u32, stream_type: &mut u8) -> boo
     }
     let section_length = ((data[offset] as usize & 0x0F) << 8) | data[offset + 1] as usize;
     offset += 2;
-    offset += 4; // skip program_number + version/current + section/last
+    // Five bytes, not four: program_number(2) + version/current(1) +
+    // section_number(1) + last_section_number(1). Skipping only four left the
+    // offset on last_section_number, so program_info_length was read one byte
+    // early (240 instead of 0 for a real stream) and the stream loop ran off the
+    // packet — the PMT never parsed and the probe silently found nothing.
+    offset += 5;
     offset += 2; // skip PCR_PID
 
     if offset + 2 > TS_PACKET_SIZE {
@@ -289,24 +314,49 @@ fn parse_pmt(data: &[u8], elementary_pid: &mut u32, stream_type: &mut u8) -> boo
     let program_info_length = ((data[offset] as usize & 0x0F) << 8) | data[offset + 1] as usize;
     offset += 2 + program_info_length;
 
-    let mut section_end = offset + section_length - 5 - 4;
+    // section_length covers everything after the length field: the five bytes
+    // above, PCR_PID(2), program_info_length(2), program_info, the stream entries
+    // and the 4-byte CRC. We are now at the first stream entry, so what remains
+    // before the CRC is section_length - 13 - program_info_length.
+    let mut section_end = offset + section_length.saturating_sub(13 + program_info_length);
     if section_end > TS_PACKET_SIZE {
         section_end = TS_PACKET_SIZE;
     }
 
+    let mut found_video = false;
     while offset + 5 <= section_end {
         let st = data[offset];
         let e_pid = ((data[offset + 1] as u32 & 0x1F) << 8) | data[offset + 2] as u32;
         let es_info_length = ((data[offset + 3] as usize & 0x0F) << 8) | data[offset + 4] as usize;
 
-        if st == STREAM_TYPE_H264 || st == STREAM_TYPE_HEVC || st == STREAM_TYPE_MPEG2 {
+        if !found_video
+            && (st == STREAM_TYPE_H264 || st == STREAM_TYPE_HEVC || st == STREAM_TYPE_MPEG2)
+        {
             *elementary_pid = e_pid;
             *stream_type = st;
-            return true;
+            found_video = true;
+        } else if is_audio_stream_type(st) {
+            // Keep scanning rather than returning at the first video stream: the C
+            // engine collects every stream entry, and the audio PIDs are emitted as
+            // "audio-pids" (they normally follow the video entry).
+            audio_pids.push(e_pid as u16);
         }
         offset += 5 + es_info_length;
     }
-    false
+    found_video
+}
+
+/// C mpegts_stream_is_audio — stream types collected into "audio-pids".
+fn is_audio_stream_type(stream_type: u8) -> bool {
+    matches!(
+        stream_type,
+        STREAM_TYPE_MPEG1_AUDIO
+            | STREAM_TYPE_MPEG2_AUDIO
+            | STREAM_TYPE_AAC_ADTS
+            | STREAM_TYPE_AAC_LATM
+            | STREAM_TYPE_AC3
+            | STREAM_TYPE_EAC3
+    )
 }
 
 // ─── Aspect Ratio Idc (H.264 Table E-1) ────────────────────────────────────
@@ -339,6 +389,24 @@ fn sar_from_aspect_ratio_idc(idc: u32) -> (u16, u16) {
 
 // ─── H.264 SPS Parser ──────────────────────────────────────────────────────
 
+/// C remove_emulation_prevention — H.264/HEVC encoders insert a 0x03 byte after
+/// every 00 00 pair so an RBSP can never contain a start code. Parsing the raw NAL
+/// without dropping those bytes shifts every field after the first 00 00 03: a live
+/// SPS carrying two EPBs reported a framerate of 2^24 (16777216) instead of 25 fps.
+fn remove_emulation_prevention(nal: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(nal.len());
+    let mut zeros = 0usize;
+    for &b in nal {
+        if zeros >= 2 && b == 0x03 {
+            zeros = 0;
+            continue;
+        }
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+        out.push(b);
+    }
+    out
+}
+
 fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
     if nal_data.len() < 3 {
         return None;
@@ -349,8 +417,8 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
         return None;
     }
 
-    let rbsp = &nal_data[1..];
-    let mut br = BitReader::new(rbsp);
+    let rbsp = remove_emulation_prevention(&nal_data[1..]);
+    let mut br = BitReader::new(&rbsp);
 
     let profile_idc = br.read_bits(8);
     br.read_bits(8); // constraint + reserved
@@ -433,8 +501,13 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
     let height =
         height.saturating_sub((crop_top + crop_bottom) * (2 - frame_mbs_only_flag) * sub_h);
 
-    // VUI — framerate + sample aspect ratio
-    let (mut fps_num, mut fps_den) = (0u32, 1u32);
+    // VUI — framerate + sample aspect ratio.
+    // C defaults to 25/1 with fps_inferred = TRUE: a live SPS often carries no
+    // VUI timing_info at all (verified against a real source:
+    // timing_info_present_flag = 0), and the UI renders an inferred rate with a
+    // "~" prefix.
+    let (mut fps_num, mut fps_den) = (25u32, 1u32);
+    let mut fps_inferred = true;
     let (mut sar_num, mut sar_den) = (1u16, 1u16);
     if br.read_bits(1) != 0 {
         // aspect_ratio
@@ -476,6 +549,7 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
             if num_units > 0 && time_scale > 0 {
                 fps_num = time_scale;
                 fps_den = num_units * 2;
+                fps_inferred = false; // read from the source VUI
             }
         }
     }
@@ -493,6 +567,10 @@ fn parse_h264_sps(nal_data: &[u8]) -> Option<VideoInfo> {
         bit_depth: bit_depth as u8,
         sar_num,
         sar_den,
+        fps_inferred,
+        // Filled in by TsProbeState from the PMT.
+        video_pid: 0,
+        audio_pids: Vec::new(),
     })
 }
 
@@ -516,6 +594,8 @@ fn parse_mpeg2_sequence(data: &[u8]) -> Option<VideoInfo> {
     let fps_num_table: [u32; 9] = [0, 24000, 24, 25, 30000, 30, 50, 60000, 60];
     let fps_den_table: [u32; 9] = [1, 1001, 1, 1, 1001, 1, 1, 1001, 1];
 
+    // frame_rate_code 0 is "forbidden"/unspecified: the rate is not in the stream.
+    let fps_inferred = !(1..=8).contains(&frame_rate_code);
     let (fps_num, fps_den) = if (1..=8).contains(&frame_rate_code) {
         (
             fps_num_table[frame_rate_code as usize],
@@ -547,6 +627,9 @@ fn parse_mpeg2_sequence(data: &[u8]) -> Option<VideoInfo> {
         bit_depth: 8,
         sar_num: 1,
         sar_den: 1,
+        fps_inferred,
+        video_pid: 0,
+        audio_pids: Vec::new(),
     })
 }
 
@@ -565,8 +648,8 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
         return None;
     } // VPS — skip
 
-    let rbsp = &nal_data[2..];
-    let mut br = BitReader::new(rbsp);
+    let rbsp = remove_emulation_prevention(&nal_data[2..]);
+    let mut br = BitReader::new(&rbsp);
 
     br.read_bits(4); // sps_video_parameter_set_id
     let max_sub_layers = br.read_bits(3);
@@ -644,6 +727,7 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
 
     // VUI — framerate
     let (mut fps_num, mut fps_den) = (0u32, 1u32);
+    let mut fps_inferred = true;
     if br.read_bits(1) != 0 {
         br.read_bits(1); // aspect_ratio_info_present_flag
         br.read_bits(1); // overscan_info_present_flag
@@ -658,6 +742,7 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
             if num_units > 0 && time_scale > 0 {
                 fps_num = time_scale;
                 fps_den = num_units;
+                fps_inferred = false;
             }
         }
     }
@@ -676,6 +761,9 @@ fn parse_hevc_sps(nal_data: &[u8]) -> Option<VideoInfo> {
         // C resets HEVC SAR to 1:1 (lite 1553).
         sar_num: 1,
         sar_den: 1,
+        fps_inferred,
+        video_pid: 0,
+        audio_pids: Vec::new(),
     })
 }
 
@@ -690,8 +778,9 @@ pub struct TsProbeState {
     pmt_pid: u32,
     elementary_pid: u32,
     video_stream_type: u8,
+    /// Audio elementary PIDs from the PMT — surfaced as "audio-pids".
+    audio_pids: Vec<u16>,
     pes_buffer: Vec<u8>,
-    metadata_attempts: u32,
 }
 
 impl Default for TsProbeState {
@@ -702,30 +791,46 @@ impl Default for TsProbeState {
             pmt_pid: 0,
             elementary_pid: 0,
             video_stream_type: 0,
+            audio_pids: Vec::new(),
             pes_buffer: Vec::with_capacity(MAX_PES_PAYLOAD),
-            metadata_attempts: 0,
         }
     }
 }
 
-impl TsProbeState {
-    /// True when the 500-attempt cap is exceeded (C: VIDEO_STREAM_TYPE:unknown).
-    pub fn attempts_exceeded(&self) -> bool {
-        self.metadata_attempts > 500
-    }
+/// Offset of the first MPEG-TS packet boundary in a buffer.
+///
+/// SRT payload boundaries do not have to line up with the 188-byte TS packets, so
+/// a buffer can start mid-packet. Stepping from a wrong offset then reads every
+/// packet at the wrong position: the probe parsed a bogus PAT/PMT (a live stream
+/// reported video PID 65 / audio PID 66 instead of 256/257, and a PMT packet with
+/// PID 32 and a 140-byte adaptation field) and the real metadata only turned up by
+/// luck. The C source_ts_probe_callback resyncs the same way; the extra check that
+/// the following packet also starts with a sync byte keeps payload bytes that
+/// happen to equal 0x47 from being mistaken for a boundary.
+fn resync_offset(data: &[u8]) -> Option<usize> {
+    let limit = data.len().min(TS_PACKET_SIZE);
+    (0..limit).find(|&i| {
+        data[i] == TS_SYNC_BYTE
+            && (i + TS_PACKET_SIZE >= data.len() || data[i + TS_PACKET_SIZE] == TS_SYNC_BYTE)
+    })
+}
 
+impl TsProbeState {
+    /// C/lite keep probing until the stream yields a video header: the engine
+    /// connects mid-GOP, so the first SPS/IDR can be seconds away. An attempt cap
+    /// (per TS packet) gave up in ~50 ms at 15 Mbps and the probe never reported
+    /// any video metadata.
     pub fn probe(&mut self, buf: &gst::Buffer) -> Option<VideoInfo> {
         let map = buf.map_readable().ok()?;
         if map.len() < TS_PACKET_SIZE {
             return None;
         }
-        if self.metadata_attempts > 500 {
-            return None;
-        }
 
-        let num_packets = map.len() / TS_PACKET_SIZE;
+        let data: &[u8] = &map;
+        let base = resync_offset(data)?;
+        let num_packets = (data.len() - base) / TS_PACKET_SIZE;
         for p in 0..num_packets {
-            let ts = &map[p * TS_PACKET_SIZE..(p + 1) * TS_PACKET_SIZE];
+            let ts = &data[base + p * TS_PACKET_SIZE..base + (p + 1) * TS_PACKET_SIZE];
             if ts[0] != TS_SYNC_BYTE {
                 continue;
             }
@@ -745,10 +850,12 @@ impl TsProbeState {
             if self.pat_parsed && !self.pmt_parsed && pid as u32 == self.pmt_pid {
                 let mut epid = 0u32;
                 let mut st = 0u8;
-                if parse_pmt(ts, &mut epid, &mut st) {
+                let mut audios = Vec::new();
+                if parse_pmt(ts, &mut epid, &mut st, &mut audios) {
                     self.pmt_parsed = true;
                     self.elementary_pid = epid;
                     self.video_stream_type = st;
+                    self.audio_pids = audios;
                 }
             }
 
@@ -776,8 +883,6 @@ impl TsProbeState {
                         .extend_from_slice(&ts[offset..offset + payload_size]);
                 }
 
-                self.metadata_attempts += 1;
-
                 let result = match self.video_stream_type {
                     STREAM_TYPE_H264 => self.scan_h264_start_codes(),
                     STREAM_TYPE_HEVC => self.scan_hevc_start_codes(),
@@ -785,8 +890,12 @@ impl TsProbeState {
                     _ => None,
                 };
 
-                if result.is_some() {
-                    return result;
+                if let Some(mut info) = result {
+                    // PMT-derived stream PIDs travel with the video info (C
+                    // add_mpegts_source_stats emits video-pid + audio-pids).
+                    info.video_pid = self.elementary_pid as u16;
+                    info.audio_pids = self.audio_pids.clone();
+                    return Some(info);
                 }
             }
         }
@@ -884,6 +993,37 @@ mod tests {
         assert_eq!(info.fps_den, 1001);
     }
 
+    /// H.264 encoders insert emulation-prevention bytes (00 00 03) so an RBSP can
+    /// never contain a start code. This is a real High-profile SPS from a live
+    /// source and it carries two EPBs: parsing it without removing them shifted
+    /// every field after the first escape, so the engine reported a framerate of
+    /// 2^24 instead of 25 fps (C remove_emulation_prevention).
+    #[test]
+    fn parse_h264_sps_with_emulation_prevention_bytes() {
+        let sps: [u8; 40] = [
+            0x27, 0x64, 0x00, 0x28, 0xAD, 0x00, 0xEC, 0x07, 0x80, 0x44, 0x7D, 0xE0, 0x28, 0x40,
+            0x40, 0x40, 0x50, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x03, 0x2E, 0x04,
+            0x00, 0x00, 0xE4, 0xE1, 0xC0, 0x00, 0x1C, 0x9C, 0x3E, 0x17, 0xB8, 0x30,
+        ];
+        // Both escapes (after the NAL header) are dropped before bit parsing.
+        assert_eq!(
+            remove_emulation_prevention(&sps[1..]).len(),
+            sps.len() - 1 - 2
+        );
+
+        let info = parse_h264_sps(&sps).expect("SPS parses");
+        assert_eq!((info.width, info.height), (1920, 1080));
+        assert_eq!(info.profile_idc, 100); // High
+        assert_eq!(info.level_idc, 40);
+        assert_eq!(info.chroma_format_idc, 1);
+        assert_eq!(info.bit_depth, 8);
+        assert_eq!((info.sar_num, info.sar_den), (1, 1)); // aspect_ratio_idc = 1
+                                                          // VUI timing_info: num_units_in_tick = 1, time_scale = 50 → 25 fps.
+        assert_eq!(info.fps_num, 50);
+        assert_eq!(info.fps_den, 2);
+        assert!(!info.fps_inferred, "timing_info was present in the SPS");
+    }
+
     #[test]
     fn test_parse_pat() {
         // Simulate minimal PAT TS packet: PID=0, payload_unit_start, table_id=0x00
@@ -915,5 +1055,159 @@ mod tests {
         let mut pmt_pid = 0u32;
         assert!(parse_pat(&ts, &mut pmt_pid));
         assert_eq!(pmt_pid, 100);
+    }
+
+    /// Real PMT captured from a live SRT source (H.264 1920x1080 + AAC-LC):
+    /// section_length 29, PCR_PID 256, stream entries H.264/256 and AAC-ADTS/257
+    /// carrying an ISO-639 "eng" descriptor, then the CRC. Regression for the
+    /// off-by-one that made every PMT parse fail (offset skipped four bytes
+    /// instead of five, so program_info_length read 240 and the loop ran off the
+    /// packet) — the probe then never saw any video metadata at all.
+    #[test]
+    fn parse_pmt_real_packet_reads_video_and_audio_pids() {
+        let mut pkt = vec![0xFFu8; TS_PACKET_SIZE];
+        let head: [u8; 37] = [
+            0x47, 0x50, 0x00, 0x10, 0x00, 0x02, 0xB0, 0x1D, 0x00, 0x01, 0xC1, 0x00, 0x00, 0xE1,
+            0x00, 0xF0, 0x00, 0x1B, 0xE1, 0x00, 0xF0, 0x00, 0x0F, 0xE1, 0x01, 0xF0, 0x06, 0x0A,
+            0x04, 0x65, 0x6E, 0x67, 0x00, 0x8D, 0x82, 0x9A, 0x07,
+        ];
+        pkt[..head.len()].copy_from_slice(&head);
+
+        let (mut pid, mut st) = (0u32, 0u8);
+        let mut audio = Vec::new();
+        assert!(parse_pmt(&pkt, &mut pid, &mut st, &mut audio));
+        assert_eq!(pid, 256, "video elementary PID");
+        assert_eq!(st, STREAM_TYPE_H264);
+        assert_eq!(audio, vec![257], "audio PIDs collected from the same PMT");
+    }
+
+    /// Audio stream types are collected without truncating the scan at the first
+    /// video entry (the audio PID normally follows the video one).
+    #[test]
+    fn parse_pmt_collects_audio_pid_listed_after_video() {
+        let mut pkt = vec![0xFFu8; TS_PACKET_SIZE];
+        // Header (PID 0x1000, payload only) + pointer 0 + PMT table_id.
+        // section_length 28 = 5 (program/version/sections) + 2 (PCR_PID) + 2
+        // (program_info_length) + 15 (three 5-byte stream entries) + 4 (CRC).
+        let head: [u8; 32] = [
+            0x47, 0x50, 0x00, 0x10, 0x00, 0x02, 0xB0, 0x1C, 0x00, 0x01, 0xC1, 0x00, 0x00, 0xE1,
+            0x00, 0xF0, 0x00, 0x1B, 0xE1, 0x00, 0xF0, 0x00, // H.264 / PID 256
+            0x04, 0xE1, 0x01, 0xF0, 0x00, // MPEG-2 audio / PID 257
+            0x03, 0xE1, 0x02, 0xF0, 0x00, // MPEG-1 audio / PID 258
+        ];
+        pkt[..head.len()].copy_from_slice(&head);
+
+        let (mut pid, mut st) = (0u32, 0u8);
+        let mut audio = Vec::new();
+        assert!(parse_pmt(&pkt, &mut pid, &mut st, &mut audio));
+        assert_eq!(pid, 256);
+        assert_eq!(st, STREAM_TYPE_H264);
+        assert_eq!(audio, vec![257, 258]);
+    }
+
+    /// A buffer can start mid-packet (SRT payload boundaries are not TS-aligned):
+    /// the boundary is the first sync byte whose next 188-byte step is also a sync.
+    #[test]
+    fn resync_offset_skips_partial_leading_packet() {
+        let mut buf = vec![0xAAu8; 100];
+        for _ in 0..3 {
+            buf.push(TS_SYNC_BYTE);
+            buf.extend(std::iter::repeat_n(0x11, TS_PACKET_SIZE - 1));
+        }
+        assert_eq!(resync_offset(&buf), Some(100));
+    }
+
+    /// A 0x47 byte inside the leading partial packet must not be mistaken for a
+    /// packet boundary — the byte 188 further on has to look like a packet too.
+    #[test]
+    fn resync_offset_ignores_stray_sync_byte_in_payload() {
+        let mut buf = vec![0x00u8; 100];
+        buf[10] = TS_SYNC_BYTE; // stray byte in the payload of the partial packet
+        for _ in 0..3 {
+            buf.push(TS_SYNC_BYTE);
+            buf.extend(std::iter::repeat_n(0x11, TS_PACKET_SIZE - 1));
+        }
+        assert_eq!(resync_offset(&buf), Some(100));
+    }
+
+    /// Diagnostic: run the TS probe over a real MPEG-TS capture and report which
+    /// stage got stuck. Feed it as the pipeline does (1316-byte SRT payloads,
+    /// i.e. 7 TS packets).
+    ///
+    ///   TS_PROBE_FIXTURE=/path/capture.ts cargo test -p engine-metadata \
+    ///     -- --nocapture ts_probe_real_capture
+    #[test]
+    fn ts_probe_real_capture() {
+        let Ok(path) = std::env::var("TS_PROBE_FIXTURE") else {
+            eprintln!("TS_PROBE_FIXTURE not set; skipping real-capture probe check");
+            return;
+        };
+        let data = std::fs::read(&path).expect("read fixture");
+        gst::init().expect("gst init");
+        let mut state = TsProbeState::default();
+        let mut detected = None;
+        let mut chunks = 0usize;
+
+        for chunk in data.chunks(1316) {
+            chunks += 1;
+            let buf = gst::Buffer::from_slice(chunk.to_vec());
+            if let Some(info) = state.probe(&buf) {
+                detected = Some(info);
+                break;
+            }
+        }
+
+        // Second pass over the same stream starting mid-packet, as a live SRT
+        // buffer often does: the probe has to resync and still find the metadata.
+        let mut mis_state = TsProbeState::default();
+        let mut mis_detected = None;
+        for chunk in data.get(100..).unwrap_or_default().chunks(1316) {
+            let buf = gst::Buffer::from_slice(chunk.to_vec());
+            if let Some(info) = mis_state.probe(&buf) {
+                mis_detected = Some(info);
+                break;
+            }
+        }
+        match &mis_detected {
+            Some(i) => eprintln!(
+                "MISALIGNED DETECTED {}x{} video_pid={} audio_pids={:?}",
+                i.width, i.height, i.video_pid, i.audio_pids
+            ),
+            None => eprintln!("MISALIGNED NOT DETECTED"),
+        }
+
+        eprintln!(
+            "chunks={} pat_parsed={} pmt_parsed={} pmt_pid={} elementary_pid={} stream_type=0x{:02X}",
+            chunks,
+            state.pat_parsed,
+            state.pmt_parsed,
+            state.pmt_pid,
+            state.elementary_pid,
+            state.video_stream_type,
+        );
+
+        match detected {
+            Some(i) => {
+                eprintln!(
+                    "DETECTED {}x{} {}/{} inferred={} interlaced={} codec={:?} profile={} level={} chroma={} depth={} sar={}/{} video_pid={} audio_pids={:?}",
+                    i.width,
+                    i.height,
+                    i.fps_num,
+                    i.fps_den,
+                    i.fps_inferred,
+                    i.interlaced,
+                    i.codec,
+                    i.profile_idc,
+                    i.level_idc,
+                    i.chroma_format_idc,
+                    i.bit_depth,
+                    i.sar_num,
+                    i.sar_den,
+                    i.video_pid,
+                    i.audio_pids
+                );
+            }
+            None => eprintln!("NOT DETECTED"),
+        }
     }
 }

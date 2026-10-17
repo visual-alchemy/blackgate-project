@@ -443,7 +443,6 @@ fn install_ts_probe(tee: &gst::Element, ctx: &Ctx) {
     let video_info = ctx.video_info.clone();
     let reported = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reported_clone = reported.clone();
-    let unknown_printed = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
         if reported_clone.load(Ordering::Relaxed) {
@@ -473,12 +472,6 @@ fn install_ts_probe(tee: &gst::Element, ctx: &Ctx) {
             }
             reported_clone.store(true, Ordering::Relaxed);
             return gst::PadProbeReturn::Ok;
-        }
-
-        if st.attempts_exceeded() && !unknown_printed.load(Ordering::Relaxed) {
-            unknown_printed.store(true, Ordering::Relaxed);
-            println!("VIDEO_STREAM_TYPE:unknown");
-            reported_clone.store(true, Ordering::Relaxed);
         }
 
         gst::PadProbeReturn::Ok
