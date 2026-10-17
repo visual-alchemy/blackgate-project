@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Table, Card, Button, Space, Typography, message, Modal, Tooltip, Tag } from 'antd';
 import { ReloadOutlined, StopOutlined, ExclamationCircleFilled, HomeOutlined } from '@ant-design/icons';
 import { systemPipelinesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const SystemPipelines = () => {
   const [pipelines, setPipelines] = useState([]);
@@ -29,19 +29,10 @@ const SystemPipelines = () => {
     }
   }, []);
 
-  useEffect(() => {
-    fetchPipelines();
-    // Set up auto-refresh every 5 seconds
-    const intervalId = setInterval(fetchPipelines, 5000);
-    
-    // Clean up interval on component unmount
-    return () => clearInterval(intervalId);
-  }, []);
-
-  const fetchPipelines = async () => {
+  const fetchPipelines = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await systemPipelinesApi.getAll();
+      const data = await systemPipelinesApi.getDetailed();
       setPipelines(data);
     } catch (error) {
       messageApi.error(`Failed to fetch pipeline processes: ${error.message}`);
@@ -49,7 +40,16 @@ const SystemPipelines = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [messageApi]);
+
+  useEffect(() => {
+    fetchPipelines();
+    // Set up auto-refresh every 5 seconds
+    const intervalId = setInterval(fetchPipelines, 5000);
+
+    // Clean up interval on component unmount
+    return () => clearInterval(intervalId);
+  }, [fetchPipelines]);
 
   const showKillConfirm = (record) => {
     modal.confirm({
@@ -92,28 +92,59 @@ const SystemPipelines = () => {
       sorter: (a, b) => a.pid - b.pid,
     },
     {
-      title: 'CPU',
-      dataIndex: 'cpu',
+      title: 'Route',
+      key: 'route',
+      sorter: (a, b) => (a.route_name || a.route_id || '').localeCompare(b.route_name || b.route_id || ''),
+      render: (_, record) => (
+        <Tooltip title={record.route_id || 'Route ID unavailable'}>
+          {record.route_name || record.route_id || 'N/A'}
+        </Tooltip>
+      ),
+    },
+    {
+      title: <Tooltip title="Live process CPU sampled over 250 ms. One multithreaded pipeline can exceed 100%.">Live CPU</Tooltip>,
+      dataIndex: 'cpu_percent',
       key: 'cpu',
-      sorter: (a, b) => parseFloat(a.cpu) - parseFloat(b.cpu),
-      render: (text) => {
-        const value = parseFloat(text);
+      sorter: (a, b) => (a.cpu_percent ?? -1) - (b.cpu_percent ?? -1),
+      render: (_, record) => {
+        const value = record.cpu_percent;
+        if (!Number.isFinite(value)) {
+          return <Tag>{record.cpu || 'N/A'}</Tag>;
+        }
+
         let color = 'green';
         if (value > 50) color = 'orange';
         if (value > 80) color = 'red';
-        return <Tag color={color}>{text}</Tag>;
+        return (
+          <Tooltip title={`Live sample: ${record.cpu_sample_ms} ms. ps lifetime average: ${record.cpu_average}`}>
+            <Tag color={color}>{value.toFixed(1)}%</Tag>
+          </Tooltip>
+        );
       }
     },
     {
-      title: 'Memory',
-      dataIndex: 'memory',
+      title: <Tooltip title="Resident memory currently held in RAM.">RSS Memory</Tooltip>,
+      dataIndex: 'resident_memory',
       key: 'memory',
       render: (_, record) => (
         <Tooltip title={`${record.memory_bytes} bytes (${record.memory_percent})`}>
-          {record.memory}
+          {record.resident_memory || record.memory}
         </Tooltip>
       ),
       sorter: (a, b) => a.memory_bytes - b.memory_bytes,
+    },
+    {
+      title: 'Threads',
+      dataIndex: 'thread_count',
+      key: 'thread_count',
+      sorter: (a, b) => (a.thread_count ?? -1) - (b.thread_count ?? -1),
+      render: (value) => value ?? 'N/A',
+    },
+    {
+      title: 'State',
+      dataIndex: 'state',
+      key: 'state',
+      render: (value) => <Tag>{value || 'N/A'}</Tag>,
     },
     {
       title: 'Swap',
@@ -165,11 +196,20 @@ const SystemPipelines = () => {
   const expandedRowRender = (record) => {
     const items = [
       { label: 'PID', value: record.pid },
-      { label: 'CPU Usage', value: record.cpu },
-      { label: 'Memory Usage', value: `${record.memory} (${record.memory_percent})` },
+      { label: 'Route', value: record.route_name || 'N/A' },
+      { label: 'Route ID', value: record.route_id || 'N/A' },
+      {
+        label: 'Live CPU Usage',
+        value: Number.isFinite(record.cpu_percent)
+          ? `${record.cpu_percent.toFixed(1)}% over ${record.cpu_sample_ms} ms`
+          : 'N/A'
+      },
+      { label: 'CPU Lifetime Average', value: record.cpu_average || 'N/A' },
+      { label: 'Memory Usage', value: `${record.resident_memory || record.memory} (${record.memory_percent})` },
       { label: 'Memory in Bytes', value: record.memory_bytes.toLocaleString() },
       { label: 'Swap Usage', value: record.swap || formatBytes(record.swap_bytes) },
       { label: 'Swap in Bytes', value: record.swap_bytes.toLocaleString() },
+      { label: 'Threads', value: record.thread_count ?? 'N/A' },
       { label: 'User', value: record.user },
       { label: 'Start Time', value: record.start_time },
       { label: 'Command', value: record.command },
@@ -213,6 +253,9 @@ const SystemPipelines = () => {
         </Space>
 
         <Card>
+          <Text type="secondary">
+            Live CPU sampled over 250 ms. Process and memory values refresh every 5 seconds.
+          </Text>
           <Table
             columns={columns}
             dataSource={pipelines}
@@ -234,4 +277,4 @@ const SystemPipelines = () => {
   );
 };
 
-export default SystemPipelines; 
+export default SystemPipelines;

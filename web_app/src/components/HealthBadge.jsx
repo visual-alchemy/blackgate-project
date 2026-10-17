@@ -18,7 +18,7 @@ const HEALTH_CONFIG = {
     color: 'warning',
     icon: <WarningOutlined />,
     label: 'Warning',
-    tooltip: 'Stream is connected but metrics are slightly degraded (packet loss > 2% or RTT > 150ms).',
+    tooltip: 'Stream is connected but metrics are slightly degraded (packet loss > 2% or RTT > 300ms).',
   },
   critical: {
     color: 'error',
