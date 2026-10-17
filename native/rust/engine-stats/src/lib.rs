@@ -14,6 +14,9 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Counts `apply_source_stats_structure` calls so `BLACKGATE_DUMP_STATS` prints once.
+static STATS_DUMP_COUNT: AtomicU64 = AtomicU64::new(0);
 use std::thread;
 use std::time::Duration;
 
@@ -286,6 +289,22 @@ fn empty_source_stats(tag: &str) -> SourceStats {
 /// Map an srtsrc `stats` GstStructure onto `stats`. This is the step that looks
 /// up GstStructure FIELD names — which are not the JSON wire keys.
 fn apply_source_stats_structure(s: &gst::Structure, tag: &str, stats: &mut SourceStats) {
+    // Diagnostic (BLACKGATE_DUMP_STATS=1): print the raw SRT structure once, with field
+    // types. GStreamer's srtsrc stores the loss counters as `int` (gint32), which is why
+    // the C engine's `gst_structure_get_int64` on them fails and always yields 0.
+    if std::env::var("BLACKGATE_DUMP_STATS").is_ok()
+        && STATS_DUMP_COUNT.fetch_add(1, Ordering::Relaxed) == 29
+    {
+        println!("STATS_STRUCT {}", s);
+        println!(
+            "STATS_RAW packets-received={} packets-received-lost={} packets-received-dropped={} packets-received-retransmitted={}",
+            struct_get_i64(s, "packets-received"),
+            struct_get_i64(s, "packets-received-lost"),
+            struct_get_i64(s, "packets-received-dropped"),
+            struct_get_i64(s, "packets-received-retransmitted")
+        );
+    }
+
     // GstStructure field on srtsrc is `bytes-received-total` (libgstsrt.so);
     // `total-bytes-received` is only the JSON wire key — lite reads the struct
     // and renames on emit. Reading the wire name here silently yielded 0.

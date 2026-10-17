@@ -70,6 +70,24 @@ cheap way to A/B a suspect without touching code:
   Diffing them showed the `srtsrc` elements are configured identically — read the
   properties through the param spec's READABLE flag, or write-only ones like
   `passphrase` panic.
+- `BLACKGATE_DUMP_STATS=1` — prints the raw `srtsrc` `stats` structure (with field types)
+  plus what each typed getter returns. Use it before believing any loss figure.
+
+## Never trust a 0% loss reading from the C engine
+
+blackgate-lite's `build_source_stats_json` reads `packets-received-lost`,
+`packets-received-dropped` and `packets-received-retransmitted` with
+`gst_structure_get_int64`, but GStreamer's srtsrc stores them as **`int` (gint32)**. The
+strict type check fails, the getter's FALSE return is ignored, and the variable keeps its
+0 initialiser — so that engine reports 0 lost / 0 dropped / 0 retransmitted **forever**,
+however much it actually loses. (`packets-received` is `gint64`, which is why that one
+field always worked and made the rest look plausible.)
+
+Measured on one host, same source and window, raw structures from both engines:
+`packets-received-lost=(int)421` (C) vs `(int)416` (Rust) — the same loss. The Rust port
+reads those fields correctly; a "Rust loses packets, C doesn't" report is almost always
+this bug. Fix the C side with `gst_structure_get_int` (and remember the field is gint32,
+so it wraps after ~2.1 billion packets ≈ 2.8 TB).
 
 To compare engines on one host: build the C engine from a worktree of the blackgate-lite
 branch (`make -C native CFLAGS="-Wall -Wextra -g $(pkg-config --cflags gstreamer-1.0 gstreamer-app-1.0)" LDFLAGS="$(pkg-config --libs gstreamer-1.0 gstreamer-app-1.0 gio-2.0) -lsrt-gnutls"`),
