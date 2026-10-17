@@ -1,10 +1,25 @@
 defmodule Blackgate.Monitoring.OsMon do
   @moduledoc false
 
+  @doc """
+  System RAM usage as a percentage.
+
+  Uses `available_memory` (kernel `MemAvailable`) rather than `free_memory`:
+  MemFree excludes reclaimable page cache and buffers, so a healthy box with a
+  warm cache reported ~90% used while `free`/`top` showed ~32%. Falls back to
+  `free_memory` where the kernel does not report MemAvailable (e.g. macOS).
+  """
   @spec ram_usage() :: float()
   def ram_usage do
     mem = :memsup.get_system_memory_data()
-    100 - mem[:free_memory] / mem[:total_memory] * 100
+    total = Keyword.get(mem, :total_memory) || 0
+    available = Keyword.get(mem, :available_memory) || Keyword.get(mem, :free_memory) || 0
+
+    if total > 0 do
+      max(0.0, 100 - available / total * 100)
+    else
+      0.0
+    end
   end
 
   @spec cpu_la() :: %{avg1: float(), avg5: float(), avg15: float()}
@@ -16,9 +31,17 @@ defmodule Blackgate.Monitoring.OsMon do
     }
   end
 
-  @spec cpu_util() :: float() | {:error, term()}
+  @doc """
+  Current CPU utilisation percentage.
+
+  Delegates to `Blackgate.Monitoring.CpuSampler`. Calling `:cpu_sup.util/0`
+  directly from a short-lived request process makes cpu_sup treat every call as
+  that caller's first sample and return the cumulative average since boot, so
+  the Dashboard value froze (7.3% while the box was pinned at 100%).
+  """
+  @spec cpu_util() :: float() | nil
   def cpu_util do
-    :cpu_sup.util()
+    Blackgate.Monitoring.CpuSampler.get()
   end
 
   @spec swap_usage() :: float() | nil

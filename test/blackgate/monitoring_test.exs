@@ -35,10 +35,52 @@ defmodule Blackgate.MonitoringTest do
 
   test "OsMon cpu_util returns valid utilization" do
     cpu_util = OsMon.cpu_util()
-    assert is_float(cpu_util) or match?({:error, _}, cpu_util)
+    assert is_float(cpu_util) or is_nil(cpu_util)
 
     if is_float(cpu_util) do
       assert cpu_util >= 0 and cpu_util <= 100
+    end
+  end
+
+  test "CpuSampler serves cpu_util from a stable process" do
+    # :cpu_sup.util/0 measures since the caller's previous call, so calling it
+    # from a short-lived request process returns the since-boot average and the
+    # metric freezes. The sampler keeps a stable PID and samples on a timer.
+    assert is_pid(Process.whereis(Blackgate.Monitoring.CpuSampler))
+
+    util = wait_for_cpu_sample(System.monotonic_time(:millisecond) + 3_000)
+    assert is_float(util)
+    assert util >= 0 and util <= 100
+  end
+
+  test "OsMon ram_usage reflects available memory, not free memory" do
+    mem = :memsup.get_system_memory_data()
+
+    case Keyword.fetch(mem, :available_memory) do
+      {:ok, available} ->
+        total = Keyword.fetch!(mem, :total_memory)
+        # free_memory excludes reclaimable cache, which read ~90% used on an
+        # idle box whose real usage was ~32%.
+        assert_in_delta OsMon.ram_usage(), (total - available) / total * 100, 2.0
+
+      :error ->
+        # Platforms without MemAvailable keep the free-memory fallback.
+        assert OsMon.ram_usage() >= 0.0
+    end
+  end
+
+  defp wait_for_cpu_sample(deadline) do
+    case Blackgate.Monitoring.CpuSampler.get() do
+      util when is_float(util) ->
+        util
+
+      _ ->
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(100)
+          wait_for_cpu_sample(deadline)
+        else
+          nil
+        end
     end
   end
 
