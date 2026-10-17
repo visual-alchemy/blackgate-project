@@ -95,3 +95,35 @@ drop cJSON.c/cJSON.h into `src/`+`include/` (the system dev headers are absent),
 standalone against the same source and compare the SRT counters. Both engines talk to
 the live stats socket, so give them probe route ids — the release stores their stats and
 you read them back with `Blackgate.RouteStatsRegistry.get_stats/1`.
+
+## Peak-RSS comparisons: check what the config asked for, and where the work runs
+
+A 3.1x Rust-vs-C peak-RSS regression on the `udp-to-srt` workload was **not** the 50 MB
+`queue2` in the sink branch — shrinking it to 2 MB changed nothing measurable (the bound is
+still worth keeping). It was the preview branch: the Rust engine built `ThumbnailBranch`
+whenever `route_id` was non-empty, so the benchmark paid ~33 MB of H.264 decoder frame pool
+that the C engine never allocates, because the C only builds its thumbnail chain when the
+config asks for one. Same init JSON the harness uses, measured standalone:
+
+```
+rust, config without preview : 19.6 MB      c: 20.8 MB
+rust, config with preview    : 52.0 MB      ("Thumbnail: Branch ready")
+```
+
+Rules this leaves behind:
+
+- An engine builds optional work (preview, extra branch, helper process) only when the
+  config requests it — never infer it from an id being present. Benchmark plans must state
+  what they want; the Rust engine now takes `"preview": true`, and route_handler sends it.
+- Before believing an RSS regression, measure the *same config* on both engines and check
+  process boundaries: work the reference engine does in a separate process never shows up
+  in its RSS.
+- To measure an engine's RSS without touching the live release, run it standalone against a
+  private stats socket with a dummy Unix listener (it exits on stdin EOF, so keep stdin
+  open: `{ echo "$INIT"; sleep 90; } | engine <sock> <route_id>`) and read `/proc/<pid>/status`.
+
+Verdict runs: `--all` produces 42 metrics over 6 workloads; a `pass` needs every metric
+inside its gate *and* every metric's CV <= 5%. On a 4-vCPU KVM guest with 3 GB RAM, all 42
+metrics passed while 5 of 6 workloads stayed `inconclusive` purely on CV — the C reference's
+own CPU/RSS variance plus Rust's `latency_ms` CV on sub-0.06 ms values (~7 microsecond
+jitter). Bare-metal Ubuntu 24.04 amd64 is the documented home for this evidence.
