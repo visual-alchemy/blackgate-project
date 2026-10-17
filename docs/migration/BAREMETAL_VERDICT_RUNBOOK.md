@@ -18,7 +18,10 @@ Travels with the repository (clone and you have it):
   (includes `scripts/probe_engine_rss.sh`) and `docs/skills/pinned-toolchain-bootstrap/`.
   To use them with an agent on the new machine, copy each directory into
   `~/.hermes/skills/software-development/`.
-- The baseline verdict: `benchmarks/migration/results/verdict-2026-10-17-local-vm/`.
+- The baseline verdict: `benchmarks/migration/results/verdict-2026-10-17-local-vm/`
+  (`summary.json`, `REPORT.md` and each workload's `comparison.json`). `results/` is
+  gitignored by default, so the raw per-run JSONs stay on the machine that produced them;
+  re-run the harness to regenerate them, or read the aggregates above.
 
 Does NOT travel (re-create on the new machine):
 

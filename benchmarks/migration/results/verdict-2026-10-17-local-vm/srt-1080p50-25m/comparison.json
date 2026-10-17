@@ -1,0 +1,126 @@
+{
+  "c_runs": [
+    {
+      "cpu_percent": 19.184656376780627,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.056,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 81039360.0,
+      "startup_ms": 251.8246050021844,
+      "throughput_mbps": 26.764902168493244
+    },
+    {
+      "cpu_percent": 19.24990415777578,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.055,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 81227776.0,
+      "startup_ms": 251.65908700000728,
+      "throughput_mbps": 26.763643663949566
+    },
+    {
+      "cpu_percent": 19.341044618539698,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.055,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 82853888.0,
+      "startup_ms": 251.60206799773732,
+      "throughput_mbps": 26.76552644502558
+    }
+  ],
+  "decision": {
+    "metrics": {
+      "cpu_ratio": {
+        "c": 19.24990415777578,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.9323449347351195,
+        "rust": 17.947550635638766,
+        "threshold": 1.1
+      },
+      "failover_gap_ratio": {
+        "c": 0.0,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0,
+        "rust": 0.0,
+        "threshold": 1.1
+      },
+      "latency_ratio": {
+        "c": 0.055,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0,
+        "rust": 0.055,
+        "threshold": 1.1
+      },
+      "packet_loss_delta": {
+        "c": 0.0,
+        "delta": 0.0,
+        "operator": "<=",
+        "pass": true,
+        "rust": 0.0,
+        "threshold": 0.0
+      },
+      "peak_rss_ratio": {
+        "c": 81227776.0,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.36417729816953254,
+        "rust": 29581312.0,
+        "threshold": 1.15
+      },
+      "startup_ratio": {
+        "c": 251.65908700000728,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0000036636947385,
+        "rust": 251.6600090020802,
+        "threshold": 1.1
+      },
+      "throughput_ratio": {
+        "c": 26.764902168493244,
+        "operator": ">=",
+        "pass": true,
+        "ratio": 1.0000509047901172,
+        "rust": 26.76626463022064,
+        "threshold": 0.99
+      }
+    },
+    "reasons": [],
+    "status": "pass"
+  },
+  "preflight_seconds": 3.0,
+  "quick": false,
+  "repetitions": 3,
+  "rust_runs": [
+    {
+      "cpu_percent": 17.993501593427325,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.055,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 29798400.0,
+      "startup_ms": 251.6600090020802,
+      "throughput_mbps": 26.765403480068095
+    },
+    {
+      "cpu_percent": 17.89329335610513,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.053,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 29474816.0,
+      "startup_ms": 251.87105900113238,
+      "throughput_mbps": 26.770074010228335
+    },
+    {
+      "cpu_percent": 17.947550635638766,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.0575,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 29581312.0,
+      "startup_ms": 251.6007329977583,
+      "throughput_mbps": 26.76626463022064
+    }
+  ],
+  "workload": "srt-1080p50-25m"
+}

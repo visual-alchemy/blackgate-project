@@ -1,0 +1,128 @@
+{
+  "c_runs": [
+    {
+      "cpu_percent": 21.668007818844153,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.048,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 90750976.0,
+      "startup_ms": 252.13077000080375,
+      "throughput_mbps": 9.7156535257817
+    },
+    {
+      "cpu_percent": 19.286262516406254,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.046,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 73613312.0,
+      "startup_ms": 252.25949699961348,
+      "throughput_mbps": 9.715199085767356
+    },
+    {
+      "cpu_percent": 20.095204620198885,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.044,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 91447296.0,
+      "startup_ms": 252.30626200209372,
+      "throughput_mbps": 9.715169382064325
+    }
+  ],
+  "decision": {
+    "metrics": {
+      "cpu_ratio": {
+        "c": 20.095204620198885,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.9187006554313167,
+        "rust": 18.46147765560314,
+        "threshold": 1.1
+      },
+      "failover_gap_ratio": {
+        "c": 0.0,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0,
+        "rust": 0.0,
+        "threshold": 1.1
+      },
+      "latency_ratio": {
+        "c": 0.046,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0217391304347827,
+        "rust": 0.047,
+        "threshold": 1.1
+      },
+      "packet_loss_delta": {
+        "c": 0.0,
+        "delta": 0.0,
+        "operator": "<=",
+        "pass": true,
+        "rust": 0.0,
+        "threshold": 0.0
+      },
+      "peak_rss_ratio": {
+        "c": 90750976.0,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.29693988084491785,
+        "rust": 26947584.0,
+        "threshold": 1.15
+      },
+      "startup_ratio": {
+        "c": 252.25949699961348,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.9996679490740207,
+        "rust": 252.17573400004767,
+        "threshold": 1.1
+      },
+      "throughput_ratio": {
+        "c": 9.715199085767356,
+        "operator": ">=",
+        "pass": true,
+        "ratio": 0.9998590462381449,
+        "rust": 9.713829691909046,
+        "threshold": 0.99
+      }
+    },
+    "reasons": [
+      "C peak_rss_bytes coefficient of variation 0.096725 exceeds 0.050000"
+    ],
+    "status": "inconclusive"
+  },
+  "preflight_seconds": 3.0,
+  "quick": false,
+  "repetitions": 3,
+  "rust_runs": [
+    {
+      "cpu_percent": 18.46147765560314,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.047,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 26947584.0,
+      "startup_ms": 252.39648400020087,
+      "throughput_mbps": 9.713829691909046
+    },
+    {
+      "cpu_percent": 18.512075861601108,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.047,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 27017216.0,
+      "startup_ms": 252.17573400004767,
+      "throughput_mbps": 9.712560388647354
+    },
+    {
+      "cpu_percent": 18.45955127837466,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.043,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 26918912.0,
+      "startup_ms": 251.9275220038253,
+      "throughput_mbps": 9.714371721793754
+    }
+  ],
+  "workload": "srt-three-destinations"
+}

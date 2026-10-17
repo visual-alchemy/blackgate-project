@@ -1,0 +1,129 @@
+{
+  "c_runs": [
+    {
+      "cpu_percent": 8.40558557080588,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.058,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 68657152.0,
+      "startup_ms": 251.5602179992129,
+      "throughput_mbps": 5.455996991343828
+    },
+    {
+      "cpu_percent": 9.656550282305158,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.055,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 86659072.0,
+      "startup_ms": 251.4822289958829,
+      "throughput_mbps": 5.456089614816877
+    },
+    {
+      "cpu_percent": 10.406363100596673,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.0565,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 87224320.0,
+      "startup_ms": 251.6582579992246,
+      "throughput_mbps": 5.4562159908598495
+    }
+  ],
+  "decision": {
+    "metrics": {
+      "cpu_ratio": {
+        "c": 9.656550282305158,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.8310194880253374,
+        "rust": 8.02478147169216,
+        "threshold": 1.1
+      },
+      "failover_gap_ratio": {
+        "c": 0.0,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0,
+        "rust": 0.0,
+        "threshold": 1.1
+      },
+      "latency_ratio": {
+        "c": 0.0565,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.9734513274336283,
+        "rust": 0.055,
+        "threshold": 1.1
+      },
+      "packet_loss_delta": {
+        "c": 0.0,
+        "delta": 0.0,
+        "operator": "<=",
+        "pass": true,
+        "rust": 0.0,
+        "threshold": 0.0
+      },
+      "peak_rss_ratio": {
+        "c": 86659072.0,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 0.2684690646121851,
+        "rust": 23265280.0,
+        "threshold": 1.15
+      },
+      "startup_ratio": {
+        "c": 251.5602179992129,
+        "operator": "<=",
+        "pass": true,
+        "ratio": 1.0003979444703246,
+        "rust": 251.66032499691937,
+        "threshold": 1.1
+      },
+      "throughput_ratio": {
+        "c": 5.456089614816877,
+        "operator": ">=",
+        "pass": true,
+        "ratio": 1.0000993445311852,
+        "rust": 5.456631647481765,
+        "threshold": 0.99
+      }
+    },
+    "reasons": [
+      "C cpu_percent coefficient of variation 0.086971 exceeds 0.050000",
+      "C peak_rss_bytes coefficient of variation 0.106652 exceeds 0.050000"
+    ],
+    "status": "inconclusive"
+  },
+  "preflight_seconds": 3.0,
+  "quick": false,
+  "repetitions": 3,
+  "rust_runs": [
+    {
+      "cpu_percent": 8.02478147169216,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.053,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 23355392.0,
+      "startup_ms": 251.64889799634693,
+      "throughput_mbps": 5.456631647481765
+    },
+    {
+      "cpu_percent": 8.19474665072282,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.055,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 23265280.0,
+      "startup_ms": 251.8044460011879,
+      "throughput_mbps": 5.456837674291336
+    },
+    {
+      "cpu_percent": 7.999239771050264,
+      "failover_gap_ms": 0.0,
+      "latency_ms": 0.057,
+      "packet_loss": 0.0,
+      "peak_rss_bytes": 23240704.0,
+      "startup_ms": 251.66032499691937,
+      "throughput_mbps": 5.456230593795674
+    }
+  ],
+  "workload": "srt-1080p25-5m"
+}
