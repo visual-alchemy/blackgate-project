@@ -1,0 +1,17 @@
+# Allow the dvls dev user to install OS packages for `make install`
+# without a password prompt. Package installation itself still needs root.
+#
+# Install (as root):
+#   sudo install -m 0440 -o root -g root \
+#     /home/dvls/blackgate-project/scripts/sudoers.d/blackgate-dev \
+#     /etc/sudoers.d/blackgate-dev
+#
+# Remove:
+#   sudo rm /etc/sudoers.d/blackgate-dev
+
+Cmnd_Alias BLACKGATE_PKG = /usr/bin/apt-get, \
+                           /usr/bin/apt, \
+                           /usr/bin/add-apt-repository, \
+                           /usr/bin/dpkg
+
+dvls ALL=(root) NOPASSWD: BLACKGATE_PKG

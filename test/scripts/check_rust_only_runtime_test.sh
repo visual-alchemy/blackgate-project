@@ -36,7 +36,7 @@ require_pattern() {
   local file="$1"
   local pattern="$2"
   local description="$3"
-  if [[ ! -f "$file" ]] || ! rg -q -- "$pattern" "$file"; then
+  if [[ ! -f "$file" ]] || ! grep -qF -- "$pattern" "$file"; then
     echo "missing workflow contract: $description" >&2
     exit 1
   fi
@@ -76,7 +76,7 @@ for contract in \
   require_pattern "$performance" "$contract" "$contract in performance workflow"
 done
 
-if rg -q '^[[:space:]]+(push|pull_request):' "$performance"; then
+if grep -qE '^[[:space:]]+(push|pull_request):' "$performance"; then
   echo "performance workflow must not run on push or pull request" >&2
   exit 1
 fi

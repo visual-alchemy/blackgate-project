@@ -21,7 +21,7 @@ require_exact() {
   local expected="$2"
 
   if [[ ! -f "$root/$file" ]] ||
-    ! rg --fixed-strings --line-regexp --quiet -- "$expected" "$root/$file"; then
+    ! grep -Fqx -- "$expected" "$root/$file"; then
     echo "$file missing required value: $expected" >&2
     return 1
   fi
@@ -58,7 +58,7 @@ require_exact .github/workflows/build-iso.yml '          elixir-version: 1.18.2'
 require_exact .github/workflows/build-iso.yml '          node-version: 20.19.0'
 require_exact .github/workflows/build-iso.yml '            https://releases.ubuntu.com/24.04.4/ubuntu-24.04.4-live-server-amd64.iso'
 
-if rg --quiet -- 'Ubuntu 22\.04|Jammy|ubuntu:jammy|/var/run/docker\.sock|Docker container|host networking' \
+if grep -Eq -- 'Ubuntu 22\.04|Jammy|ubuntu:jammy|/var/run/docker\.sock|Docker container|host networking' \
   "$root/iso-builder/build.sh" \
   "$root/iso-builder/autoinstall/user-data" \
   "$root/.github/workflows/build-iso.yml"; then
@@ -66,7 +66,7 @@ if rg --quiet -- 'Ubuntu 22\.04|Jammy|ubuntu:jammy|/var/run/docker\.sock|Docker 
   exit 1
 fi
 
-if rg --quiet -- 'apt(-get)? install[^\n]*rebar3|^[[:space:]]*rebar3[[:space:]\\]*$' "$root/Dockerfile"; then
+if grep -Eq -- 'apt(-get)? install.*rebar3|^[[:space:]]*rebar3[[:space:]\\]*$' "$root/Dockerfile"; then
   echo "Dockerfile must not install distro rebar3 because it pulls another OTP" >&2
   exit 1
 fi
