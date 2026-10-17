@@ -30,3 +30,28 @@ You MUST follow these steps in every session:
        - **Current Codebase State**
        - **Pending Tasks & Next Milestones**
      - Clear the files in `docs/memory/00-INBOX/` that you have fully processed.
+
+## Troubleshooting: a newly added route will not receive
+
+Check the stats socket before suspecting the route or the source. The Elixir node and
+every Rust engine talk over a Unix socket whose path is per environment
+(`Blackgate.stats_socket_path/0`: release `/tmp/hydra_unix_sock`, dev
+`/tmp/blackgate_stats_dev.sock`, test a per-run path; override with
+`BLACKGATE_STATS_SOCKET`). An engine that cannot reach it dies immediately with
+`pipeline: connect: Connection refused (os error 111)` and its route crash-loops,
+while routes whose engines connected earlier keep running — so the app looks half
+healthy. Symptom: `Connection refused` in
+`_build/prod/rel/blackgate/tmp/log/erlang.log.*` plus a socket file whose mtime does
+not match the node boot. Starting a second node is what caused it historically, so
+`make start` refuses while a node is alive and
+`Blackgate.Application.assert_stats_socket_free!/1` refuses to bind a path that
+already has a live listener.
+
+Distinguish the two remaining "route looks broken" cases:
+
+- Source really losing packets → `warning` badge, not a failed connection. Read
+  `loss-window-pct` (per interval), not the cumulative loss, which keeps a startup
+  burst forever.
+- Source silent or a wrong URI/passphrase → route stays `reconnecting` while the
+  engine itself is healthy; check with `ffprobe`/`ffmpeg` against the source URI
+  first.
