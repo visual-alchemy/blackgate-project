@@ -511,6 +511,11 @@ def run_engine_lifecycle(
         # The engines read BLACKGATE_STATS_SOCKET; BLACKGATE_BENCH_SOCKET was never read
         # by either engine, which is why runs had to bind the shared default path.
         env["BLACKGATE_STATS_SOCKET"] = str(socket_path)
+        # The benchmark plan deliberately does NOT request a preview ("preview" is absent
+        # from the init JSON), so the Rust engine runs as a pure streaming engine — the
+        # same thing the C engine measures, because the C engine only builds its thumbnail
+        # chain when the config asks for one. Enabling it here would charge the Rust side
+        # ~33 MB of H.264 decoder frame pool that the C run never allocates.
         start_time = time.monotonic()
         process = subprocess.Popen(
             [str(engine.resolve()), active_plan["route_id"]],

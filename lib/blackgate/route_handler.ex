@@ -1259,6 +1259,7 @@ defmodule Blackgate.RouteHandler do
                 "secondary_source" => secondary,
                 "active_source" => active_source_from_route(route),
                 "auto_join" => Map.get(route, "auto_join", true),
+                "preview" => true,
                 "sinks" => sinks
               }
 
@@ -1266,7 +1267,12 @@ defmodule Blackgate.RouteHandler do
               %{"source" => source, "sinks" => sinks}
           end
         else
-          %{"route_id" => route["id"], "source" => source, "sinks" => sinks}
+          %{
+            "route_id" => route["id"],
+            "source" => source,
+            "preview" => true,
+            "sinks" => sinks
+          }
         end
 
       with {:ok, params} <- Jason.encode(payload),

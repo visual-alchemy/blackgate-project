@@ -158,6 +158,12 @@ pub struct RouteConfig {
     /// keeps primary/secondary slots stable so later switch-source commands keep
     /// their meaning across an engine restart.
     pub active_source: Option<String>,
+    /// Build the preview/thumbnail branch. The C engine only builds its thumbnail
+    /// chain when the config asks for one, so the Rust engine must not infer it from
+    /// `route_id` alone: a benchmark or a headless route would otherwise pay ~33 MB of
+    /// decoder frame pool (measured: 51.9 MB vs 19.3 MB RSS on the udp-to-srt config)
+    /// that the C engine never allocates.
+    pub preview: bool,
 }
 
 impl RouteConfig {
@@ -181,6 +187,9 @@ struct ElixirInit {
     /// Persisted logical source selection after a switch (C lite 2061).
     #[serde(default)]
     active_source: Option<String>,
+    /// Dashboard preview request. Absent/false = no preview branch (see RouteConfig::preview).
+    #[serde(default)]
+    preview: bool,
     #[serde(default)]
     sinks: Option<Vec<serde_json::Value>>,
 }
@@ -506,6 +515,9 @@ struct SimpleInit {
     secondary: Option<serde_json::Value>,
     #[serde(default = "default_true")]
     auto_join: bool,
+    /// Preview request; test harnesses leave this off so they measure the pipeline alone.
+    #[serde(default)]
+    preview: bool,
 }
 
 impl RouteConfig {
@@ -550,6 +562,7 @@ impl RouteConfig {
             secondary,
             auto_join: init.auto_join,
             active_source: init.active_source,
+            preview: init.preview,
         })
     }
 
@@ -596,6 +609,7 @@ impl RouteConfig {
             auto_join: init.auto_join,
             // Simple/test shape carries no persisted selection; default to primary.
             active_source: None,
+            preview: init.preview,
         })
     }
 

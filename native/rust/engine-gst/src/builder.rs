@@ -168,7 +168,7 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
     // and without the branch show the same SRT receive loss, so the preview is
     // not what stalls the source — do not "fix" receive loss by removing it.
     let thumbnails_enabled = std::env::var("BLACKGATE_NO_THUMBNAIL").is_err();
-    let thumbnail = if !config.route_id.is_empty() && thumbnails_enabled {
+    let thumbnail = if config.preview && !config.route_id.is_empty() && thumbnails_enabled {
         match ThumbnailBranch::new(&pipeline, &tee, &config.route_id) {
             Ok(t) => {
                 println!("Thumbnail: Branch ready for route {}", config.route_id);
@@ -571,7 +571,7 @@ fn add_srt_sink(
     sink.set_property("wait-for-connection", false);
     println!("Configured SRT sink with async=FALSE, sync=TRUE, wait-for-connection=FALSE");
 
-    let queue = make_queue2();
+    let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
 
     // C: tsparse alignment=7 set-timestamps=TRUE before srtsink
     let tsparse = match gst::ElementFactory::make("tsparse")
@@ -632,7 +632,9 @@ fn add_udp_sink(
     sink.set_property("async", false);
     println!("Configured UDP sink with sync=FALSE, async=FALSE");
 
-    let queue = make_queue2();
+    // Same bounded decoupling buffer as the SRT sink branch: a UDP destination cannot
+    // back-pressure, so a 50 MB ring buffer only bought RSS, never smoothness.
+    let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
 
     pipeline
         .add_many([&queue, &sink])
@@ -642,16 +644,25 @@ fn add_udp_sink(
     Ok(())
 }
 
-/// C queue2 config for network sink branches: 50MB / 3s, no buffering.
-fn make_queue2() -> gst::Element {
+/// `queue2` for network sink branches. `max_bytes` / `max_time_ns` bound the branch's
+/// decoupling buffer: a small queue absorbs scheduling jitter without letting a
+/// destination that cannot keep up grow into tens of megabytes of RSS. The C engine has
+/// no queue here at all, so this stays deliberately modest — the old 50 MB / 3 s ring
+/// buffer cost ~47 MB of peak RSS on the udp-to-srt workload (70 MB vs 22.4 MB).
+fn make_queue2(max_bytes: u32, max_time_ns: u64) -> gst::Element {
     gst::ElementFactory::make("queue2")
         .property("use-buffering", false)
         .property("max-size-buffers", 0u32)
-        .property("max-size-bytes", 50 * 1024 * 1024u32)
-        .property("max-size-time", 3_000_000_000u64)
+        .property("max-size-bytes", max_bytes)
+        .property("max-size-time", max_time_ns)
         .build()
         .expect("queue2 factory must exist")
 }
+
+/// Decoupling buffer for an SRT destination branch: enough to ride out scheduling
+/// jitter, small enough that peak RSS stays in the C engine's range.
+const SINK_QUEUE_BYTES: u32 = 2 * 1024 * 1024;
+const SINK_QUEUE_TIME_NS: u64 = 500_000_000;
 
 // ── SDI sink branch (C add_sink_to_pipeline sdisink path) ───────────────
 
