@@ -7,6 +7,12 @@ defmodule Blackgate.RouteStatsRegistry do
   use GenServer
   @table_name :route_stats
 
+  # Engines report once per second. If nothing arrives for this long the route is not
+  # streaming, and the last row must not be served as live data: a dead route used to
+  # keep showing its final "healthy, 12 Mbps" numbers forever, which made a stopped
+  # route look alive in the dashboard and in debugging.
+  @stale_after_ms 5_000
+
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
   end
@@ -210,7 +216,18 @@ defmodule Blackgate.RouteStatsRegistry do
   def get_stats(route_id) when is_binary(route_id) do
     case :ets.lookup(@table_name, route_id) do
       [{^route_id, stats, timestamp}] ->
-        %{stats: stats, updated_at: timestamp}
+        stale? = System.system_time(:millisecond) - timestamp > @stale_after_ms
+
+        stats =
+          if stale? do
+            stats
+            |> Map.put("health", "disconnected")
+            |> Map.put("stale", true)
+          else
+            stats
+          end
+
+        %{stats: stats, updated_at: timestamp, stale: stale?}
 
       [] ->
         nil

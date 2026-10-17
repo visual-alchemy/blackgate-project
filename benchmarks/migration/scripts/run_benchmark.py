@@ -27,6 +27,19 @@ from render_report import render_report
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SOCKET = Path("/tmp/hydra_unix_sock")
+# The frozen C oracle hardcodes /tmp/hydra_unix_sock in its main.c, so C runs must
+# use that path. The Rust engine reads BLACKGATE_STATS_SOCKET, so it gets a private
+# path: a local benchmark run must never unlink the socket a running release is
+# listening on (that leaves the release bound to an unlinked inode and every engine
+# it spawns dies with ENOENT, looping forever in reconnect).
+RUST_SOCKET = Path("/tmp/blackgate_bench_stats.sock")
+
+
+def engine_socket(engine_name: str) -> Path:
+    """Socket the engine under test should dial. The C oracle is hardcoded to the
+    default path; the Rust engine gets its own so a local run never touches the
+    socket a live release is listening on."""
+    return RUST_SOCKET if engine_name == "rust" else DEFAULT_SOCKET
 PREFLIGHT_SECONDS = 3.0
 THRESHOLDS = ROOT / "benchmarks" / "migration" / "thresholds.json"
 WORKLOAD_DIR = ROOT / "benchmarks" / "migration" / "workloads"
@@ -68,19 +81,43 @@ class OutputPump:
 class SocketCollector:
     def __init__(self, path: Path) -> None:
         self.path = path
+        # Only a collector that actually bound the path may remove it: a failed
+        # start() must not let close() unlink a socket it never owned (that is how a
+        # live release's socket got deleted even when the guard above fired).
+        self.owns_path = False
         self.server: socket.socket | None = None
         self.connection: socket.socket | None = None
         self.parts: list[bytes] = []
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
 
+    def _has_live_listener(self) -> bool:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.settimeout(0.2)
+            probe.connect(str(self.path))
+            return True
+        except OSError:
+            return False
+        finally:
+            probe.close()
+
     def start(self) -> None:
         if self.path.exists() or self.path.is_symlink():
             if not stat.S_ISSOCK(self.path.lstat().st_mode):
                 raise RunnerError(f"refusing to replace non-socket path: {self.path}")
+            if self._has_live_listener():
+                raise RunnerError(
+                    f"{self.path} already has a live listener — a Blackgate release is "
+                    "probably running. Binding this path would unlink that listener's "
+                    "socket, and every engine the release starts would then fail with "
+                    "ENOENT and loop in reconnect. Stop the release (`make stop`) before "
+                    "benchmarking, or point this run at its own path."
+                )
             self.path.unlink()
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(str(self.path))
+        self.owns_path = True
         self.server.listen(1)
         self.server.settimeout(0.1)
         self.thread = threading.Thread(target=self._collect, daemon=True)
@@ -120,7 +157,7 @@ class SocketCollector:
                     pass
         if self.thread is not None:
             self.thread.join(timeout=1.0)
-        if self.path.exists() or self.path.is_symlink():
+        if self.owns_path and (self.path.exists() or self.path.is_symlink()):
             if stat.S_ISSOCK(self.path.lstat().st_mode):
                 self.path.unlink()
 
@@ -471,6 +508,9 @@ def run_engine_lifecycle(
         collector.start()
         env = os.environ.copy()
         env["BLACKGATE_BENCH_SOCKET"] = str(socket_path)
+        # The engines read BLACKGATE_STATS_SOCKET; BLACKGATE_BENCH_SOCKET was never read
+        # by either engine, which is why runs had to bind the shared default path.
+        env["BLACKGATE_STATS_SOCKET"] = str(socket_path)
         start_time = time.monotonic()
         process = subprocess.Popen(
             [str(engine.resolve()), active_plan["route_id"]],
@@ -668,7 +708,7 @@ def _run_workload(
                 engine_name,
                 engine,
                 workload,
-                DEFAULT_SOCKET,
+                engine_socket(engine_name),
                 PREFLIGHT_SECONDS,
                 plan=plan,
                 warmup_seconds=0.0,
@@ -685,7 +725,7 @@ def _run_workload(
                 engine_name,
                 engine,
                 workload,
-                DEFAULT_SOCKET,
+                engine_socket(engine_name),
                 warmup + measurement,
                 plan=plan,
                 warmup_seconds=warmup,
