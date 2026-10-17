@@ -1,0 +1,19 @@
+# Narrow sudoers drop-in so a dev user can run the package step unattended.
+# Replace <user> with the dev account and keep only the package managers present on
+# the host. Hand this to the user as ONE copy-paste command for their own terminal —
+# never ask them to paste a password into chat.
+#
+# Never grant ALL=(ALL) NOPASSWD:ALL, and never put a shell interpreter (bash, sh) in
+# the alias: either is equivalent to unrestricted root.
+#
+# Install as root:
+#   visudo -cf <this file>            # validate syntax first
+#   install -m 0440 -o root -g root <this file> /etc/sudoers.d/<name>
+# Remove with: rm /etc/sudoers.d/<name>
+
+Cmnd_Alias BLACKGATE_PKG = /usr/bin/apt-get, \
+                           /usr/bin/apt, \
+                           /usr/bin/add-apt-repository, \
+                           /usr/bin/dpkg
+
+<user> ALL=(root) NOPASSWD: BLACKGATE_PKG
