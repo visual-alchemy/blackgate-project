@@ -249,10 +249,53 @@ fn make_source(
     }
 
     if cfg.element_type == "srtsrc" {
+        if std::env::var("BLACKGATE_DUMP_PROPS").is_ok() {
+            dump_element_props(&src);
+        }
         connect_caller_connecting(&src, name, ctx.socket.clone());
     }
 
     Ok(src)
+}
+
+/// Diagnostic dump of every effective property of an element as `PROP name=value`
+/// lines, so the Rust engine's source setup can be diffed against the C engine's
+/// (set `BLACKGATE_DUMP_PROPS=1`; blackgate-lite's `set_element_properties` prints the
+/// same format). Kept because the C and Rust engines are meant to configure the same
+/// GStreamer elements identically, and this is how that is verified.
+fn dump_element_props(el: &gst::Element) {
+    let mut lines: Vec<String> = el
+        .list_properties()
+        .iter()
+        // Write-only properties (srtsrc's `passphrase`) panic on read.
+        .filter(|pspec| pspec.flags().contains(gst::glib::ParamFlags::READABLE))
+        .map(|pspec| {
+            let name = pspec.name().to_string();
+            let value = el.property_value(&name);
+            let rendered = if let Ok(s) = value.get::<String>() {
+                s
+            } else if let Ok(b) = value.get::<bool>() {
+                b.to_string()
+            } else if let Ok(i) = value.get::<i32>() {
+                i.to_string()
+            } else if let Ok(u) = value.get::<u32>() {
+                u.to_string()
+            } else if let Ok(i) = value.get::<i64>() {
+                i.to_string()
+            } else if let Ok(u) = value.get::<u64>() {
+                u.to_string()
+            } else if let Ok(f) = value.get::<f64>() {
+                f.to_string()
+            } else {
+                format!("{:?}", value)
+            };
+            format!("PROP {}={}", name, rendered)
+        })
+        .collect();
+    lines.sort();
+    for line in lines {
+        println!("{}", line);
+    }
 }
 
 fn apply_uri_and_props(el: &gst::Element, cfg: &SourceConfig) -> Result<(), String> {
