@@ -276,6 +276,35 @@ defmodule Blackgate.UnixSockHandlerTest do
     assert String.ends_with?(Blackgate.stats_socket_path(), ".sock")
   end
 
+  test "assert_stats_socket_free!/1 refuses a path that already has a listener" do
+    path = Path.join(System.tmp_dir!(), "blackgate_sock_probe_#{System.pid()}.sock")
+    File.rm(path)
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, ip: {:local, path}, active: false])
+
+    assert_raise RuntimeError, ~r/already has a live listener/, fn ->
+      Blackgate.Application.assert_stats_socket_free!(path)
+    end
+
+    :gen_tcp.close(listener)
+    File.rm(path)
+  end
+
+  test "assert_stats_socket_free!/1 accepts a missing path and a stale file" do
+    missing = Path.join(System.tmp_dir!(), "blackgate_sock_missing_#{System.pid()}.sock")
+    File.rm(missing)
+    assert :ok = Blackgate.Application.assert_stats_socket_free!(missing)
+
+    # A leftover socket file with no listener behind it is what a crashed node
+    # leaves; Ranch unlinks it when binding, so it must not block startup.
+    stale = Path.join(System.tmp_dir!(), "blackgate_sock_stale_#{System.pid()}.sock")
+    File.rm(stale)
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, ip: {:local, stale}, active: false])
+    :gen_tcp.close(listener)
+
+    assert :ok = Blackgate.Application.assert_stats_socket_free!(stale)
+    File.rm(stale)
+  end
+
   test "norm_names with various special characters" do
     assert "test_metric_name" = UnixSockHandler.norm_names("test-metric-name")
     assert "test_metric_name" = UnixSockHandler.norm_names("test.metric.name")

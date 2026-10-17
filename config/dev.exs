@@ -42,6 +42,11 @@ config :blackgate, BlackgateWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :blackgate, dev_routes: true
 
+# Development binds its own stats socket: sharing /tmp/hydra_unix_sock with a
+# running release would unlink the release's listener and every new engine would
+# fail to connect.
+config :blackgate, stats_socket_path: "/tmp/blackgate_stats_dev.sock"
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :console,
   format: "$time [$level] $message $metadata\n",

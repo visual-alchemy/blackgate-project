@@ -75,3 +75,10 @@ if config_env() != :test do
       version: :v2
   end
 end
+
+# Operator override for the stats socket the engines dial. Read at runtime (not at
+# compile time) so a release can be pointed elsewhere without a rebuild; when it is
+# unset the per-environment path from config/{dev,test,config}.exs stands.
+if stats_socket = System.get_env("BLACKGATE_STATS_SOCKET") do
+  config :blackgate, stats_socket_path: stats_socket
+end

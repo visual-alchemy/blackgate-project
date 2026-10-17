@@ -20,6 +20,9 @@ defmodule Blackgate.Application do
     runtime_schedulers = System.schedulers_online()
     Logger.info("Runtime schedulers: #{runtime_schedulers}")
 
+    stats_socket = Blackgate.stats_socket_path()
+    assert_stats_socket_free!(stats_socket)
+
     {:ok, ranch_listener} =
       :ranch.start_listener(
         :hydra_unix_sock,
@@ -28,7 +31,7 @@ defmodule Blackgate.Application do
           max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS") || "75000"),
           num_acceptors: String.to_integer(System.get_env("NUM_ACCEPTORS") || "100"),
           socket_opts: [
-            ip: {:local, Blackgate.stats_socket_path()},
+            ip: {:local, stats_socket},
             port: 0,
             keepalive: true
           ]
@@ -70,5 +73,33 @@ defmodule Blackgate.Application do
   @impl true
   def stop(_state) do
     Logger.info("Stopping application")
+  end
+
+  @doc """
+  Refuses to start when another node is already listening on the stats socket.
+
+  Binding a path that already has a live listener unlinks that listener's socket
+  (the file then points at a dead socket), and every engine the running node
+  starts afterwards dies with `connect: Connection refused (os error 111)` while
+  routes whose engines are already connected keep working — a silent, very
+  confusing failure. A leftover file with no listener is fine: Ranch unlinks it
+  when binding.
+  """
+  @spec assert_stats_socket_free!(String.t()) :: :ok
+  def assert_stats_socket_free!(path) do
+    case :gen_tcp.connect({:local, path}, 0, [:binary], 200) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+
+        raise """
+        #{path} already has a live listener: another Blackgate node is running on
+        this host. Stop it first (`make stop`) — binding the same path would unbind
+        the running node's socket, and every engine it starts afterwards would fail
+        to connect with ECONNREFUSED.
+        """
+
+      {:error, _} ->
+        :ok
+    end
   end
 end
