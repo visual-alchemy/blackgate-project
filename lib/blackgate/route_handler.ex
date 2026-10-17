@@ -101,6 +101,7 @@ defmodule Blackgate.RouteHandler do
            | port: port,
              ffmpeg_port: ffmpeg_port,
              started_at: now,
+             last_bytes_received: 0,
              last_bytes_changed_at: now,
              last_sdi_frames_changed_at: now,
              last_sdi_frames: %{},
@@ -297,12 +298,17 @@ defmodule Blackgate.RouteHandler do
             %{}
           end
 
-        # 1. Evaluate Network Bytes
+        # 1. Evaluate Network Bytes.
+        # `total-bytes-received` is cumulative, but it is per engine process and
+        # per SRT socket: it restarts near 0 when the engine restarts or the SRT
+        # session is re-created. Only a FROZEN counter is a stall — treating any
+        # decrease as "no data" made the watchdog kill a healthy pipeline 60s
+        # after such a reset.
         {last_bytes_received, last_bytes_changed_at} =
-          if current_bytes > data.last_bytes_received do
-            {current_bytes, now}
-          else
+          if current_bytes == data.last_bytes_received do
             {data.last_bytes_received, data.last_bytes_changed_at}
+          else
+            {current_bytes, now}
           end
 
         # 2. Evaluate Playout Frames (only if SDI destination is present)
@@ -857,18 +863,21 @@ defmodule Blackgate.RouteHandler do
     primary_bytes = (primary && Map.get(primary, "total-bytes-received", 0)) || 0
     secondary_bytes = (secondary && Map.get(secondary, "total-bytes-received", 0)) || 0
 
+    # Same rule as the watchdog: any movement counts as activity, because the
+    # cumulative counters reset when the engine restarts or an SRT session is
+    # re-created. Only a frozen counter means the source stopped.
     last_bytes_changed_at =
-      if primary_bytes > (data.last_bytes_received || 0) do
-        now
-      else
+      if primary_bytes == (data.last_bytes_received || 0) do
         data.last_bytes_changed_at
+      else
+        now
       end
 
     last_secondary_bytes_at =
-      if secondary_bytes > (data.last_secondary_bytes_received || 0) do
-        now
-      else
+      if secondary_bytes == (data.last_secondary_bytes_received || 0) do
         data.last_secondary_bytes_at
+      else
+        now
       end
 
     primary_health = classify_health(primary, last_bytes_changed_at, now)

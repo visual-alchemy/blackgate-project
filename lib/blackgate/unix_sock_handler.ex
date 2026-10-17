@@ -79,6 +79,43 @@ defmodule Blackgate.UnixSockHandler do
   def handle_event(:info, {:tcp, _port, "\n"}, _state, _data), do: :keep_state_and_data
   def handle_event(:info, {:tcp, _port, ""}, _state, _data), do: :keep_state_and_data
 
+  # Each sink record is written as prefix + JSON + newline (the C engine does the
+  # same), so a socket chunk can end right after the "stats_sink:" prefix.
+  # Remember it and route the next chunk to the sink slot; otherwise the orphaned
+  # JSON is parsed as SOURCE stats, which corrupted the source slot (health
+  # flapped to "disconnected" and the stall watchdog read the byte counter as 0).
+  def handle_event(:info, {:tcp, _port, "stats_sink:"}, _state, data) do
+    {:keep_state, Map.put(data, :pending_sink, true)}
+  end
+
+  def handle_event(:info, {:tcp, _port, "{" <> _ = message}, _state, data)
+      when is_map_key(data, :pending_sink) do
+    if is_binary(data.route_id) do
+      case Jason.decode(message) do
+        {:ok, stats} ->
+          Blackgate.RouteStatsRegistry.put_sink_stats(
+            data.route_id,
+            stats["sink-index"] || 0,
+            stats
+          )
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:keep_state, Map.delete(data, :pending_sink)}
+  end
+
+  # The engine writes each message newline-terminated, but its writer can flush
+  # the previous message's terminator in the same TCP chunk as the next payload,
+  # so a chunk arrives as "\nstats_sink:{...}" or "\n{...}". Without this the
+  # leading newline matches no clause and the payload falls into the catch-all
+  # below, silently dropping the stats (observed: 54 dropped sink-stat messages).
+  def handle_event(:info, {:tcp, port, "\n" <> rest}, state, data) when rest != "" do
+    handle_event(:info, {:tcp, port, rest}, state, data)
+  end
+
   def handle_event(
         :info,
         {:tcp, _port, "{" <> _ = message},

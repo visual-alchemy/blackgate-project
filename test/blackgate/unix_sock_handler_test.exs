@@ -112,6 +112,72 @@ defmodule Blackgate.UnixSockHandlerTest do
     assert new_data.source_stream_id == ""
   end
 
+  test "handle_event re-dispatches a sink payload that follows a newline" do
+    # The engine can flush the previous message's terminator in the same chunk
+    # as the next payload ("\nstats_sink:{...}"). Dropping that silently lost
+    # every sink stat whenever the chunk boundary landed there.
+    route_id = "newline_sink_route"
+    json = ~s({"sink-index":0,"bytes-sent-total":1234})
+    message = {:tcp, nil, "\nstats_sink:" <> json}
+    state = :exchange
+    data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: route_id, route_record: nil}
+
+    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+
+    assert %{stats: %{"bytes-sent-total" => 1234}} =
+             Blackgate.RouteStatsRegistry.get_sink_stats(route_id, 0)
+  end
+
+  test "handle_event re-dispatches a source payload that follows a newline" do
+    route_id = "newline_source_route"
+    json = ~s({"total-bytes-received":4321})
+    message = {:tcp, nil, "\n" <> json}
+    state = :exchange
+
+    data = %{
+      sock: nil,
+      trans: nil,
+      source_stream_id: nil,
+      route_id: route_id,
+      route_record: %{"exportStats" => false, "name" => "newline source"}
+    }
+
+    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+
+    assert %{stats: %{"total-bytes-received" => 4321}} =
+             Blackgate.RouteStatsRegistry.get_stats(route_id)
+  end
+
+  test "handle_event routes a sink payload whose prefix was split into another chunk" do
+    # Chunk boundaries can land between "stats_sink:" and its JSON. The orphaned
+    # JSON used to be parsed as SOURCE stats, overwriting the source slot.
+    route_id = "split_sink_route"
+    state = :exchange
+    data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: route_id, route_record: nil}
+
+    assert {:keep_state, data} =
+             UnixSockHandler.handle_event(:info, {:tcp, nil, "stats_sink:"}, state, data)
+
+    assert {:keep_state, _data} =
+             UnixSockHandler.handle_event(
+               :info,
+               {:tcp, nil, ~s({"sink-index":0,"bytes-sent-total":77})},
+               state,
+               data
+             )
+
+    assert %{stats: %{"bytes-sent-total" => 77}} =
+             Blackgate.RouteStatsRegistry.get_sink_stats(route_id, 0)
+
+    # The source slot must be untouched by sink data.
+    assert Blackgate.RouteStatsRegistry.get_stats(route_id) == nil
+  end
+
+  test "handle_event ignores a bare newline" do
+    assert :keep_state_and_data =
+             UnixSockHandler.handle_event(:info, {:tcp, nil, "\n"}, :exchange, %{})
+  end
+
   test "handle_event with undefined message" do
     message = {:tcp, nil, "undefined_message"}
     state = :exchange
