@@ -165,6 +165,12 @@ defmodule Blackgate.ProcessMonitor do
     virtual_bytes = vsz * 1024
     swap_bytes = read_proc_swap(pid)
 
+    # Linux parsers must expose the same key set as the darwin ones — the
+    # ProcessMonitor tests (and API consumers) expect swap_percent alongside
+    # swap_bytes. Keep the darwin formula for cross-platform consistency.
+    swap_percent =
+      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
+
     start_time_parts = Enum.slice(parts, 6..11)
     start_time = Enum.join(start_time_parts, " ")
 
@@ -179,6 +185,7 @@ defmodule Blackgate.ProcessMonitor do
       memory_bytes: memory_bytes,
       virtual_memory: format_memory(virtual_bytes),
       swap: format_memory(swap_bytes),
+      swap_percent: swap_percent,
       swap_bytes: swap_bytes,
       user: user,
       start_time: start_time,
@@ -202,6 +209,10 @@ defmodule Blackgate.ProcessMonitor do
     virtual_memory = format_memory(virtual_bytes)
     resident_memory = format_memory(memory_bytes)
 
+    # Same key set as the darwin detailed parser (see parse_process_linux).
+    swap_percent =
+      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
+
     cpu_time = Enum.at(parts, 5)
     state = Enum.at(parts, 6)
     ppid = Enum.at(parts, 7) |> String.to_integer()
@@ -221,6 +232,7 @@ defmodule Blackgate.ProcessMonitor do
       virtual_memory: virtual_memory,
       resident_memory: resident_memory,
       swap: format_memory(swap_bytes),
+      swap_percent: swap_percent,
       swap_bytes: swap_bytes,
       cpu_time: cpu_time,
       state: state,
