@@ -1,0 +1,12 @@
+[package]
+name = "spike-sdi-sink"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gstreamer = "0.22"
+gstreamer-app = "0.22"
+anyhow = "1"
+
+# Standalone experiment: deliberately NOT a member of the native/rust workspace.
+[workspace]

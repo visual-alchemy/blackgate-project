@@ -111,15 +111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "engine-shadow"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "engine-stats"
 version = "0.1.0"
 dependencies = [
@@ -600,26 +591,6 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
-
-[[package]]
-name = "spike-sdi-sink"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gstreamer",
- "gstreamer-app",
-]
-
-[[package]]
-name = "spike-srt-passthrough"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gstreamer",
- "gstreamer-app",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "syn"

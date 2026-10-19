@@ -62,3 +62,6 @@ docs/superpowers/skills/
 
 # === Local dev helpers (machine-specific, never commit) ===
 /scripts/sudoers.d/
+
+# Generated code-graph output (stale by construction; regenerate instead of committing).
+graphify-out/

@@ -168,7 +168,7 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
     // and without the branch show the same SRT receive loss, so the preview is
     // not what stalls the source — do not "fix" receive loss by removing it.
     let thumbnails_enabled = std::env::var("BLACKGATE_NO_THUMBNAIL").is_err();
-    let thumbnail = if config.preview && !config.route_id.is_empty() && thumbnails_enabled {
+    let thumbnail = if preview_requested(config, thumbnails_enabled) {
         match ThumbnailBranch::new(&pipeline, &tee, &config.route_id) {
             Ok(t) => {
                 println!("Thumbnail: Branch ready for route {}", config.route_id);
@@ -659,10 +659,24 @@ fn make_queue2(max_bytes: u32, max_time_ns: u64) -> gst::Element {
         .expect("queue2 factory must exist")
 }
 
+/// Whether the preview/thumbnail branch belongs in this pipeline.
+///
+/// The C engine builds its thumbnail chain only when the config asks for one, so this must
+/// not be inferred from `route_id` alone: a headless route or a benchmark run would
+/// otherwise pay ~33 MB of H.264 decoder frame pool that the C run never allocates
+/// (measured: 51.9 MB vs 19.3 MB peak RSS on the udp-to-srt config). `env_allows` carries
+/// `BLACKGATE_NO_THUMBNAIL`; keeping it a parameter is what makes this testable.
+fn preview_requested(config: &RouteConfig, env_allows: bool) -> bool {
+    config.preview && !config.route_id.is_empty() && env_allows
+}
+
 /// Decoupling buffer for an SRT destination branch: enough to ride out scheduling
 /// jitter, small enough that peak RSS stays in the C engine's range.
 const SINK_QUEUE_BYTES: u32 = 2 * 1024 * 1024;
 const SINK_QUEUE_TIME_NS: u64 = 500_000_000;
+// Compile-time guard: a destination that cannot keep up must never grow tens of MB again.
+// The old 50 MB / 3 s ring buffer cost ~47 MB of peak RSS on the udp-to-srt workload.
+const _: () = assert!(SINK_QUEUE_BYTES <= 4 * 1024 * 1024);
 
 // ── SDI sink branch (C add_sink_to_pipeline sdisink path) ───────────────
 
@@ -1214,5 +1228,36 @@ mod tests {
 
         assert!(!el.property::<bool>("sync"));
         assert_eq!(el.property::<i32>("num-buffers"), 3);
+    }
+
+    fn config_with(route_id: &str, preview: bool) -> RouteConfig {
+        let json = format!(
+            r#"{{"route_id":"{}","source":{{"type":"udpsrc","uri":"udp://127.0.0.1:5000"}},"sinks":[],"preview":{}}}"#,
+            route_id, preview
+        );
+        RouteConfig::from_elixir_json(&json).expect("test config must parse")
+    }
+
+    // Regression: the branch used to be built whenever route_id was non-empty, so every
+    // headless route and benchmark run paid ~33 MB of decoder frame pool the C engine
+    // never allocates. It must follow the config, and the env override must still win.
+    #[test]
+    fn preview_branch_is_built_only_when_the_config_asks() {
+        assert!(preview_requested(&config_with("route-1", true), true));
+        assert!(!preview_requested(&config_with("route-1", false), true));
+        assert!(!preview_requested(&config_with("route-1", true), false));
+        assert!(!preview_requested(&config_with("", true), true));
+    }
+
+    // The old branch used a 50 MB / 3 s ring buffer. It was not the cause of the RSS
+    // regression (the preview branch was), but the bound itself was never justified: a
+    // UDP or SRT destination that cannot keep up must not be able to grow tens of MB.
+    #[test]
+    fn sink_queue_budget_stays_small() {
+        gst::init().unwrap();
+        let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
+        assert_eq!(queue.property::<u32>("max-size-bytes"), 2 * 1024 * 1024);
+        assert_eq!(queue.property::<u64>("max-size-time"), 500_000_000);
+        assert_eq!(queue.property::<u32>("max-size-buffers"), 0);
     }
 }

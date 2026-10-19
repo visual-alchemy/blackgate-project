@@ -1,0 +1,14 @@
+/home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/deps/serde-f52985415226fb38.d: /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/build/serde-dd75b415ecc25820/out/private.rs
+
+/home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/deps/libserde-f52985415226fb38.rlib: /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/build/serde-dd75b415ecc25820/out/private.rs
+
+/home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/deps/libserde-f52985415226fb38.rmeta: /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/build/serde-dd75b415ecc25820/out/private.rs
+
+/home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/dvls/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/build/serde-dd75b415ecc25820/out/private.rs:
+
+# env-dep:OUT_DIR=/home/dvls/blackgate-project/native/rust/tools/engine-shadow/target/debug/build/serde-dd75b415ecc25820/out

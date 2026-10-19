@@ -34,6 +34,43 @@ fn stats_socket_path(shadow: bool) -> String {
     }
 }
 
+/// Parsed stdin command. The C engine dispatches on the same strings, so this is the wire
+/// contract: the Elixir RouteHandler sends it, `ipc_smoke.py` sends it. Pure by design — a
+/// regression here used to surface only as a route that stopped responding, with nothing in
+/// `cargo test` to catch it.
+#[derive(Debug)]
+enum Command {
+    SwitchSource(SourceTarget),
+    JoinSecondary,
+    LeaveSecondary,
+    StopRoute,
+    Unknown(String),
+    Invalid,
+}
+
+fn parse_command(line: &str) -> Command {
+    let value: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return Command::Invalid,
+    };
+
+    match value["command"].as_str() {
+        Some("switch-source") => {
+            let target = value["target"].as_str().unwrap_or("primary");
+            Command::SwitchSource(if target == "secondary" {
+                SourceTarget::Secondary
+            } else {
+                SourceTarget::Primary
+            })
+        }
+        Some("join-secondary") => Command::JoinSecondary,
+        Some("leave-secondary") => Command::LeaveSecondary,
+        Some("stop-route") => Command::StopRoute,
+        Some(other) => Command::Unknown(other.to_string()),
+        None => Command::Invalid,
+    }
+}
+
 fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
     let socket_path = stats_socket_path(shadow);
     match UnixStream::connect(&socket_path) {
@@ -184,56 +221,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
 
-            let cmd: serde_json::Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("Bad command JSON: {}", e);
-                    continue;
+            match parse_command(trimmed) {
+                Command::Invalid => {
+                    eprintln!("Bad command JSON: {}", trimmed);
                 }
-            };
-
-            let mut sel_guard = match selector_for_stdin.lock() {
-                Ok(g) => g,
-                Err(_) => continue,
-            };
-
-            match cmd["command"].as_str() {
-                Some("switch-source") => {
-                    let target = cmd["target"].as_str().unwrap_or("primary");
-                    match sel_guard.as_mut() {
-                        Some(sel) => {
-                            let tgt = if target == "secondary" {
-                                SourceTarget::Secondary
-                            } else {
-                                SourceTarget::Primary
-                            };
-                            sel.switch_to(tgt);
-                        }
-                        None => {
-                            eprintln!("switch_source: not a dual-ingest pipeline");
-                        }
-                    }
-                }
-                Some("join-secondary") => {
-                    if let Some(sel) = sel_guard.as_mut() {
-                        sel.join_secondary();
-                    }
-                }
-                Some("leave-secondary") => {
-                    if let Some(sel) = sel_guard.as_mut() {
-                        sel.leave_secondary();
-                    }
-                }
-                Some("stop-route") => {
+                Command::StopRoute => {
                     eprintln!("[rust-engine] stop-route received, shutting down pipeline");
                     stop_for_stdin.store(true, Ordering::Relaxed);
                     return;
                 }
-                Some(other) => {
+                Command::Unknown(other) => {
                     eprintln!("Unknown command: {}", other);
                 }
-                None => {
-                    eprintln!("Bad command JSON: {}", trimmed);
+                cmd => {
+                    let mut sel_guard = match selector_for_stdin.lock() {
+                        Ok(g) => g,
+                        Err(_) => continue,
+                    };
+                    match (cmd, sel_guard.as_mut()) {
+                        (Command::SwitchSource(tgt), Some(sel)) => sel.switch_to(tgt),
+                        (Command::SwitchSource(_), None) => {
+                            eprintln!("switch_source: not a dual-ingest pipeline");
+                        }
+                        (Command::JoinSecondary, Some(sel)) => sel.join_secondary(),
+                        (Command::LeaveSecondary, Some(sel)) => sel.leave_secondary(),
+                        // join/leave on a single-source pipeline: nothing to join.
+                        _ => {}
+                    }
                 }
             }
             let _ = std::io::stdout().flush();
@@ -254,4 +268,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Socket closed.");
     eprintln!("[rust-engine] shutdown complete");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_every_command_the_control_plane_sends() {
+        assert!(matches!(
+            parse_command(r#"{"command":"switch-source","target":"secondary"}"#),
+            Command::SwitchSource(SourceTarget::Secondary)
+        ));
+        assert!(matches!(
+            parse_command(r#"{"command":"switch-source","target":"primary"}"#),
+            Command::SwitchSource(SourceTarget::Primary)
+        ));
+        // route_handler omits the target when switching back, so primary is the default.
+        assert!(matches!(
+            parse_command(r#"{"command":"switch-source"}"#),
+            Command::SwitchSource(SourceTarget::Primary)
+        ));
+        assert!(matches!(
+            parse_command(r#"{"command":"join-secondary"}"#),
+            Command::JoinSecondary
+        ));
+        assert!(matches!(
+            parse_command(r#"{"command":"leave-secondary"}"#),
+            Command::LeaveSecondary
+        ));
+        assert!(matches!(
+            parse_command(r#"{"command":"stop-route"}"#),
+            Command::StopRoute
+        ));
+    }
+
+    #[test]
+    fn reports_unknown_and_malformed_commands_instead_of_wedging() {
+        assert!(
+            matches!(parse_command(r#"{"command":"warp-speed"}"#), Command::Unknown(ref s) if s == "warp-speed")
+        );
+        assert!(matches!(
+            parse_command(r#"{"target":"primary"}"#),
+            Command::Invalid
+        ));
+        assert!(matches!(parse_command("not json at all"), Command::Invalid));
+        assert!(matches!(parse_command(""), Command::Invalid));
+    }
 }
