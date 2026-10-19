@@ -16,6 +16,21 @@ export ERL_ROOT := $(TOOLCHAIN)/otp
 install:
 	@set -e; \
 	echo "=============================================="; \
+	echo "Step 0: Fresh host prerequisites"; \
+	echo "=============================================="; \
+	echo "This target installs everything the project builds against, but these must already"; \
+	echo "exist, because they are needed before 'make' can run at all:"; \
+	echo "  make   (package: make)      to invoke this target"; \
+	echo "  git, or a copy of the repo  to get the code here"; \
+	echo "  sudo + network              for the package-manager step below"; \
+	echo "Bare Ubuntu 24.04 server:  sudo apt-get update && sudo apt-get install -y make git"; \
+	echo "Step 3 needs no sudo: the pinned toolchains land in ~/.blackgate/toolchain."; \
+	echo ""; \
+	if [ "$$(uname)" = "Linux" ] && command -v apt-get >/dev/null && ! command -v sudo >/dev/null; then \
+		echo "ERROR: sudo is missing and the apt step needs it."; \
+		exit 1; \
+	fi; \
+	echo "=============================================="; \
 	echo "Step 1: Checking repository toolchain contract..."; \
 	echo "=============================================="; \
 	bash scripts/check_toolchain_contract.sh; \
@@ -67,7 +82,7 @@ install:
 		grep -q 'Erlang/OTP 27 .*erts-15.0.1' || { echo "Erlang/OTP must be 27.0.1"; exit 1; }; \
 	rustc --version | grep -q '^rustc 1.96.0 ' || { echo "Rust must be 1.96.0"; exit 1; }; \
 	test "$$(node --version)" = "v20.19.0" || { echo "Node must be v20.19.0"; exit 1; }; \
-	command -v rg >/dev/null || { echo "ripgrep missing (needed by scripts/check_toolchain_contract.sh)"; exit 1; }; \
+	command -v rg >/dev/null || { echo "ripgrep missing (installed by step 2; expected on PATH for the project's tooling)"; exit 1; }; \
 	echo "Toolchains verified."; \
 	echo ""; \
 	echo "=============================================="; \

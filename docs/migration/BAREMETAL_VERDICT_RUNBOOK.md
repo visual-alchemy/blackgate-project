@@ -40,9 +40,10 @@ Does NOT travel (re-create on the new machine):
 git clone <repo> blackgate-project && cd blackgate-project
 git checkout rust-migration
 
-# 1. Toolchain + system packages. Pins OTP 27.0.1 / Elixir 1.18.2 / Node 20.19.0 /
-#    Rust 1.96.0 under ~/.blackgate/toolchain and installs the GStreamer, SRT and
-#    cJSON dev packages the engines need. Needs sudo.
+# 1. Toolchain + system packages. On a bare Ubuntu 24.04 host, `make` and `git` must exist
+#    first (sudo apt-get install -y make git); step 0 of the target reminds you. It then pins
+#    OTP 27.0.1 / Elixir 1.18.2 / Node 20.19.0 / Rust 1.96.0 under ~/.blackgate/toolchain and
+#    installs the GStreamer, SRT, cJSON and ffmpeg packages. Needs sudo.
 make install
 
 # 2. SRT receive/send buffers: without this, high-bitrate SRT drops packets.

@@ -316,12 +316,22 @@ sequenceDiagram
 ### One-Command Installation
 
 ```bash
+# On a bare Ubuntu 24.04 server, first install the two packages make needs to run at all
+# (skip if already present):
+sudo apt-get update && sudo apt-get install -y make git
+
 # Clone the repository
 git clone https://github.com/visual-alchemy/blackgate-project.git
 cd blackgate-project
 
-# Install everything (system libs + elixir + frontend)
+# Install everything else: build tools, GStreamer 1.24, SRT, cJSON, ffmpeg, ripgrep,
+# the pinned OTP/Elixir/Node/Rust toolchains (SHA256-verified, no sudo), Elixir deps
+# and `npm ci`. Step 0 prints the prerequisites above before it starts.
 make install
+
+# Kernel UDP buffers, so SRT does not drop packets at high bitrate. The appliance image
+# sets these at first boot; a development host must do it once (survives until reboot).
+sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
 
 # Start development servers
 make dev-all
@@ -330,29 +340,31 @@ make dev-all
 Access: http://localhost:5173  
 Default credentials: `admin` / `password123`
 
+`make install` is the only installation step a fresh Ubuntu 24.04 host needs. It is
+idempotent, and it reuses any pinned toolchain already on PATH.
+
 ### Manual Installation
 
 #### Ubuntu 24.04 LTS
 
+There is no second package list to keep in sync: `make install` performs exactly this. The
+authoritative system-package list is the `apt-get install` line in the `install` target of the
+`Makefile`.
+
 ```bash
-# 1. Enable Universe Repo & Update
-sudo add-apt-repository universe
+# 1. Enable Universe (already default on 24.04) and update
+sudo add-apt-repository -y universe || true
 sudo apt-get update
 
-# 2. Install Rust/GStreamer build and runtime libraries
-sudo apt-get install -y build-essential pkg-config git curl ffmpeg \
-  libglib2.0-dev libgstreamer1.0-dev \
-  libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
-  gstreamer1.0-tools gstreamer1.0-plugins-base \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  gstreamer1.0-libav gstreamer1.0-vaapi libsrt-gnutls-dev
+# 2. System packages: build tools, GStreamer 1.24 (base/good/bad/libav/vaapi), SRT, cJSON,
+#    ffmpeg (the RTMP/HTTP/HLS sidecar needs it) and ripgrep.
 
-# 3. Install exact versions declared by repository
-# Use mise/asdf for .tool-versions and rustup for rust-toolchain.toml.
-mise install
-rustup toolchain install 1.96.0 --component clippy,rustfmt
+# 3. Pinned toolchains — no mise/asdf/rustup required. `make install` downloads
+#    OTP 27.0.1, Elixir 1.18.2, Node 20.19.0 and Rust 1.96.0 (SHA256-verified) into
+#    ~/.blackgate/toolchain and records the PATH export in ~/.bashrc / ~/.profile.
+#    Anything already on PATH at the exact pinned version is reused, never clobbered.
 
-# 4. Install project dependencies
+# 4. Project dependencies (hex/rebar, mix deps, npm ci)
 make install
 ```
 
