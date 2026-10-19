@@ -127,3 +127,15 @@ inside its gate *and* every metric's CV <= 5%. On a 4-vCPU KVM guest with 3 GB R
 metrics passed while 5 of 6 workloads stayed `inconclusive` purely on CV — the C reference's
 own CPU/RSS variance plus Rust's `latency_ms` CV on sub-0.06 ms values (~7 microsecond
 jitter). Bare-metal Ubuntu 24.04 amd64 is the documented home for this evidence.
+
+## Start here on a new machine
+
+Read, in order: `docs/migration/RUST_ONLY_BRANCH.md` (branch identity, the guards that enforce
+Rust-only runtime, the rules for working here, and operating notes for the release), then
+`docs/migration/RUST_MIGRATION_STATUS.md` (what remains open) and, when the work is the
+performance verdict, `docs/migration/BAREMETAL_VERDICT_RUNBOOK.md`. Agent-facing procedures are
+in `docs/skills/`. Everything in `docs/archive/` is retired — never treat it as current.
+
+If the live release is running and you are about to run a benchmark, a smoke test or any script
+that binds a stats socket: stop it first, or make sure the tool uses its own socket path. Three
+tools once unlinked the release's socket and crash-looped every live route.

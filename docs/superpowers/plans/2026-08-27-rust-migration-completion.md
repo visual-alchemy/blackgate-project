@@ -1033,3 +1033,18 @@ suspicions that turned out to be false are recorded so they are not re-investiga
   for consistency with the sidecar. Acceptance: no `Port.open({:spawn, _})` remains in
   `lib/blackgate/`.
 
+- [x] **9. The IPC smoke test owned the production stats socket.**
+  `native/rust/scripts/ipc_smoke.py` bound and unlinked `/tmp/hydra_unix_sock` and did not pass
+  `BLACKGATE_STATS_SOCKET` to the engine child, so it needed the release's path.
+  `native/AGENTS.md` requires that smoke after behaviour changes, so the documented workflow
+  would break live routes whenever a release was running.
+  *Done:* private socket path per run (`BLACKGATE_IPC_SMOKE_SOCKET` overrides), the child now gets
+  `BLACKGATE_STATS_SOCKET`, a live-listener guard refuses to unlink a socket with a listener, and
+  `close()` only unlinks what it bound. Verified with the release running: smoke exits 0, the
+  release socket's mtime and inode are unchanged, pointing the smoke at the live socket exits 1
+  with a clear message, and all routes stayed `started`.
+
+- [x] **10. `make install` now also installs `procps`.** The benchmark harness samples the engine
+  through `ps -o time=,rss=`, and `procps` is not marked Essential, so a minimal host could miss
+  it. Task 16 items 1-4, 7, 9 and 10 are done; 5, 6 and 8 are open by design or by decision.
+

@@ -79,6 +79,16 @@ These were found by measurement, not from a plan. Each one has a guard or a test
   unit tests for exactly those behaviours (`preview_requested`, `make_queue2` bounds,
   `parse_command`), so a regression fails `cargo test` instead of surfacing as a stuck route.
 
+- **The IPC smoke test owned the production stats socket.** `native/rust/scripts/ipc_smoke.py`
+  bound and unlinked `/tmp/hydra_unix_sock` — the path a running release listens on — and never
+  passed `BLACKGATE_STATS_SOCKET` to the engine it spawns, so it *had* to. `native/AGENTS.md`
+  requires running that smoke after behaviour changes, so following the docs with a release up
+  broke every live route exactly the way the benchmark harness did. It now uses a private path
+  per run, hands it to the child, refuses a path that already has a live listener, and unlinks
+  only what it bound. Verified with the release running: the smoke passes, the release socket's
+  mtime and inode are unchanged, and pointing the smoke at the live socket fails with a clear
+  message instead of unlinking it.
+
 ## Rules for working here
 
 - Never add a production reference to `native/archive/c-engine/`. The oracle is immutable and
@@ -90,6 +100,38 @@ These were found by measurement, not from a plan. Each one has a guard or a test
   the config actually asked for (see `docs/skills/gstreamer-pipeline-diagnostics/`).
 - The `preview` init field is part of the engine contract: any tool that starts the engine itself
   must send `"preview": true` to get a preview, and benchmarks deliberately do not.
+- Never bind a stats-socket path that might belong to a running release: pass
+  `BLACKGATE_STATS_SOCKET` to every engine you spawn, use a private path per run, refuse a path
+  that already has a live listener, and unlink only what you bound. Three tools got this wrong
+  (the benchmark harness, the IPC smoke, and the smoke's child env) and each one crash-looped the
+  live routes with `connect: No such file or directory (os error 2)`.
+
+## Operating the gateway (notes that live in no one's memory)
+
+```bash
+make start        # returns only once the supervision tree is up, so routes can start immediately
+make stop         # stops the release node and removes a stale stats socket
+make restart
+
+# Ask the running release anything (node blackgate@dvls, HTTP :4000)
+RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate rpc \
+  'IO.puts(inspect(Blackgate.Db.get_all_routes() |> elem(1) |> Enum.map(&{&1["name"], &1["status"]})))'
+
+RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate rpc \
+  'Blackgate.start_route("<route-id>")'   # Blackgate.stop_route/1 to stop it
+```
+
+- Logs: `_build/prod/rel/blackgate/tmp/log/erlang.log.*`, **rotated by size** — grep all of
+  them, because a zero-hit grep on the newest file can be a rotation artifact.
+- Stats sockets: release `/tmp/hydra_unix_sock` (or `BLACKGATE_STATS_SOCKET`), dev
+  `/tmp/blackgate_stats_dev.sock`, test per-run, benchmark and IPC smoke private per run. Route
+  stats older than 5 s are reported `stale: true` with `health: "disconnected"`.
+- Engine stdout arrives in the release log as `RouteHandler: pipeline: …`.
+- `pkill -f <pattern>` also matches the shell running it — use a bracketed pattern
+  (`blackgate-engin[e]`) or pgrep + kill.
+- SRT needs `net.core.rmem_max` / `wmem_max` >= 16 MB (README has the one-liner; the appliance
+  sets it at first boot).
+- A route whose engine builds a preview pays ~33 MB extra RSS while the preview is enabled.
 
 ## What is still open
 

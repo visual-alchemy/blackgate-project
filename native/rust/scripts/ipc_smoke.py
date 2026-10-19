@@ -11,12 +11,20 @@ import selectors
 import socket
 import stat
 import subprocess
+import os
 import sys
 import threading
 import time
 
 
-SOCKET_PATH = Path("/tmp/hydra_unix_sock")
+# The engine dials its stats socket from BLACKGATE_STATS_SOCKET; without that variable it falls
+# back to /tmp/hydra_unix_sock, the path a running release listens on. Binding that path unlinks
+# the release's live listener, after which every engine the release spawns dies with
+# "No such file or directory" and the routes crash-loop. So: a private path per run, handed to
+# the child, and never a path that already has a live listener.
+SOCKET_PATH = Path(
+    os.environ.get("BLACKGATE_IPC_SMOKE_SOCKET", f"/tmp/blackgate_ipc_smoke_{os.getpid()}.sock")
+)
 ROUTE_ID = "rust-ipc-smoke"
 START_TIMEOUT_SECONDS = 20.0
 STOP_TIMEOUT_SECONDS = 10.0
@@ -26,9 +34,25 @@ class SmokeFailure(RuntimeError):
     """Raised when the engine violates its production IPC contract."""
 
 
+def has_live_listener(path: Path) -> bool:
+    """True when something is accepting connections on `path`."""
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.5)
+        probe.connect(str(path))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 class SocketCollector:
     def __init__(self, path: Path) -> None:
         self.path = path
+        # Only a collector that actually bound the path may remove it: a failed start must not
+        # let close() unlink a socket it never owned.
+        self.owns_path = False
         self.server: socket.socket | None = None
         self.connection: socket.socket | None = None
         self.chunks: list[bytes] = []
@@ -40,10 +64,17 @@ class SocketCollector:
             mode = self.path.lstat().st_mode
             if not stat.S_ISSOCK(mode):
                 raise SmokeFailure(f"refusing to replace non-socket path: {self.path}")
+            if has_live_listener(self.path):
+                raise SmokeFailure(
+                    f"{self.path} already has a live listener — a Blackgate release is probably "
+                    "running. Refusing to unlink it; unset BLACKGATE_IPC_SMOKE_SOCKET or pick "
+                    "another path."
+                )
             self.path.unlink()
 
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(str(self.path))
+        self.owns_path = True
         self.server.listen(1)
         self.server.settimeout(0.2)
         self.thread = threading.Thread(target=self._collect, daemon=True)
@@ -84,7 +115,7 @@ class SocketCollector:
                     pass
         if self.thread is not None:
             self.thread.join(timeout=1.0)
-        if self.path.exists() or self.path.is_symlink():
+        if self.owns_path and (self.path.exists() or self.path.is_symlink()):
             mode = self.path.lstat().st_mode
             if stat.S_ISSOCK(mode):
                 self.path.unlink()
@@ -189,6 +220,9 @@ def run_smoke(engine: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            # Without this the child dials /tmp/hydra_unix_sock and the smoke would have to own
+            # the path a running release listens on.
+            env={**os.environ, "BLACKGATE_STATS_SOCKET": str(SOCKET_PATH)},
         )
         assert process.stdin is not None
         process.stdin.write((build_init(source_port, sink_port) + "\n").encode())

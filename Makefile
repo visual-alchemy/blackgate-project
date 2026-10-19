@@ -43,7 +43,7 @@ install:
 			echo "Production baseline: Ubuntu 24.04 LTS"; \
 			sudo add-apt-repository -y universe || true; \
 			sudo apt-get update; \
-			sudo apt-get install -y build-essential pkg-config git curl ca-certificates xz-utils unzip ripgrep ffmpeg \
+			sudo apt-get install -y build-essential pkg-config git curl ca-certificates xz-utils unzip ripgrep ffmpeg procps \
 				libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
 				libgstreamer-plugins-bad1.0-dev gstreamer1.0-tools \
 				gstreamer1.0-plugins-base gstreamer1.0-plugins-good \

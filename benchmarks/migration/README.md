@@ -54,6 +54,14 @@ interleaved C then Rust per repetition to limit thermal and time drift. CPU and
 peak RSS exclude the warm-up window. Run `non-sdi-soak.json` separately for
 one-hour-per-engine stability evidence.
 
+**What `packet_loss_delta` can and cannot see.** The frozen C oracle reads `srtsrc`'s
+`packets-received-lost` / `-dropped` / `-retransmitted` with `gst_structure_get_int64`, but
+GStreamer stores those as `int` (gint32): the strict type check fails, the getter's FALSE return
+is ignored, and the counters stay 0 for the life of the connection. A C-side loss regression
+therefore cannot show up in this metric, and a "C reports 0 lost, Rust reports N" result is that
+bug, not a Rust regression. Fixing it means versioning the oracle (new manifest), which is a
+recorded decision, not a bug fix.
+
 Each run directory contains raw engine JSON, socket/stdout/stderr evidence,
 per-workload comparisons, `summary.json`, and `REPORT.md`. Runner exits nonzero
 for failed or inconclusive comparisons.
