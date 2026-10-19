@@ -1012,3 +1012,24 @@ suspicions that turned out to be false are recorded so they are not re-investiga
   (new manifest + a note in `native/archive/c-engine/README.md`). Acceptance: the verdict
   report states plainly which metrics can and cannot detect a C-side regression.
 
+- [x] **7. The RTMP/HTTP/HLS sidecar passed the source URL through a shell.**
+  `maybe_start_ffmpeg_sidecar/1` interpolated the route's URL into a `Port.open({:spawn, cmd})`
+  string — i.e. `/bin/sh` — inside double quotes, so
+  `https://…/live?token=$ecret&name="quoted"` reached ffmpeg as
+  `https://…/live?token=&name=quoted`: signed HTTP/HLS URLs broke silently, and a URL containing
+  `$(…)` or backticks would have been executed. A missing ffmpeg likewise surfaced only as
+  "FFmpeg sidecar exited with status 127" and a reconnect loop.
+  *Done:* `System.find_executable("ffmpeg")` preflight that logs an actionable message and emits
+  an `ffmpeg_missing` event, plus `Port.open({:spawn_executable, path}, args: [...])`. Five tests
+  in `test/blackgate/route_handler_ffmpeg_test.exs` pin the argument-list contract. Suite: 121
+  tests, 0 failures. `make install` (apt/dnf/brew) and `iso-builder/autoinstall/user-data` both
+  already install ffmpeg — the preflight is for misconfigured hosts, not the appliance.
+
+- [ ] **8. The engine spawn uses the same shell-string pattern.** `start_native_pipeline` opens
+  `Port.open({:spawn, cmd})` with the engine path, a UUID route id and config paths interpolated.
+  All of it is app-generated, so no user-controlled input reaches the shell, and it is the core
+  streaming path — deliberately left alone in this pass.
+  *Action:* when that code is next touched, move it to `:spawn_executable` with an argument list
+  for consistency with the sidecar. Acceptance: no `Port.open({:spawn, _})` remains in
+  `lib/blackgate/`.
+

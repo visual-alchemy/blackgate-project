@@ -1486,71 +1486,116 @@ defmodule Blackgate.RouteHandler do
   defp maybe_start_ffmpeg_sidecar(%{"schema" => schema, "schema_options" => opts} = route)
        when schema in ["RTMP", "HTTP", "HLS"] do
     url = Map.get(opts, "url", "")
+    ffmpeg = System.find_executable("ffmpeg")
 
-    if url == "" do
-      Logger.error("RouteHandler: RTMP source has no URL")
-      {route, nil}
-    else
-      # Pick an available internal port for SRT loopback
-      internal_port = find_available_port()
+    cond do
+      url == "" ->
+        Logger.error("RouteHandler: RTMP source has no URL")
+        {route, nil}
 
-      Logger.info(
-        "RouteHandler: Starting ffmpeg sidecar: #{url} → srt://127.0.0.1:#{internal_port}"
-      )
+      is_nil(ffmpeg) ->
+        # Without this preflight a missing binary surfaced only as
+        # "FFmpeg sidecar exited with status 127" plus a reconnect loop. The appliance image
+        # and `make install` both ship ffmpeg, so a host without it is a setup problem.
+        Logger.error(
+          "RouteHandler: ffmpeg not found on PATH — a #{schema} source needs it to remux into " <>
+            "SRT loopback; install ffmpeg (the appliance image and `make install` provide it)"
+        )
 
-      # Spawn ffmpeg: pull source URL → remux to MPEG-TS → push SRT to internal port
-      ffmpeg_cmd = build_ffmpeg_command(url, internal_port)
-      Logger.info("RouteHandler: ffmpeg command: #{ffmpeg_cmd}")
+        Blackgate.EventLog.log(
+          :error,
+          "ffmpeg_missing",
+          "ffmpeg not found on PATH; #{schema} source cannot start",
+          %{route_id: route["id"], route_name: route["name"]}
+        )
 
-      ffmpeg_port =
-        Port.open({:spawn, ffmpeg_cmd}, [
-          :stderr_to_stdout,
-          :use_stdio,
-          :binary,
-          :exit_status,
-          :stream
-        ])
+        {route, nil}
 
-      # Give ffmpeg time to start listening on the SRT port
-      Process.sleep(3000)
+      true ->
+        # Pick an available internal port for SRT loopback
+        internal_port = find_available_port()
+        args = ffmpeg_args(url, internal_port)
 
-      # Rewrite the route to use SRT caller on the internal port
-      modified_route =
-        route
-        |> Map.put("schema", "SRT")
-        |> Map.put("schema_options", %{
-          "localaddress" => "127.0.0.1",
-          "localport" => internal_port,
-          "mode" => "caller",
-          "latency" => 500
-        })
+        Logger.info(
+          "RouteHandler: Starting ffmpeg sidecar: #{url} → srt://127.0.0.1:#{internal_port}"
+        )
 
-      Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started: #{url}", %{
-        route_id: route["id"],
-        route_name: route["name"],
-        internal_port: internal_port
-      })
+        Logger.info("RouteHandler: ffmpeg args: #{Enum.join(args, " ")}")
 
-      {modified_route, ffmpeg_port}
+        # :spawn_executable with an argument list, never a shell string. A signed HTTP/HLS URL
+        # legitimately contains `$`, `&` and quotes; a shell expands or truncates them at best,
+        # and executes them at worst.
+        ffmpeg_port =
+          try do
+            Port.open({:spawn_executable, ffmpeg}, [
+              :stderr_to_stdout,
+              :use_stdio,
+              :binary,
+              :exit_status,
+              :stream,
+              args: args
+            ])
+          rescue
+            e ->
+              Logger.error("RouteHandler: could not start ffmpeg: #{inspect(e)}")
+              nil
+          end
+
+        if is_nil(ffmpeg_port) do
+          {route, nil}
+        else
+          # Give ffmpeg time to start listening on the SRT port
+          Process.sleep(3000)
+
+          # Rewrite the route to use SRT caller on the internal port
+          modified_route =
+            route
+            |> Map.put("schema", "SRT")
+            |> Map.put("schema_options", %{
+              "localaddress" => "127.0.0.1",
+              "localport" => internal_port,
+              "mode" => "caller",
+              "latency" => 500
+            })
+
+          Blackgate.EventLog.log(:info, "ffmpeg_started", "FFmpeg sidecar started: #{url}", %{
+            route_id: route["id"],
+            route_name: route["name"],
+            internal_port: internal_port
+          })
+
+          {modified_route, ffmpeg_port}
+        end
     end
   end
 
   defp maybe_start_ffmpeg_sidecar(route), do: {route, nil}
 
-  defp build_ffmpeg_command(url, internal_port) do
-    # -reconnect flags for HTTP sources (auto-retry on disconnect)
-    reconnect_flags =
+  @doc false
+  # Public so the regression test can assert it: a URL is data, never shell syntax.
+  def ffmpeg_args(url, internal_port) do
+    reconnect =
       if String.starts_with?(url, "http") do
-        "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+        ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
       else
-        ""
+        []
       end
 
-    "ffmpeg -hide_banner -loglevel warning " <>
-      "#{reconnect_flags} " <>
-      "-i \"#{url}\" " <>
-      "-c copy -mpegts_copyts 0 -pcr_period 40 -f mpegts " <>
-      "\"srt://127.0.0.1:#{internal_port}?mode=listener&latency=500000\""
+    ["-hide_banner", "-loglevel", "warning"] ++
+      reconnect ++
+      [
+        "-i",
+        url,
+        "-c",
+        "copy",
+        "-mpegts_copyts",
+        "0",
+        "-pcr_period",
+        "40",
+        "-f",
+        "mpegts",
+        "srt://127.0.0.1:#{internal_port}?mode=listener&latency=500000"
+      ]
   end
 
   defp find_available_port do

@@ -67,6 +67,13 @@ These were found by measurement, not from a plan. Each one has a guard or a test
   with `load_failed` for core modules. It did not reproduce, so the cause is still unknown, but
   the build now verifies the blackgate app exists under the release's `lib/` and fails with the
   recovery command instead of deploying a broken artifact.
+- **The RTMP/HTTP/HLS sidecar ran the source URL through a shell.** The URL was interpolated
+  into a `Port.open({:spawn, cmd})` string — `/bin/sh` — inside double quotes, so
+  `…?token=$ecret&name="quoted"` reached ffmpeg as `…?token=&name=quoted`: signed URLs broke
+  silently and `$(…)`/backticks would have been executed. Now an argument list
+  (`:spawn_executable` + `args`) with an ffmpeg-on-PATH preflight that names the real problem
+  instead of "sidecar exited with status 127". `make install` and the appliance image both do
+  install ffmpeg; the preflight is for misconfigured hosts.
 - **The two load-bearing crates had almost no tests.** `engine-gst` had 1 and
   `blackgate-engine` 0, while the branch changed preview gating and queue bounds. Both now have
   unit tests for exactly those behaviours (`preview_requested`, `make_queue2` bounds,
