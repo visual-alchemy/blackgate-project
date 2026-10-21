@@ -96,6 +96,11 @@ autoinstall:
     - cp -r /cdrom/blackgate/pool/. /target/opt/blackgate/pool/
     - cp /cdrom/blackgate/packages.list /target/opt/blackgate/files/packages.list
     - printf "deb [trusted=yes] file:///opt/blackgate/pool ./\n" > /target/etc/apt/sources.list.d/99-blackgate-local.list
+
+    # License endpoint: blackgate-install-system-actions.sh reads it from files/ on first boot. Without it
+    # the app falls back to http://localhost:3000 and the client cannot activate a license.
+    - |
+      [ -f /cdrom/blackgate/license-server-url ] && cp /cdrom/blackgate/license-server-url /target/opt/blackgate/files/ || echo 'no license server url in the image' 
     - cp /cdrom/blackgate/blackgate-install-system-actions.sh /target/opt/blackgate/
 
     # Set permissions

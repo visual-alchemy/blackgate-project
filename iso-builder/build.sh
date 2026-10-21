@@ -123,6 +123,19 @@ POOL_DIR="$SCRIPT_DIR/files/pool"
 PACKAGES_LIST="$SCRIPT_DIR/packages.list"
 [ -f "$PACKAGES_LIST" ] || { echo "❌ missing $PACKAGES_LIST" >&2; exit 1; }
 
+# Reuse a pool this build already produced for the same package list: the download is ~400 MB and a data
+# change elsewhere in the tree should not pay for it again. A stale index or a different list rebuilds it.
+POOL_STAMP="$POOL_DIR/.packages.list.md5"
+POOL_CACHE_OK=0
+if [ -s "$POOL_DIR/Packages.gz" ] && [ -f "$POOL_STAMP" ] \
+   && [ "$(md5sum "$PACKAGES_LIST" | cut -d' ' -f1)" = "$(cat "$POOL_STAMP")" ] \
+   && [ "$(ls "$POOL_DIR"/*.deb 2>/dev/null | wc -l)" = "$(zcat "$POOL_DIR/Packages.gz" | grep -c '^Package:')" ] \
+   && [ "$(ls "$POOL_DIR"/*.deb 2>/dev/null | wc -l)" -gt 50 ]; then
+    POOL_CACHE_OK=1
+    echo "   reusing the pool from a previous build ($(ls "$POOL_DIR"/*.deb | wc -l) packages)"
+fi
+
+if [ "$POOL_CACHE_OK" = "0" ]; then
 rm -rf "$POOL_DIR"
 mkdir -p "$POOL_DIR"
 # Debug::NoLocking: with the status file redirected, apt derives its lock from that path (/dev/lock-*)
@@ -136,6 +149,8 @@ command -v dpkg-scanpackages >/dev/null \
 # Run it from inside the pool: dpkg-scanpackages writes Filename relative to the directory it is given,
 # and an absolute path there makes apt join the repo root twice (file:/pool/pool/x.deb).
 (cd "$POOL_DIR" && dpkg-scanpackages -m . /dev/null 2>/dev/null | gzip -9 > Packages.gz)
+md5sum "$PACKAGES_LIST" | cut -d' ' -f1 > "$POOL_STAMP"
+fi
 echo "   pool: $(ls "$POOL_DIR"/*.deb | wc -l) packages, $(du -sh "$POOL_DIR" | cut -f1) (index $(du -sh "$POOL_DIR/Packages.gz" | cut -f1))"
 
 # ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────
@@ -191,6 +206,18 @@ mkdir -p "$EXTRACT_DIR/blackgate/pool"
 cp -r "$POOL_DIR"/. "$EXTRACT_DIR/blackgate/pool/"
 cp "$PACKAGES_LIST" "$EXTRACT_DIR/blackgate/packages.list"
 echo "   ✅ pool/ + Packages.gz + packages.list"
+
+# License server: an appliance has no Makefile to copy it from, so carry the endpoint the app has to reach
+# (config/runtime.exs reads LICENSE_SERVER_URL and otherwise falls back to http://localhost:3000, which
+# makes the dashboard's activation fail). Explicit env var wins, then the repository Makefile.
+LICENSE_URL="${LICENSE_SERVER_URL:-}"
+[ -n "$LICENSE_URL" ] || LICENSE_URL="$(grep -m1 -oP '(?<=LICENSE_SERVER_URL=)\S+' "$SCRIPT_DIR/../Makefile" 2>/dev/null || true)"
+if [ -n "$LICENSE_URL" ]; then
+    printf '%s\n' "$LICENSE_URL" > "$EXTRACT_DIR/blackgate/license-server-url"
+    echo "   ✅ license-server-url ($LICENSE_URL)"
+else
+    echo "   ⚠️  no LICENSE_SERVER_URL (env or Makefile) — license activation will not work on the appliance"
+fi
 
 DESKTOP_VIDEO_DEB="$SCRIPT_DIR/files/blackmagic-desktopvideo.deb"
 if [ -f "$DESKTOP_VIDEO_DEB" ]; then

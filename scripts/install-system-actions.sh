@@ -115,12 +115,17 @@ else
   API_USER=admin
   API_PASSWORD=""
   RELEASE_COOKIE_VALUE=""
-  LICENSE_URL=""
+  # Where the license API lives: an explicit env var first, then the value the image baked next to the
+  # other artifacts (an appliance has no Makefile to read it from), then a development checkout's Makefile.
+  # Empty means config/runtime.exs falls back to http://localhost:3000, so the dashboard cannot activate a
+  # license at all - which is exactly how a client appliance used to arrive.
+  LICENSE_URL="${LICENSE_SERVER_URL:-}"
+  [ -n "$LICENSE_URL" ] || LICENSE_URL="$(head -1 "${BLACKGATE_ARTIFACT_DIR:-$ROOT/files}/license-server-url" 2>/dev/null | tr -d '[:space:]' || true)"
   if [ -r "$PROJECT_ROOT/Makefile" ]; then
     API_USER="$(grep -m1 -oP '(?<=API_AUTH_USERNAME=)\S+' "$PROJECT_ROOT/Makefile" || echo admin)"
     API_PASSWORD="$(grep -m1 -oP '(?<=API_AUTH_PASSWORD=)\S+' "$PROJECT_ROOT/Makefile" || true)"
     RELEASE_COOKIE_VALUE="$(grep -m1 -oP '(?<=RELEASE_COOKIE=)\S+' "$PROJECT_ROOT/Makefile" || true)"
-    LICENSE_URL="$(grep -m1 -oP '(?<=LICENSE_SERVER_URL=)\S+' "$PROJECT_ROOT/Makefile" || true)"
+    [ -n "$LICENSE_URL" ] || LICENSE_URL="$(grep -m1 -oP '(?<=LICENSE_SERVER_URL=)\S+' "$PROJECT_ROOT/Makefile" || true)"
   fi
   [ -n "$API_PASSWORD" ] || API_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
   [ -n "$RELEASE_COOKIE_VALUE" ] || RELEASE_COOKIE_VALUE="$(openssl rand -base64 32 | tr -d '/+=')"

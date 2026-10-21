@@ -46,6 +46,13 @@ There is no fixed default password on this appliance, and nothing key-only uses 
 
 Replace `files/support-authorized-keys` with the key you intend to use before building an image for a client.
 
+The license endpoint travels with the image. `build.sh` takes `LICENSE_SERVER_URL` from the environment or the
+repository `Makefile` and writes it as `/blackgate/license-server-url`; the installer's late-commands put it in
+`/opt/blackgate/files/`, and `install-system-actions.sh` resolves it in this order: env var, that file, the
+Makefile. Empty leaves `config/runtime.exs` on `http://localhost:3000`, so the dashboard cannot activate a
+license - which is how a client appliance used to arrive. The license *key* is per client and never baked: it
+is entered in the dashboard.
+
 ## Operations
 
 ```bash
