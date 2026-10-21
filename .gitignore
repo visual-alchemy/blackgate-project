@@ -65,3 +65,4 @@ docs/superpowers/skills/
 
 # Generated code-graph output (stale by construction; regenerate instead of committing).
 graphify-out/
+/priv/native/build/
