@@ -1,10 +1,22 @@
 #!/bin/sh
 # Blackgate privileged system actions, invoked by the dashboard through sudo.
 #
-# Every action is *scheduled* with systemd-run instead of executed directly. A restart is delayed a
-# few seconds, a reboot/shutdown ten, and a deploy two: an operator who clicked the wrong button (or
-# a dashboard that repeated a request) still has a window to cancel the transient unit before the
-# box goes down. Cancel with:
+# Every action is *scheduled* with systemd-run instead of executed directly, so an operator who clicked
+# the wrong button (or a dashboard that repeated a request) still has a window to cancel the transient
+# unit before the box goes down:
+#
+#     restart 15 s     reboot 60 s     shutdown 60 s     deploy 15 s
+#
+# Two properties together make that window what the tooltip says it is:
+#
+#   * --on-active=<n>s sets the delay, and
+#   * --timer-property=AccuracySec=1s pins the timer's accuracy. Without it the transient timer inherits
+#     systemd's default AccuracyUSec=1min, and systemd is then free to start the unit up to a minute
+#     after the elapse: a measured "10 s delay" actually ran 44 s after the click. The delays here, the
+#     tooltips in Settings > System (web_app/src/pages/Settings.jsx) and the table in
+#     docs/operations/system-actions-and-updates.md must be kept in step.
+#
+# Cancel with:
 #
 #     blackgate-system-action cancel blackgate-dashboard-reboot
 #
@@ -15,6 +27,8 @@ SYSTEMD_RUN=/usr/bin/systemd-run
 SYSTEMCTL=/usr/bin/systemctl
 UPDATER=/usr/local/libexec/blackgate-updater
 SERVICE=blackgate.service
+# Every scheduled action passes this, so the delay in the tooltip is the delay that happens.
+TIMER_ACCURACY=--timer-property=AccuracySec=1s
 
 die() {
   echo "$1" >&2
@@ -28,15 +42,15 @@ version_ok() {
 case "${1:-}" in
   restart-blackgate)
     exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-restart \
-      --on-active=3s "$SYSTEMCTL" restart "$SERVICE"
+      "$TIMER_ACCURACY" --on-active=15s "$SYSTEMCTL" restart "$SERVICE"
     ;;
   reboot)
     exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-reboot \
-      --on-active=10s "$SYSTEMCTL" reboot
+      "$TIMER_ACCURACY" --on-active=60s "$SYSTEMCTL" reboot
     ;;
   shutdown)
     exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-shutdown \
-      --on-active=10s "$SYSTEMCTL" poweroff
+      "$TIMER_ACCURACY" --on-active=60s "$SYSTEMCTL" poweroff
     ;;
   cancel)
     case "${2:-}" in
@@ -54,14 +68,14 @@ case "${1:-}" in
     version="${2:-}"
     version_ok "$version" || die "invalid version"
     exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-deploy \
-      --on-active=2s "$UPDATER" deploy "$version"
+      "$TIMER_ACCURACY" --on-active=15s "$UPDATER" deploy "$version"
     ;;
   test-action)
     # Plumbing smoke test: schedules a harmless transient unit through exactly the same mechanism the
     # destructive actions use, so sudoers + systemd-run + cancel can be proven before anyone trusts a
     # reboot button. It does nothing after 60 s.
     exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-test \
-      --on-active=60s /bin/true
+      "$TIMER_ACCURACY" --on-active=60s /bin/true
     ;;
   *)
     die "Unsupported Blackgate system action"

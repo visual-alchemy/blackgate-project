@@ -1155,7 +1155,7 @@ const Settings = () => {
               <Tooltip
                 title={
                   actionsInfo.available?.restart_gateway
-                    ? 'Restart blackgate.service (3 s delay, cancellable)'
+                    ? 'Restart blackgate.service (15 s delay, cancellable)'
                     : 'Needs the systemd unit — a hand-started node carries its environment in the shell that launched it'
                 }
               >
@@ -1174,7 +1174,7 @@ const Settings = () => {
               <Tooltip
                 title={
                   actionsInfo.available?.reboot
-                    ? 'Reboot the host (10 s delay, cancellable)'
+                    ? 'Reboot the host (60 s delay, cancellable)'
                     : 'Needs the root helper + sudoers drop-in'
                 }
               >
@@ -1193,7 +1193,7 @@ const Settings = () => {
               <Tooltip
                 title={
                   actionsInfo.available?.shutdown
-                    ? 'Power the host off (10 s delay, cancellable)'
+                    ? 'Power the host off (60 s delay, cancellable)'
                     : 'Needs the root helper + sudoers drop-in'
                 }
               >

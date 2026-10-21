@@ -64,10 +64,14 @@ Every action is *scheduled*, never executed inline:
 ```
 dashboard → POST /api/system/actions/reboot
           → sudo -n /usr/local/libexec/blackgate-system-action reboot
-          → systemd-run --on-active=10s --unit=blackgate-dashboard-reboot systemctl reboot
+          → systemd-run --timer-property=AccuracySec=1s --on-active=60s --unit=blackgate-dashboard-reboot systemctl reboot
 ```
 
-- Restart: 3 s delay. Reboot and shutdown: 10 s. Deploy: 2 s. Deploy also hands off to the updater.
+- Restart: 15 s delay. Reboot and shutdown: 60 s. Deploy: 15 s. Deploy also hands off to the updater.
+  Each scheduled action also pins `AccuracySec=1s` on its transient timer. Without that pin the timer
+  inherits systemd's default `AccuracyUSec=1min`, and systemd may then start the unit up to a minute
+  after the elapse — measured on this box, a "10 s delay" started the unit 44 s after the click. The
+  helper, the tooltips in Settings > System, and this table have to be kept in step.
 - The delay is the cancel window: `blackgate-system-action cancel blackgate-dashboard-reboot` stops
   the transient timer, and the dashboard shows a Cancel button while an action is pending.
 - Reboot and shutdown require typing the action back in the confirmation dialog; deploy requires the
