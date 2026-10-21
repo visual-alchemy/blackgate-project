@@ -128,6 +128,13 @@ if [ -n "$IP_NOW" ]; then
         echo
     } > /etc/issue.d/99-blackgate.issue
     say "Console banner written with IP $IP_NOW"
+    # getty printed its prompt before this file existed and only reprints the issue when it restarts, so the
+    # banner would otherwise first show on the next boot - not the boot the installer just finished on, which
+    # is the one somebody stares at.
+    if systemctl is-active --quiet getty@tty1.service; then
+        systemctl restart getty@tty1.service || true
+        say "Console repainted so the banner is visible on this boot."
+    fi
 else
     say "WARNING: no IPv4 address yet - console banner skipped"
 fi
