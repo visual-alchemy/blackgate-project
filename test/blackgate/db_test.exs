@@ -58,4 +58,35 @@ defmodule Blackgate.DbTest do
     assert {:ok, destinations} = :khepri.get_many("routes/#{route_id}/destinations/*")
     assert destinations == %{}
   end
+
+  describe "network interface aliases" do
+    setup do
+      on_exit(fn -> :khepri.delete(["network", "interface_aliases"]) end)
+      :ok
+    end
+
+    test "stores, replaces and clears an alias by MAC" do
+      mac = "aa:bb:cc:dd:ee:ff"
+
+      assert {:ok, _aliases} = Db.set_network_interface_alias(mac, "ISP1")
+      assert {:ok, aliases} = Db.get_network_interface_aliases()
+      assert aliases[mac] == "ISP1"
+
+      assert {:ok, _aliases} = Db.set_network_interface_alias(mac, "ISP2")
+      assert {:ok, aliases} = Db.get_network_interface_aliases()
+      assert aliases[mac] == "ISP2"
+
+      assert {:ok, _aliases} = Db.set_network_interface_alias(mac, nil)
+      assert {:ok, aliases} = Db.get_network_interface_aliases()
+      refute Map.has_key?(aliases, mac)
+    end
+
+    test "an interface that was never renamed is not an error" do
+      :khepri.delete(["network", "interface_aliases"])
+
+      assert {:ok, aliases} = Db.get_network_interface_aliases()
+      assert is_map(aliases)
+      assert aliases == %{}
+    end
+  end
 end

@@ -1,20 +1,59 @@
 defmodule BlackgateWeb.NetworkController do
   use BlackgateWeb, :controller
 
+  alias Blackgate.Db
+
+  @alias_max_length 32
+
   @doc """
-  Returns list of network interfaces with their IP addresses.
+  Returns list of network interfaces with their IP addresses and their display alias.
+
   Uses Erlang's :inet.getifaddrs/0 to detect all interfaces.
   """
   def index(conn, _params) do
-    interfaces = get_network_interfaces()
+    aliases =
+      case Db.get_network_interface_aliases() do
+        {:ok, value} -> value
+        {:error, _reason} -> %{}
+      end
+
+    interfaces = get_network_interfaces(aliases)
     json(conn, %{interfaces: interfaces})
   end
 
-  defp get_network_interfaces do
+  @doc """
+  Sets (or clears, with a blank alias) one interface's display alias, keyed by MAC address.
+
+  Aliases are Blackgate display labels only — the Linux interface name and the traffic on it are never
+  touched — so this validates the label, refuses a label already used by another interface, and stores
+  it. A blank alias removes the entry and the interface goes back to its Linux name.
+  """
+  def update_alias(conn, %{"mac" => mac, "alias" => alias}) do
+    with {:ok, mac} <- normalize_mac(mac),
+         {:ok, alias} <- normalize_alias(alias),
+         :ok <- ensure_alias_unique(mac, alias),
+         {:ok, _aliases} <- Db.set_network_interface_alias(mac, alias) do
+      json(conn, %{mac: mac, alias: alias})
+    else
+      {:error, message} when is_binary(message) ->
+        conn |> put_status(:unprocessable_entity) |> json(%{error: message})
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Could not save interface alias"})
+    end
+  end
+
+  def update_alias(conn, _params),
+    do: conn |> put_status(:bad_request) |> json(%{error: "MAC address and alias are required"})
+
+  defp get_network_interfaces(aliases) do
     case :inet.getifaddrs() do
       {:ok, ifaddrs} ->
         ifaddrs
         |> Enum.map(&parse_interface/1)
+        |> Enum.map(&Map.put(&1, :alias, Map.get(aliases, &1.mac)))
         |> Enum.filter(&has_ipv4?/1)
         |> Enum.sort_by(& &1.name)
 
@@ -83,4 +122,52 @@ defmodule BlackgateWeb.NetworkController do
 
   defp has_ipv4?(%{address: nil}), do: false
   defp has_ipv4?(_), do: true
+
+  defp normalize_mac(mac) when is_binary(mac) do
+    normalized = mac |> String.trim() |> String.downcase()
+
+    if Regex.match?(~r/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/, normalized),
+      do: {:ok, normalized},
+      else: {:error, "Invalid interface MAC address"}
+  end
+
+  defp normalize_mac(_), do: {:error, "Invalid interface MAC address"}
+
+  # A blank alias means "drop the label and show the Linux interface name again".
+  defp normalize_alias(alias) when is_binary(alias) do
+    alias = String.trim(alias)
+
+    cond do
+      alias == "" ->
+        {:ok, nil}
+
+      String.length(alias) > @alias_max_length ->
+        {:error, "Alias must be #{@alias_max_length} characters or fewer"}
+
+      not Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/, alias) ->
+        {:error, "Alias may use letters, numbers, spaces, dots, dashes, and underscores"}
+
+      true ->
+        {:ok, alias}
+    end
+  end
+
+  defp normalize_alias(_), do: {:error, "Alias must be text"}
+
+  defp ensure_alias_unique(_mac, nil), do: :ok
+
+  defp ensure_alias_unique(mac, alias) do
+    case Db.get_network_interface_aliases() do
+      {:ok, aliases} ->
+        duplicate? =
+          Enum.any?(aliases, fn {other_mac, other_alias} ->
+            other_mac != mac and String.downcase(other_alias) == String.downcase(alias)
+          end)
+
+        if duplicate?, do: {:error, "Alias is already used by another interface"}, else: :ok
+
+      {:error, _reason} ->
+        {:error, "Could not validate interface aliases"}
+    end
+  end
 end

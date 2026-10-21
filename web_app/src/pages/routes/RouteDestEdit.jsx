@@ -15,6 +15,11 @@ import React from 'react';
 
 const { Title } = Typography;
 
+// Prefer the operator's display alias, but always keep the Linux name visible: a route is configured
+// against the real interface, and the alias is only a label (Settings > Network).
+const interfaceLabel = (networkInterface) =>
+    networkInterface.alias ? `${networkInterface.alias} (${networkInterface.name})` : networkInterface.name;
+
 const RouteDestEdit = ({ initialValues, onChange }) => {
     const [form] = Form.useForm();
     const navigate = useNavigate();
@@ -474,7 +479,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                 ...interfaces
                                                                     .filter(iface => iface.up && iface.address)
                                                                     .map(iface => ({
-                                                                        label: `${iface.name} (${iface.address})`,
+                                                                        label: `${interfaceLabel(iface)} (${iface.address})`,
                                                                         value: iface.address
                                                                     }))
                                                             ]}

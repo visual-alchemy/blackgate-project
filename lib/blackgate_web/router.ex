@@ -68,6 +68,11 @@ defmodule BlackgateWeb.Router do
 
     get "/network/interfaces", NetworkController, :index
 
+    # Interface aliases are display labels kept in Khepri. The reference branch gates this behind its
+    # admin pipeline; this router has no admin pipeline, so it sits with the other authenticated
+    # settings endpoints instead of inventing one.
+    put "/network/interfaces/:mac/alias", NetworkController, :update_alias
+
     # Events
     get "/events", EventController, :index
     get "/events/counts", EventController, :counts

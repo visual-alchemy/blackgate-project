@@ -164,6 +164,42 @@ defmodule Blackgate.Db do
     :khepri.get_many("routes/#{route_id}/destinations/*")
   end
 
+  @network_interface_aliases_path ["network", "interface_aliases"]
+
+  # Display labels for network interfaces, keyed by MAC address. They are Blackgate labels only: the
+  # Linux interface name and the traffic on it are never touched. Nothing renamed yet is the normal
+  # state, so an absent entry reads as an empty map rather than an error.
+  @spec get_network_interface_aliases() ::
+          {:ok, %{optional(String.t()) => String.t()}} | {:error, any}
+  def get_network_interface_aliases do
+    case :khepri.get(@network_interface_aliases_path) do
+      {:ok, aliases} when is_map(aliases) -> {:ok, aliases}
+      {:error, {:khepri, :node_not_found, _info}} -> {:ok, %{}}
+      {:error, reason} -> {:error, reason}
+      _other -> {:ok, %{}}
+    end
+  end
+
+  # Sets one interface's alias, or clears it when `alias` is nil. The whole map is rewritten on every
+  # change, so a rename is a single Khepri put and cannot half-apply.
+  @spec set_network_interface_alias(String.t(), String.t() | nil) ::
+          {:ok, %{optional(String.t()) => String.t()}} | {:error, any}
+  def set_network_interface_alias(mac, alias)
+      when is_binary(mac) and (is_binary(alias) or is_nil(alias)) do
+    with {:ok, aliases} <- get_network_interface_aliases() do
+      aliases =
+        case alias do
+          nil -> Map.delete(aliases, mac)
+          value -> Map.put(aliases, mac, value)
+        end
+
+      case :khepri.put(@network_interface_aliases_path, aliases) do
+        :ok -> {:ok, aliases}
+        other -> {:error, other}
+      end
+    end
+  end
+
   @spec backup() :: {:ok, binary} | {:error, any}
   def backup() do
     case :khepri.get_many("**") do
