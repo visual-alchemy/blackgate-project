@@ -50,7 +50,7 @@ REQUIRED=(
     "files/blackgate-system-action"
     "files/blackgate-system-action.sudoers"
     "files/blackgate-updater"
-    "files/release-version"
+    "release-version"
     "files/support-authorized-keys"
 )
 for f in "${REQUIRED[@]}"; do
@@ -139,12 +139,17 @@ for f in \
     blackgate-system-action \
     blackgate-system-action.sudoers \
     blackgate-updater \
-    release-version \
     support-authorized-keys \
     libgstdecklink.so; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
 done
+
+# The release version lives at iso-builder/release-version (the packaging script, the installer and the
+# ISO all read it there); the appliance gets it as /opt/blackgate/release-version, which is where first
+# boot looks for it. Requiring it under files/ is what broke this pre-flight every single time.
+cp "$SCRIPT_DIR/release-version" "$EXTRACT_DIR/blackgate/release-version"
+echo "   ✅ release-version ($(tr -d '\r\n' < "$SCRIPT_DIR/release-version"))"
 
 # The first boot installs the unit/helper/sudoers/updater/keypair through this script rather than
 # duplicating the logic: it is the same installer a manual install runs.
