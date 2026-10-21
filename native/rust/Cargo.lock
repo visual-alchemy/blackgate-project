@@ -94,6 +94,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-ingest"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+]
+
+[[package]]
 name = "engine-metadata"
 version = "0.1.0"
 dependencies = [
