@@ -25,6 +25,19 @@ PRIVATE_KEY="${2:-/etc/blackgate/update-private-key.pem}"
 OUTPUT_DIR="${3:-$PROJECT_ROOT/dist}"
 NOTES_FILE="iso-builder/release-notes.txt"
 
+# The signing key is 0600 root, so signing has to run as root — but `make build` must not: it writes
+# priv/static and web_app/dist, which would then be root-owned and break the next non-root build.
+# So build as yourself, then package:
+#
+#     make build && sudo BLACKGATE_SKIP_BUILD=1 scripts/package-signed-update.sh
+#
+SKIP_BUILD="${BLACKGATE_SKIP_BUILD:-0}"
+for arg in "$@"; do
+  if [ "$arg" = "--no-build" ]; then
+    SKIP_BUILD=1
+  fi
+done
+
 [ -n "$VERSION" ] || { echo "No version: pass one or write $VERSION_FILE" >&2; exit 64; }
 printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || { echo "Invalid version '$VERSION'" >&2; exit 64; }
 [ -r "$PRIVATE_KEY" ] || {
@@ -34,8 +47,12 @@ printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || { echo 
 }
 command -v openssl >/dev/null || { echo "openssl is required to sign the package" >&2; exit 69; }
 
-echo "=== building release $VERSION ==="
-make build
+if [ "$SKIP_BUILD" = "1" ]; then
+  echo "=== using the existing release (BLACKGATE_SKIP_BUILD=1) ==="
+else
+  echo "=== building release $VERSION ==="
+  make build
+fi
 
 APP_DIR="$(find _build/prod/rel/blackgate/lib -maxdepth 1 -type d -name 'blackgate-*' | head -1)"
 [ -n "$APP_DIR" ] || { echo "Release app dir not found — did make build succeed?" >&2; exit 65; }
@@ -74,6 +91,12 @@ openssl pkeyutl -sign -rawin -inkey "$PRIVATE_KEY" -in "$STAGE/manifest.txt" -ou
 
 PACKAGE="$OUTPUT_DIR/$VERSION.bgupdate"
 tar czf "$PACKAGE" -C "$STAGE" manifest.txt manifest.sig blackgate-release.tar.gz blackgate-updater
+
+# Signing runs as root, so hand the artifact back to whoever invoked sudo.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  chown "$SUDO_USER" "$PACKAGE" 2>/dev/null || true
+  chown "$SUDO_USER" "$OUTPUT_DIR" 2>/dev/null || true
+fi
 
 echo
 echo "package : $PACKAGE"

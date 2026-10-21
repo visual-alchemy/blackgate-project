@@ -21,7 +21,11 @@ Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
 # Quoted: systemd splits an unquoted Environment value on whitespace, which would silently set
 # ERL_AFLAGS=-proto_dist and drop the argument (and make the node refuse to start).
 Environment="ERL_AFLAGS=-proto_dist inet_tcp"
-Environment=RELEASE_DISTRIBUTION=none
+# RELEASE_DISTRIBUTION=none is deliberately NOT set. Khepri names its store directory after the node
+# (`<data dir>` holds an Ra system whose membership records that node), and `bin/blackgate rpc`/`pid`
+# need distribution too. Turning it off makes the node anonymous, which is how a gateway can come up
+# against a fresh empty database while the real one sits on disk.
+Environment=RELEASE_NODE=blackgate
 
 # A leftover socket file from a previous run makes the Ranch unix listener fail to bind.
 ExecStartPre=-/bin/rm -f /tmp/hydra_unix_sock

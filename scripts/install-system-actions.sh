@@ -56,6 +56,20 @@ for tool in install visudo openssl systemctl tar sed awk grep pgrep; do
 done
 echo "tools ok (install visudo openssl systemctl tar sed awk grep pgrep)"
 
+# Khepri uses the database directory verbatim as its Ra store directory. Pointing it at a *parent*
+# makes the gateway come up on a fresh empty database while the real one — with the routes — stays
+# untouched next to it, which looks exactly like "my routes disappeared". Refuse that case and say
+# what the right value is.
+if [ -d "$DATA_DIR" ]; then
+  existing_store="$(find "$DATA_DIR" -maxdepth 1 -mindepth 1 -name 'khepri#*' -type d -print -quit 2>/dev/null || true)"
+  if [ -n "$existing_store" ]; then
+    echo "Refusing --data-dir $DATA_DIR: this looks like a parent directory, not a Khepri store." >&2
+    echo "  a store already lives at: $existing_store" >&2
+    echo "  pass --data-dir $existing_store (that is the value the running gateway uses)." >&2
+    exit 65
+  fi
+fi
+
 FILES="${BLACKGATE_ARTIFACT_DIR:-$PROJECT_ROOT/iso-builder/files}"
 for required in blackgate.service blackgate-system-action blackgate-system-action.sudoers blackgate-updater; do
   [ -r "$FILES/$required" ] || { echo "Missing $FILES/$required — run from the project checkout, or point BLACKGATE_ARTIFACT_DIR at the directory that ships them." >&2; exit 66; }
@@ -103,6 +117,9 @@ else
     echo "API_AUTH_USERNAME=$API_USER"
     echo "API_AUTH_PASSWORD=$API_PASSWORD"
     echo "RELEASE_COOKIE=$RELEASE_COOKIE_VALUE"
+    # The dashboard's Software Update card works against this root; without it the app falls back to
+    # /opt/blackgate, which is wrong for any deployment that does not use the appliance layout.
+    echo "BLACKGATE_ROOT=$ROOT"
     [ -n "$LICENSE_URL" ] && echo "LICENSE_SERVER_URL=$LICENSE_URL"
   } > "$ENV_FILE"
   chown root:root "$ENV_FILE"

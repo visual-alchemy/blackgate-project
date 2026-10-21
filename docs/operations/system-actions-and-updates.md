@@ -43,9 +43,16 @@ It installs, idempotently:
 
 Two things the installer cannot guess:
 
-- **`--data-dir` must point at the directory that already holds the Khepri database**, or the gateway
-  comes up with an empty one and every route disappears. On a production appliance that is
-  `/var/lib/blackgate/khepri`.
+- **`--data-dir` must be the Khepri _store_ directory itself, not a parent of it.** Khepri uses the
+  value verbatim as its Ra store directory, so a parent directory yields a gateway running happily on
+  a **fresh empty database** while your routes sit untouched next to it — which looks exactly like
+  "my routes disappeared". On an appliance that is `/var/lib/blackgate/khepri`. On a checkout
+  deployment it is the directory the `make start` gateway already uses:
+  `/home/blackgate/blackgate-project/khepri#blackgate@blackgate` (anything named `khepri#*` next to the
+  project root). The installer now refuses a parent directory and prints the right value.
+- **The node keeps its name.** The unit does not set `RELEASE_DISTRIBUTION=none`: Khepri's store
+  records the node in its Ra membership, and `bin/blackgate rpc` / `pid` need distribution too. An
+  anonymous node is the other way to end up on an empty database.
 - If a node is already running outside systemd, the installer refuses to start the unit: stop it
   (`make stop`) first. Two nodes at once leave a stale `/tmp/hydra_unix_sock` and every engine fails
   to connect.
@@ -98,9 +105,17 @@ blackgate-updater         the root updater, so an old appliance can update itsel
 Build one (the version comes from `iso-builder/release-version` unless you pass one):
 
 ```bash
-scripts/package-signed-update.sh                    # → dist/<version>.bgupdate
-scripts/package-signed-update.sh 2026.11.01.1 /path/to/update-private-key.pem /tmp/out
+# The signing key is 0600 root, so signing needs root — but `make build` must not run as root (it
+# writes priv/static and web_app/dist, which would then be root-owned and break your next build).
+make build
+sudo BLACKGATE_SKIP_BUILD=1 scripts/package-signed-update.sh     # → dist/<version>.bgupdate
 ```
+
+`--no-build` does the same as `BLACKGATE_SKIP_BUILD=1`; the package is handed back to `$SUDO_USER`.
+Signing somewhere other than the appliance: pass the key path and an output directory,
+`scripts/package-signed-update.sh 2026.11.01.1 /path/to/update-private-key.pem /tmp/out`. When the key
+lives at `/etc/blackgate/update-private-key.pem` (0600 root) the packaging step has to run under sudo,
+which is why the build and the signing are separate steps.
 
 Notes: the script runs `make build` first, and `mix release` rebuilds the Rust engine into the release
 (`mix.exs` `copy_native/1`), so an engine change ships with the package automatically.
@@ -141,6 +156,7 @@ A version whose directory already exists is treated as a rollback to that releas
 
 | Symptom | Where to look |
 | --- | --- |
+| Gateway starts but shows **no routes** | `journalctl -u blackgate.service \| grep -i "Database directory\|Ra system"`: if it says `0 record(s) recovered`, `DATABASE_DATA_DIR` pointed somewhere without the real store. Point it at the `khepri#*` directory the old gateway used and restart. |
 | Buttons greyed out, "helper is not installed" | `scripts/install-system-actions.sh` has not been run, or its files were removed |
 | `sudo: a password is required` in the body of a 422 response | the sudoers drop-in is missing or has the wrong mode (`0440 root:root`); re-run the installer |
 | Deploy fails with `signature verification failed` | the package was signed with a different key than `/etc/blackgate/update-public-key.pem` |
