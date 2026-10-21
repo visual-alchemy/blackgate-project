@@ -156,13 +156,22 @@ command -v dpkg-scanpackages >/dev/null \
 # --no-install-recommends cuts the pool from ~380 MB to ~110 MB, which is only safe if the packages the
 # appliance cannot start without are still in it: DKMS builds the decklink module (gcc/make/dpkg-dev are its
 # Depends, not Recommends), and the media runtime needs the gstreamer plugins and libsrt.
+# Decompress the index once, and say how many entries it had when it fails to match: a check that only
+# reports "missing" cannot tell a short pool from an unreadable index.
+POOL_INDEX="$(mktemp)"
+zcat "$POOL_DIR/Packages.gz" > "$POOL_INDEX" 2>/dev/null || true
 POOL_MISSING=""
 for pkg in gcc make dpkg-dev dkms linux-headers-generic libgl1 gstreamer1.0-plugins-bad \
            gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-vaapi libsrt1.5-gnutls \
            libcjson1 ffmpeg iproute2 curl; do
-    zcat "$POOL_DIR/Packages.gz" | grep -q "^Package: $pkg$" || POOL_MISSING="$POOL_MISSING $pkg"
+    grep -q "^Package: $pkg$" "$POOL_INDEX" || POOL_MISSING="$POOL_MISSING $pkg"
 done
-[ -n "$POOL_MISSING" ] && { echo "❌ pool is missing critical packages:$POOL_MISSING" >&2; exit 1; }
+if [ -n "$POOL_MISSING" ]; then
+    echo "❌ pool index has $(grep -c '^Package:' "$POOL_INDEX") entries and is missing:$POOL_MISSING" >&2
+    rm -f "$POOL_INDEX"
+    exit 1
+fi
+rm -f "$POOL_INDEX"
 echo "   ✅ pool covers the critical packages"
 echo "$POOL_KEY" > "$POOL_STAMP"
 fi
