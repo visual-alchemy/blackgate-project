@@ -49,7 +49,7 @@ install:
 				gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
 				gstreamer1.0-plugins-bad gstreamer1.0-libav \
 				gstreamer1.0-vaapi libsrt-gnutls-dev libglib2.0-dev \
-				libcjson-dev libncurses6 libssl3t64; \
+				libcjson-dev libgnutls28-dev nettle-dev libncurses6 libssl3t64; \
 		elif command -v dnf > /dev/null; then \
 			echo "Non-production Fedora/RHEL development host"; \
 			sudo dnf install -y gcc gcc-c++ make pkgconfig git curl ffmpeg \

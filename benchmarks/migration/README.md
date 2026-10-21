@@ -62,6 +62,20 @@ therefore cannot show up in this metric, and a "C reports 0 lost, Rust reports N
 bug, not a Rust regression. Fixing it means versioning the oracle (new manifest), which is a
 recorded decision, not a bug fix.
 
+**Pipeline shape is part of the comparison.** Both engines must run the same pipeline or the ratios
+mean nothing. The frozen C oracle has no `preview` key and builds its thumbnail branch whenever
+`argv[1]` (the route id) is non-empty (`gst_pipeline.c:884`); it takes the route id from argv, never
+from the init JSON. The Rust engine builds its preview branch only for `"preview": true`. So
+`build_plan()` blanks the C's route-id argument for workloads that do not set `"thumbnail": true`,
+and adds `"preview": true` to the Rust init for the ones that do. On bare metal that branch costs
+21.5 MB -> 72.2 MB RSS and 6.0 % -> 8.0 % CPU, and its internal state varies run to run — which is
+what failed the C's own CV gate in the 2026-10-20 bare-metal run (3 workloads `inconclusive` while
+all 42 metrics passed). Every run now asserts the branch is present exactly when the workload asks
+for it. Results recorded before this change (`results/verdict-2026-10-17-local-vm` and
+`results/baremetal-2026-10-20`) compare a C run that paid for the branch against a Rust run that did
+not, so their `peak_rss_ratio` and `cpu_ratio` are flattered in Rust's favour and are not comparable
+with runs made after it.
+
 Each run directory contains raw engine JSON, socket/stdout/stderr evidence,
 per-workload comparisons, `summary.json`, and `REPORT.md`. Runner exits nonzero
 for failed or inconclusive comparisons.

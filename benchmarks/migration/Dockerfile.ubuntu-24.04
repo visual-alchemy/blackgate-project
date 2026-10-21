@@ -13,9 +13,11 @@ RUN apt-get update \
         curl \
         libcjson-dev \
         libglib2.0-dev \
+        libgnutls28-dev \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
         libsrt-gnutls-dev \
+        nettle-dev \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 

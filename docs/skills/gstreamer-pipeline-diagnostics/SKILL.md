@@ -296,10 +296,19 @@ effect.
   `inferred = false`, while width/height/profile/level (read before the VUI) were right.
   The reference strips it for both H.264 and HEVC. See
   `references/mpegts-psi-parsing.md`.
-- A side capture of the same URL is not ground truth for PSI values: an ffmpeg capture of
-  a source showed PMT PID 4096 / video PID 256 while the engine's own parse of that same
-  source reported PMT PID 32 / video PID 65. When a PID-derived key disagrees with a
-  capture, instrument the engine's parser — do not "correct" the engine to match the file.
+- A side capture of the same URL is not ground truth for PSI values — and the usual reason is the
+  tool that wrote the file. `ffmpeg -c copy -f mpegts` does NOT pass packets through: the reader
+  demuxes and the mpegts MUXER re-muxes, assigning its own PIDs (program 1, PMT PID 4096, video
+  `0x100`, audio `0x102`, `0x103`, ...). Every "disagreement" with such a file is a description of
+  ffmpeg's muxer, not of the source: an ffmpeg capture showed PMT 4096 / video 256 while the engine's
+  own parse of the same source reported video 52 / audio [53,55,56] — the engine was right, and the
+  file was ffmpeg's own output. Capture RAW bytes (python `socket.recv` on a udpsink, `socat
+  UDP-RECV`, or read the sink's socket) and decode them with `scripts/ts_pid_histogram.py`, or replay
+  them through the engine's own parser via the `ts_probe_real_capture` test with
+  `TS_PROBE_FIXTURE=<capture>`. Only then compare — and never "correct" the engine to match a file.
+  A corollary worth remembering: three audio PIDs whose values are the ASCII codes of the digits the
+  previous session recorded (`[53,55,56]` for `"578"`) look like a string split into bytes, and were
+  not — `inspect(v, charlists: :as_lists)` reveals the real integers, but it does NOT make them wrong.
 - Run the rebuild -> restart -> verify sequence as separate commands with a printed marker
   per step, not as one `&&` chain. A transient failure in an early gate aborts the chain and
   silently skips the middle steps, so the state you then debug belongs to a step that never

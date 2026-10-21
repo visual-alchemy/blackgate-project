@@ -44,6 +44,11 @@ git checkout rust-migration
 #    first (sudo apt-get install -y make git); step 0 of the target reminds you. It then pins
 #    OTP 27.0.1 / Elixir 1.18.2 / Node 20.19.0 / Rust 1.96.0 under ~/.blackgate/toolchain and
 #    installs the GStreamer, SRT, cJSON and ffmpeg packages. Needs sudo.
+#    If `make -C native/archive/c-engine` then dies on `cJSON.h: No such file or directory`,
+#    the cause is srt.pc's `Requires.private: gnutls nettle`: with either .pc missing,
+#    pkg-config fails the whole query and the oracle gets no cflags at all (libcjson-dev
+#    alone does not help — its header is /usr/include/cjson/cJSON.h). `make install` now
+#    installs both; on a host prepared earlier: sudo apt-get install -y libgnutls28-dev nettle-dev
 make install
 
 # 2. SRT receive/send buffers: without this, high-bitrate SRT drops packets.
@@ -78,10 +83,30 @@ A workload is `pass` only when every metric is inside its gate **and** every met
 (<= 0.0).
 
 Baseline from the local dev VM (`verdict-2026-10-17-local-vm/`, KVM, 4 vCPU, 3 GB RAM):
-42 metrics, 42 PASS, 0 FAIL; 1 workload `pass`, 5 `inconclusive` purely on CV. Rust used
-less CPU (0.73-0.96x) and less memory (0.26-0.88x) than C everywhere; throughput matched to
-0.9998-1.0001x; packet loss delta was 0. On bare metal, expect the same ratios with CVs
-under 5% — that is the whole point of moving off the VM.
+42 metrics, 42 PASS, 0 FAIL; 1 workload `pass`, 5 `inconclusive` purely on CV.
+
+**Bare-metal result (2026-10-20, `results/baremetal-2026-10-20-fixed/20261020T154359Z`)**:
+42/42 metrics pass, 0 metric failures, **4 of 6 workloads `pass`**. Ratios: throughput
+1.0000-1.0007x, CPU 0.995-1.040x, peak RSS 0.938-1.049x, latency 0.261-1.012x, startup
+0.9997-1.0001x, failover gap 0.998-1.002x, packet-loss delta 0 on all six. The two engines are
+near-identical; a route with a preview costs ~72 MB on both.
+
+Do not expect the old "Rust uses 0.26-0.88x the memory" figures. They came from an unfair
+comparison: the frozen C oracle builds its thumbnail branch whenever `argv[1]` is non-empty
+(`gst_pipeline.c:884`) and has no `preview` key, so every C run paid ~50 MB that the Rust run never
+allocated. `run_benchmark.py` now blanks the C's route-id argument unless the workload sets
+`"thumbnail": true`, sends `"preview": true` to Rust when it does, and asserts the branch is built
+exactly when requested. **Results recorded before that change are not comparable with results after
+it.**
+
+The two remaining `inconclusive` verdicts on bare metal are structural, and more repetitions do not
+remove them:
+
+- `udp-to-srt`: Rust `latency_ms` samples [0.0100, 0.0145, 0.0115] ms — a ~12 µs mean, so the CV is
+  quantization on a sub-15 µs value. Rust is 0.261x the C's latency on that metric.
+- `srt-thumbnail`: the oracle's own thumbnail branch is nondeterministic (C RSS 68.9 / 39.2 / 72.4 MB;
+  one run never allocated its decoder pool) while Rust held 71.9-72.3 MB. Only oracle versioning
+  fixes that.
 
 Two known measurement artifacts to keep in mind when reading CV failures:
 

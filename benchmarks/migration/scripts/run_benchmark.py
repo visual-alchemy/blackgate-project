@@ -200,6 +200,13 @@ def build_init(workload: dict, ports: list[int]) -> dict:
         "auto_join": True,
         "sinks": [],
     }
+    # A workload that asks to measure the preview/thumbnail path must ask for it on both
+    # sides. The Rust engine builds its preview branch only for "preview": true. The frozen
+    # C oracle has no such key and always builds its thumbnail branch when argv[1] is
+    # non-empty (gst_pipeline.c:884); build_plan() expresses the same intent on the C side
+    # by passing an empty route id, so both engines run the same pipeline shape.
+    if workload.get("thumbnail"):
+        init["preview"] = True
     if "secondary_source" in workload:
         secondary_port = ports[cursor]
         cursor += 1
@@ -299,6 +306,7 @@ def build_plan(
     workload: dict,
     ports: list[int],
     duration_seconds: float | None = None,
+    engine_name: str = "c",
 ) -> dict:
     timing = workload["timing"]
     duration = duration_seconds or (
@@ -318,9 +326,21 @@ def build_plan(
     if "secondary_source" in workload:
         senders.append(_ffmpeg_sender(workload, ports[1], duration + 3.0))
 
+    # The frozen C oracle picks its thumbnail branch from argv[1] alone: non-empty builds it,
+    # empty skips it (gst_pipeline.c:707-715, guard at :884). It has no env switches and reads
+    # route_id from argv, never from the init JSON, so argv is the only lever that makes a C
+    # run the same shape as a Rust run. Measured cost of that branch on the bare-metal host:
+    # 21.5 MB -> 72.2 MB RSS and 6.0 % -> 8.0 % CPU, and its internal state varies run to run,
+    # which is what pushed the C's own RSS/CPU coefficient of variation past the 5 % gate.
+    thumbnail = bool(workload.get("thumbnail"))
+    engine_arg = init["route_id"] if (thumbnail or engine_name != "c") else ""
     return {
         "route_id": init["route_id"],
-        "engine": [str(engine), init["route_id"]],
+        "engine": [str(engine), engine_arg],
+        "engine_arg": engine_arg,
+        "handshake": f"route_id:{engine_arg}",
+        "socket_token": engine_arg,
+        "thumbnail": thumbnail,
         "init": init,
         "receivers": receivers,
         "receiver_phases": phases,
@@ -400,6 +420,27 @@ def _wait_for(
             return False
         time.sleep(0.02)
     return condition()
+
+
+def _assert_branch_shape(plan: dict, stdout_pump, process, timeout_seconds: float = 5.0) -> None:
+    """Fail loudly when an engine's preview/thumbnail branch is not what the workload asked for.
+
+    Both engines print the same marker when the branch is built (Rust
+    `engine-gst/src/builder.rs`, C `src/thumbnail_worker.c`), so one check covers both. Without
+    it a config regression silently restores the asymmetry this harness was fixed for: every
+    earlier C run paid ~50 MB RSS of decoder frame pool that the Rust run never allocated.
+    """
+    marker = "Thumbnail: Branch ready"
+    if plan["thumbnail"]:
+        _wait_for(lambda: marker in stdout_pump.text(), process, timeout_seconds)
+    found = marker in stdout_pump.text()
+    if found != plan["thumbnail"]:
+        expectation = "expected" if plan["thumbnail"] else "not expected"
+        raise RunnerError(
+            f"thumbnail/preview branch mismatch for {plan['route_id']}: {expectation}, "
+            f"{'found' if found else 'missing'} in engine stdout\n"
+            f"stdout:\n{stdout_pump.text()}"
+        )
 
 
 def _socket_stats(frames: str, route_id: str) -> list[dict]:
@@ -490,7 +531,7 @@ def run_engine_lifecycle(
     if not engine.is_file() or not os.access(engine, os.X_OK):
         raise RunnerError(f"engine is missing or not executable: {engine}")
     ports = reserve_ports(1 + int("secondary_source" in workload) + len(workload["destinations"]))
-    active_plan = plan or build_plan(engine, workload, ports, duration_seconds)
+    active_plan = plan or build_plan(engine, workload, ports, duration_seconds, engine_name)
     collector = SocketCollector(socket_path)
     process: subprocess.Popen[bytes] | None = None
     auxiliary: list[tuple[subprocess.Popen[bytes], OutputPump, str]] = []
@@ -511,14 +552,16 @@ def run_engine_lifecycle(
         # The engines read BLACKGATE_STATS_SOCKET; BLACKGATE_BENCH_SOCKET was never read
         # by either engine, which is why runs had to bind the shared default path.
         env["BLACKGATE_STATS_SOCKET"] = str(socket_path)
-        # The benchmark plan deliberately does NOT request a preview ("preview" is absent
-        # from the init JSON), so the Rust engine runs as a pure streaming engine — the
-        # same thing the C engine measures, because the C engine only builds its thumbnail
-        # chain when the config asks for one. Enabling it here would charge the Rust side
-        # ~33 MB of H.264 decoder frame pool that the C run never allocates.
+        # Both engines are given the same pipeline shape: no preview/thumbnail branch unless
+        # the workload asks for one ("thumbnail": true). An earlier version of this comment
+        # claimed the C engine "only builds its thumbnail chain when the config asks for one"
+        # — it does not. The archived oracle builds it whenever argv[1] is non-empty, so every
+        # earlier C run paid ~50 MB of decoder frame pool the Rust run never allocated, and the
+        # branch's variable internal state was what failed the C's own CV gate. build_plan()
+        # blanks the C's argv for workloads that do not ask for the branch.
         start_time = time.monotonic()
         process = subprocess.Popen(
-            [str(engine.resolve()), active_plan["route_id"]],
+            [str(engine.resolve()), active_plan["engine_arg"]],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -559,9 +602,10 @@ def run_engine_lifecycle(
                 f"stdout:\n{stdout_pump.text()}\nstderr:\n{stderr_pump.text()}"
             )
         startup_ms = (time.monotonic() - start_time) * 1000.0
-        handshake = f"route_id:{active_plan['route_id']}"
+        handshake = active_plan["handshake"]
         if not _wait_for(lambda: handshake in collector.text(), process, 2.0):
             raise RunnerError(f"missing IPC handshake: {handshake}")
+        _assert_branch_shape(active_plan, stdout_pump, process)
 
         run_start = time.monotonic()
         initial_cpu, initial_rss = _process_sample(process.pid)
@@ -634,7 +678,7 @@ def run_engine_lifecycle(
         stdout_pump.join()
         stderr_pump.join()
         frames = collector.text()
-        stats = _socket_stats(frames, active_plan["route_id"])
+        stats = _socket_stats(frames, active_plan["socket_token"])
         metrics = _metrics_from_evidence(
             stats,
             cpu_start,
@@ -708,7 +752,7 @@ def _run_workload(
             ports = reserve_ports(
                 1 + int("secondary_source" in workload) + len(workload["destinations"])
             )
-            plan = build_plan(engine, workload, ports, PREFLIGHT_SECONDS)
+            plan = build_plan(engine, workload, ports, PREFLIGHT_SECONDS, engine_name)
             run_engine_lifecycle(
                 engine_name,
                 engine,
@@ -725,7 +769,7 @@ def _run_workload(
             ports = reserve_ports(
                 1 + int("secondary_source" in workload) + len(workload["destinations"])
             )
-            plan = build_plan(engine, workload, ports, warmup + measurement)
+            plan = build_plan(engine, workload, ports, warmup + measurement, engine_name)
             result = run_engine_lifecycle(
                 engine_name,
                 engine,
@@ -827,8 +871,8 @@ def main(argv: list[str] | None = None) -> int:
                 plans.append(
                     {
                         "workload": workload["id"],
-                        "c": build_plan(args.c_engine, workload, ports),
-                        "rust": build_plan(args.rust_engine, workload, ports),
+                        "c": build_plan(args.c_engine, workload, ports, engine_name="c"),
+                        "rust": build_plan(args.rust_engine, workload, ports, engine_name="rust"),
                     }
                 )
             args.output.mkdir(parents=True, exist_ok=True)
