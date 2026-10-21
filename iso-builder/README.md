@@ -34,14 +34,17 @@ Output: `iso-builder/output/blackgate-installer-amd64.iso`.
 | DeckLink | Bundled GStreamer 1.24 DeckLink plugin |
 | Network | DHCP, 16 MiB UDP send/receive buffer ceiling |
 
-## Default credentials
+## Credentials and access
 
-| Service | User | Password |
-| --- | --- | --- |
-| Dashboard | admin | password123 |
-| SSH | blackgate | blackgate123 |
+There is no fixed default password on this appliance, and nothing key-only uses one.
 
-Change both passwords after installation.
+| Door | How in |
+| --- | --- |
+| Dashboard | user `admin`, random password written on first boot to `/home/blackgate/blackgate-dashboard-credentials.txt` (0640, root:blackgate). The console also prints it before login. |
+| SSH (support) | key-only: `root` and `bg-support`, with the private counterpart of `files/support-authorized-keys`. `bg-support` has sudo; the application user `blackgate` does not. |
+| Break-glass root | random password in `/root/blackgate-root-password.txt` (0600), physical console only — root SSH is `prohibit-password`, so this never crosses the network. |
+
+Replace `files/support-authorized-keys` with the key you intend to use before building an image for a client.
 
 ## Operations
 
@@ -49,6 +52,34 @@ Change both passwords after installation.
 sudo systemctl status blackgate
 sudo journalctl -u blackgate -f
 sudo systemctl restart blackgate
+```
+
+## Offline install
+
+The image installs with no network at all. `packages:` in `autoinstall/user-data` is deliberately empty: any
+entry there makes curtin fetch from the Ubuntu archive, which is what used to force an install to have network.
+
+The runtime packages are listed in `packages.list` (committed, single source of truth). `build.sh` resolves the
+full apt closure of that list and downloads it into `files/pool/`, indexed by `dpkg-scanpackages` as
+`Packages.gz`. The installer's late-commands copy the pool to `/opt/blackgate/pool` and register it as
+`deb [trusted=yes] file:///opt/blackgate/pool ./`; `blackgate-firstboot.sh` installs from it, and falls back to
+the archive when the pool is absent. That install happens on first boot, not during the install, which is what
+keeps the installer off the network.
+
+The closure is resolved against an EMPTY dpkg status on purpose: against the build machine's own status apt
+answers "already installed" and the pool comes out megabytes short of what a fresh machine needs.
+
+Pool size: 607 packages, ~380 MB (it includes the base closure apt would pull for a fresh system), so the
+image is about 4.5 GB.
+
+Adding a runtime package: add it to `packages.list` and rebuild. Never add `packages:` back to the autoinstall.
+
+Verify a build with the archive irrelevant:
+
+```bash
+xorriso -osirrox on -indev output/blackgate-installer-amd64.iso -extract /blackgate /tmp/iso-check
+ls /tmp/iso-check/blackgate/pool | wc -l            # 608 = 607 .deb + Packages.gz
+wc -l /tmp/iso-check/blackgate/packages.list        # 22
 ```
 
 Physical DeckLink/SDI validation remains manual release sign-off step.
