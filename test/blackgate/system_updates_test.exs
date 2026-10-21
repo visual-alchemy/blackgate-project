@@ -91,6 +91,15 @@ defmodule Blackgate.SystemUpdatesTest do
       assert :ok = SystemUpdates.discard_upload(part_path)
       assert SystemUpdates.available() == []
     end
+
+    test "an unusable update root says which root it used and where that comes from" do
+      # What an appliance installed without BLACKGATE_ROOT looks like: it falls back to /opt/blackgate.
+      System.put_env("BLACKGATE_ROOT", "/proc/blackgate-unwritable")
+
+      assert {:error, message} = SystemUpdates.prepare_upload("2026.10.21.4.bgupdate")
+      assert message =~ "/proc/blackgate-unwritable/incoming"
+      assert message =~ "BLACKGATE_ROOT"
+    end
   end
 
   describe "available/0" do

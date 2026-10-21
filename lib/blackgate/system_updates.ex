@@ -128,11 +128,18 @@ defmodule Blackgate.SystemUpdates do
   end
 
   # Errors are turned into messages here: an errno atom would reach JSON encoding and raise, and an
-  # operator needs to read "permission denied on /opt/blackgate/incoming", not ":eacces".
+  # operator needs to know *which* root was used and where that root comes from — the usual cause is a
+  # service that was installed without BLACKGATE_ROOT, so it fell back to /opt/blackgate.
   defp prepare_incoming_dir do
     case File.mkdir_p(incoming_dir()) do
-      :ok -> :ok
-      {:error, reason} -> {:error, "cannot use #{incoming_dir()}: #{:file.format_error(reason)}"}
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         "cannot use #{incoming_dir()}: #{:file.format_error(reason)}. The update root comes from " <>
+           "BLACKGATE_ROOT (default /opt/blackgate); set it to this deployment's root in the service " <>
+           "environment file (/etc/blackgate/blackgate.env) and restart the gateway."}
     end
   end
 
