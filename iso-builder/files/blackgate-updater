@@ -68,7 +68,10 @@ else
 fi
 ln -s "releases/$VERSION" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$CURRENT"
-systemctl restart blackgate.service
+# `systemctl restart` on a release that cannot start blocks until systemd gives up (~90 s while
+# Restart=always keeps retrying), which delays the rollback by just as much. Bound the wait: a healthy
+# release returns in a second or two, a broken one is detected — and rolled back from — in seconds.
+timeout 25 systemctl restart blackgate.service || true
 sleep 8
 if systemctl is-active --quiet blackgate.service; then
   prune_releases
@@ -96,5 +99,5 @@ if systemctl is-active --quiet blackgate.service; then
 fi
 ln -s "$PREVIOUS" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$CURRENT"
-systemctl restart blackgate.service || true
+timeout 25 systemctl restart blackgate.service || true
 fail "new release failed; rolled back"

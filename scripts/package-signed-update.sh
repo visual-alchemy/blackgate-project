@@ -73,6 +73,12 @@ NOTES_JSON="$APP_DIR/priv/release-notes.json"
 } > "$NOTES_JSON"
 python3 -c "import json,sys; json.load(open('$NOTES_JSON')); print('release notes valid:', '$NOTES_JSON')"
 
+# Running under sudo writes the notes file as root inside a tree the operator owns, which then blocks
+# the *next* non-root packaging run ("Permission denied" on the same path). Hand it back.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  chown "$SUDO_USER" "$NOTES_JSON" 2>/dev/null || true
+fi
+
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$OUTPUT_DIR"
