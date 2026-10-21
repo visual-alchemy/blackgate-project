@@ -81,6 +81,24 @@ if [ -f /etc/blackgate/blackgate.env ] && [ ! -f /home/blackgate/blackgate-dashb
     fi
 fi
 
+# ─── Console banner ────────────────────────────────────────────────────────
+# A headless install has no way to learn its own address before somebody logs in, and the login prompt
+# itself carries no information. Write one for the console (getty prints /etc/issue.d/*), without the
+# password: that stays in the 0640 credentials file.
+IP_NOW="$(hostname -I | awk '{print $1}')"
+if [ -n "$IP_NOW" ]; then
+    mkdir -p /etc/issue.d
+    {
+        echo "Blackgate SRT Gateway"
+        echo "  Dashboard : http://$IP_NOW:4000"
+        echo "  Login     : admin (password: /home/blackgate/blackgate-dashboard-credentials.txt)"
+        echo
+    } > /etc/issue.d/99-blackgate
+    say "Console banner written with IP $IP_NOW"
+else
+    say "WARNING: no IPv4 address yet - console banner skipped"
+fi
+
 # ─── DeckLink driver ───────────────────────────────────────────────────────
 # The vendor driver is what makes the card usable: the GStreamer plugin only talks to it. The ISO ships
 # the .deb, so a fresh appliance gets SDI without anyone logging in.
