@@ -151,6 +151,17 @@ done
 cp "$SCRIPT_DIR/release-version" "$EXTRACT_DIR/blackgate/release-version"
 echo "   ✅ release-version ($(tr -d '\r\n' < "$SCRIPT_DIR/release-version"))"
 
+# The Blackmagic Desktop Video .deb (~250 MB) is what makes SDI work on a fresh appliance: without it the
+# gateway runs but no frames reach the card. Vendor binary, so it is gitignored and the build only carries
+# it when the operator put it beside the other payload files.
+DESKTOP_VIDEO_DEB="$SCRIPT_DIR/files/blackmagic-desktopvideo.deb"
+if [ -f "$DESKTOP_VIDEO_DEB" ]; then
+    cp "$DESKTOP_VIDEO_DEB" "$EXTRACT_DIR/blackgate/blackmagic-desktopvideo.deb"
+    echo "   ✅ blackmagic-desktopvideo.deb ($(du -h "$DESKTOP_VIDEO_DEB" | cut -f1))"
+else
+    echo "   ⚠️  blackmagic-desktopvideo.deb missing — the image will need the DeckLink driver by hand"
+fi
+
 # The first boot installs the unit/helper/sudoers/updater/keypair through this script rather than
 # duplicating the logic: it is the same installer a manual install runs.
 cp "$PROJECT_ROOT/scripts/install-system-actions.sh" "$EXTRACT_DIR/blackgate/blackgate-install-system-actions.sh"
