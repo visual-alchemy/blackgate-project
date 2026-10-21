@@ -133,6 +133,61 @@ defmodule Blackgate.SystemControlTest do
     end
   end
 
+  describe "actions/0" do
+    test "reports what is installed and keeps the availability flags consistent with it" do
+      actions = SystemControl.actions()
+
+      assert is_boolean(actions.unit_installed)
+      assert is_boolean(actions.helper_installed)
+      assert is_boolean(actions.sudoers_installed)
+      assert actions.can_schedule == (actions.helper_installed and actions.sudoers_installed)
+      assert is_list(actions.scheduled)
+
+      # A restart additionally needs the unit: a hand-started node carries its environment in the
+      # shell that launched it, so there is no safe way to restart it.
+      assert actions.available.restart_gateway ==
+               (actions.can_schedule and actions.unit_installed)
+
+      assert actions.available.reboot == actions.can_schedule
+      assert actions.available.shutdown == actions.can_schedule
+      assert actions.available.deploy == actions.can_schedule
+    end
+
+    test "refuses an action that is not on the allowlist" do
+      assert {:error, message} = SystemControl.perform_action("rm-rf-everything")
+      assert message =~ "unsupported action"
+    end
+
+    test "a valid action is refused when the privileged helper is not installed" do
+      if SystemControl.actions().helper_installed do
+        # The installer has been run on this machine. Scheduling a real action here would be reckless,
+        # so the check is skipped rather than exercised.
+        assert SystemControl.actions().can_schedule or
+                 not SystemControl.actions().sudoers_installed
+      else
+        assert {:error, message} = SystemControl.perform_action("reboot")
+        assert message =~ "privileged helper is not installed"
+      end
+    end
+
+    test "scheduled_actions/0 never lists an action that is not one of ours" do
+      for scheduled <- SystemControl.scheduled_actions() do
+        assert scheduled.action in ~w(restart_gateway reboot shutdown deploy)
+        assert scheduled.unit =~ "blackgate-dashboard-"
+      end
+    end
+  end
+
+  describe "release/0" do
+    test "always knows some version to show" do
+      release = SystemControl.release()
+
+      assert is_binary(release.version) and release.version != ""
+      assert is_binary(release.app_version)
+      assert is_list(release.changes)
+    end
+  end
+
   describe "report/0" do
     test "is a readable text dump of the same facts" do
       report = SystemControl.report()

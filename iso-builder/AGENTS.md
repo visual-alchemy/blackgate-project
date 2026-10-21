@@ -13,6 +13,26 @@ This folder builds Blackgate bare-metal installer.
 - Docker: allowed for development and CI image checks, never required by
   installed appliance.
 
+## Shipped system integration
+
+`files/` carries the artifacts that give the dashboard its privileged surface. First boot installs
+them through `scripts/install-system-actions.sh` (shipped as
+`/opt/blackgate/blackgate-install-system-actions.sh`, run with `BLACKGATE_ARTIFACT_DIR=/opt/blackgate/files`):
+
+- `files/blackgate.service` — unit running `/opt/blackgate/current`; credentials come from
+  `/etc/blackgate/blackgate.env` (0600 root), never from the world-readable unit.
+- `files/blackgate-system-action` (+ `.sudoers`) — the only privileged path, allowlisted and delayed.
+- `files/blackgate-updater` — verifies and applies signed `.bgupdate` packages, with automatic rollback.
+- `files/release-version` — the release version the packaging and update paths agree on.
+- `files/blackgate-update-bootstrap` — moves a legacy `/opt/blackgate` install to the releases/current
+  layout.
+
+Packages are built by `scripts/package-signed-update.sh` (Ed25519 keypair generated at install time in
+`/etc/blackgate/`). Runbook: `docs/operations/system-actions-and-updates.md`.
+
+The ISO does not carry the Blackmagic Desktop Video `.deb` yet, so a fresh appliance has the GStreamer
+DeckLink plugin but no driver until Desktop Video is installed by hand.
+
 ## Build and checks
 
 ```bash

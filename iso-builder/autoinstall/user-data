@@ -73,8 +73,18 @@ autoinstall:
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
     - cp /cdrom/blackgate/libgstdecklink.so /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
+    # System-tab integration: first boot installs these with blackgate-install-system-actions.sh
+    - mkdir -p /target/opt/blackgate/files
+    - cp /cdrom/blackgate/blackgate-system-action /target/opt/blackgate/files/
+    - cp /cdrom/blackgate/blackgate-system-action.sudoers /target/opt/blackgate/files/
+    - cp /cdrom/blackgate/blackgate-updater /target/opt/blackgate/files/
+    - cp /cdrom/blackgate/blackgate.service /target/opt/blackgate/files/
+    - cp /cdrom/blackgate/release-version /target/opt/blackgate/
+    - cp /cdrom/blackgate/blackgate-install-system-actions.sh /target/opt/blackgate/
+
     # Set permissions
     - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
+    - chmod +x /target/opt/blackgate/blackgate-install-system-actions.sh
     - chmod +x /target/etc/update-motd.d/99-blackgate
     - chmod 644 /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdecklink.so
     - chown -R 1000:1000 /target/opt/blackgate

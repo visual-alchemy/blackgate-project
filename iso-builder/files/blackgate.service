@@ -7,21 +7,24 @@ Wants=network-online.target
 Type=exec
 User=blackgate
 Group=blackgate
-WorkingDirectory=/opt/blackgate
+# The release the `current` symlink points at: an update swaps the symlink, so this unit never changes.
+WorkingDirectory=/opt/blackgate/current
 
+# Credentials live in a root-owned 0600 environment file. A unit file is world-readable, so putting
+# API_AUTH_PASSWORD in here would hand the dashboard password to every local user.
+EnvironmentFile=-/etc/blackgate/blackgate.env
 Environment=PHX_SERVER=true
 Environment=PORT=4000
 Environment=PHX_HOST=0.0.0.0
-Environment=API_AUTH_USERNAME=admin
-Environment=API_AUTH_PASSWORD=password123
-Environment=LICENSE_SERVER_URL=https://license-server-eta-bay.vercel.app
-Environment=HOME=/opt/blackgate
+Environment=HOME=/opt/blackgate/current
 Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
 Environment=ERL_AFLAGS=-proto_dist inet_tcp
 Environment=RELEASE_DISTRIBUTION=none
 
-ExecStart=/opt/blackgate/bin/blackgate start
-ExecStop=/opt/blackgate/bin/blackgate stop
+# A leftover socket file from a previous run makes the Ranch unix listener fail to bind.
+ExecStartPre=-/bin/rm -f /tmp/hydra_unix_sock
+ExecStart=/opt/blackgate/current/bin/blackgate start
+ExecStop=/opt/blackgate/current/bin/blackgate stop
 
 Restart=always
 RestartSec=5

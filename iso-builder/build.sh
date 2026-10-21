@@ -44,6 +44,10 @@ REQUIRED=(
     "files/blackgate-firstboot.sh"
     "files/blackgate-firstboot.service"
     "files/99-blackgate-motd.sh"
+    "files/blackgate-system-action"
+    "files/blackgate-system-action.sudoers"
+    "files/blackgate-updater"
+    "files/release-version"
 )
 for f in "${REQUIRED[@]}"; do
     if [ ! -f "$SCRIPT_DIR/$f" ]; then
@@ -128,10 +132,19 @@ for f in \
     blackgate-firstboot.sh \
     blackgate-firstboot.service \
     99-blackgate-motd.sh \
+    blackgate-system-action \
+    blackgate-system-action.sudoers \
+    blackgate-updater \
+    release-version \
     libgstdecklink.so; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
 done
+
+# The first boot installs the unit/helper/sudoers/updater/keypair through this script rather than
+# duplicating the logic: it is the same installer a manual install runs.
+cp "$PROJECT_ROOT/scripts/install-system-actions.sh" "$EXTRACT_DIR/blackgate/blackgate-install-system-actions.sh"
+echo "   ✅ blackgate-install-system-actions.sh"
 
 # ─── Step 5: Patch GRUB ─────────────────────────────────────────────────
 

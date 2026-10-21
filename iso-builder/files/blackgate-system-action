@@ -1,0 +1,69 @@
+#!/bin/sh
+# Blackgate privileged system actions, invoked by the dashboard through sudo.
+#
+# Every action is *scheduled* with systemd-run instead of executed directly. A restart is delayed a
+# few seconds, a reboot/shutdown ten, and a deploy two: an operator who clicked the wrong button (or
+# a dashboard that repeated a request) still has a window to cancel the transient unit before the
+# box goes down. Cancel with:
+#
+#     blackgate-system-action cancel blackgate-dashboard-reboot
+#
+# The unit is the only interface: no shell, no arbitrary command, no path from the dashboard.
+set -eu
+
+SYSTEMD_RUN=/usr/bin/systemd-run
+SYSTEMCTL=/usr/bin/systemctl
+UPDATER=/usr/local/libexec/blackgate-updater
+SERVICE=blackgate.service
+
+die() {
+  echo "$1" >&2
+  exit "${2:-64}"
+}
+
+version_ok() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+}
+
+case "${1:-}" in
+  restart-blackgate)
+    exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-restart \
+      --on-active=3s "$SYSTEMCTL" restart "$SERVICE"
+    ;;
+  reboot)
+    exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-reboot \
+      --on-active=10s "$SYSTEMCTL" reboot
+    ;;
+  shutdown)
+    exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-shutdown \
+      --on-active=10s "$SYSTEMCTL" poweroff
+    ;;
+  cancel)
+    case "${2:-}" in
+      blackgate-dashboard-restart | blackgate-dashboard-reboot | blackgate-dashboard-shutdown | \
+      blackgate-dashboard-deploy | blackgate-dashboard-test) ;;
+      *) die "unknown unit" ;;
+    esac
+    # --on-active creates a transient timer plus the service it will start: stopping the timer is
+    # what prevents the action, stopping the service covers the case where it already fired.
+    "$SYSTEMCTL" stop "$2.timer" 2>/dev/null || true
+    "$SYSTEMCTL" stop "$2.service" 2>/dev/null || true
+    exit 0
+    ;;
+  deploy)
+    version="${2:-}"
+    version_ok "$version" || die "invalid version"
+    exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-deploy \
+      --on-active=2s "$UPDATER" deploy "$version"
+    ;;
+  test-action)
+    # Plumbing smoke test: schedules a harmless transient unit through exactly the same mechanism the
+    # destructive actions use, so sudoers + systemd-run + cancel can be proven before anyone trusts a
+    # reboot button. It does nothing after 60 s.
+    exec "$SYSTEMD_RUN" --quiet --collect --unit=blackgate-dashboard-test \
+      --on-active=60s /bin/true
+    ;;
+  *)
+    die "Unsupported Blackgate system action"
+    ;;
+esac

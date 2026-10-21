@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input, Descriptions, Alert } from 'antd';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input, Descriptions, Alert, Tooltip, Progress } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined, DesktopOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { backupApi, networkApi, authApi, systemApi } from '../utils/api';
 import { DEVICE_TO_SDI } from '../utils/sdiPorts';
@@ -22,6 +22,12 @@ const Settings = () => {
   const [systemStatus, setSystemStatus] = useState(null);
   const [loadingSystem, setLoadingSystem] = useState(false);
   const [isDownloadingReport, setIsDownloadingReport] = useState(false);
+  const [systemActionBusy, setSystemActionBusy] = useState(null);
+  const [uploadingPackage, setUploadingPackage] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [systemConfirm, setSystemConfirm] = useState(null);
+  const [typedConfirmation, setTypedConfirmation] = useState('');
+  const packageInputRef = useRef(null);
 
   // Fetch host status when the System tab is active
   useEffect(() => {
@@ -29,6 +35,18 @@ const Settings = () => {
       fetchSystemStatus();
     }
   }, [activeTab]);
+
+  // While the updater is working, keep the card honest: it writes its progress to /run, and the
+  // deploy ends with the service restarting (this page included).
+  useEffect(() => {
+    const status = systemStatus?.updates?.deploy_status;
+    const inProgress = typeof status === 'string' && /^(verifying|deploying)/.test(status);
+
+    if (activeTab !== 'system' || !inProgress) return undefined;
+
+    const timer = setInterval(fetchSystemStatus, 4000);
+    return () => clearInterval(timer);
+  }, [activeTab, systemStatus?.updates?.deploy_status]);
 
   const fetchSystemStatus = async () => {
     setLoadingSystem(true);
@@ -75,6 +93,101 @@ const Settings = () => {
       });
     } finally {
       setIsDownloadingReport(false);
+    }
+  };
+
+  // Every privileged action goes through the backend's allowlist, which hands it to the root helper.
+  // The helper delays it (3 s restart, 10 s reboot/shutdown, 2 s deploy), so it can still be cancelled.
+  const scheduleSystemAction = async (action, argument, verb) => {
+    setSystemActionBusy(action);
+    try {
+      const result = await systemApi.action(action, argument);
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      messageApi.success({
+        content: `${verb} scheduled`,
+        icon: <CheckCircleOutlined />,
+        duration: 5
+      });
+      await fetchSystemStatus();
+    } catch (error) {
+      messageApi.error({
+        content: `${verb} failed: ${error.message}`,
+        icon: <CloseCircleOutlined />,
+        duration: 8
+      });
+    } finally {
+      setSystemActionBusy(null);
+    }
+  };
+
+  // Dangerous actions ask the operator to type the action back before the button unlocks.
+  const askSystemAction = ({ action, verb, unit, version, typed }) => {
+    if (typed) {
+      setTypedConfirmation('');
+      setSystemConfirm({ action, verb, unit, version, typed });
+      return;
+    }
+
+    scheduleSystemAction(action, unit || version, verb);
+  };
+
+  const confirmSystemAction = () => {
+    if (!systemConfirm) return;
+    const { action, verb, unit, version } = systemConfirm;
+    setSystemConfirm(null);
+    setTypedConfirmation('');
+    scheduleSystemAction(action, unit || version, verb);
+  };
+
+  // Be explicit about the blast radius, especially the part operators get wrong: a restart leaves the
+  // routes stopped (a clean shutdown writes `stopped` into Khepri and nothing resumes them).
+  const systemConfirmDescription = ({ action, version }) => {
+    switch (action) {
+      case 'restart_gateway':
+        return 'The gateway restarts in 3 seconds. Route configuration is kept, but routes do not resume by themselves after a restart — start them again from Routes.';
+      case 'reboot':
+        return 'The host reboots in 10 seconds. Every route stops and the gateway stays down until it is back; start the routes again afterwards.';
+      case 'shutdown':
+        return 'The host powers off in 10 seconds. Nothing brings it back until someone powers it on.';
+      case 'deploy':
+        return `Deploys release ${version} in 2 seconds. The updater verifies the package signature and the release checksum, swaps the current symlink, restarts the service, and rolls back automatically if the new release fails its health check. Routes stop during the restart.`;
+      case 'cancel':
+        return 'Stops the scheduled action before it runs.';
+      default:
+        return '';
+    }
+  };
+
+  const handlePackageUpload = async (file) => {
+    if (!file) return;
+
+    setUploadingPackage(true);
+    setUploadProgress(0);
+
+    try {
+      const result = await systemApi.uploadPackage(file, setUploadProgress);
+      messageApi.success({
+        content: `Package ${result.version || file.name} uploaded`,
+        icon: <CheckCircleOutlined />,
+        duration: 5
+      });
+      await fetchSystemStatus();
+    } catch (error) {
+      messageApi.error({
+        content: `Upload failed: ${error.message}`,
+        icon: <CloseCircleOutlined />,
+        duration: 8
+      });
+    } finally {
+      setUploadingPackage(false);
+      setUploadProgress(0);
+      if (packageInputRef.current) {
+        packageInputRef.current.value = '';
+      }
     }
   };
 
@@ -733,6 +846,71 @@ const Settings = () => {
     const routes = status.routes || { total: 0, started: 0, items: [] };
     const engine = status.engine;
     const service = status.service || {};
+    const updates = status.updates || {};
+    const actionsInfo = status.actions || {};
+    const release = status.release || {};
+    const packages = updates.available || [];
+    const scheduled = actionsInfo.scheduled || [];
+
+    const packageColumns = [
+      {
+        title: 'Version',
+        dataIndex: 'version',
+        key: 'version',
+        render: (version) => <code>{version}</code>,
+      },
+      {
+        title: 'Package',
+        dataIndex: 'filename',
+        key: 'filename',
+      },
+      {
+        title: 'Size',
+        dataIndex: 'size_mb',
+        key: 'size_mb',
+        render: (size) => `${size} MB`,
+      },
+      {
+        title: 'Uploaded',
+        dataIndex: 'uploaded_at',
+        key: 'uploaded_at',
+        render: (at) => (at ? at.replace('T', ' ').slice(0, 19) : '-'),
+      },
+      {
+        title: 'State',
+        key: 'state',
+        render: (_, row) =>
+          row.current ? (
+            <Tag color="green">deployed</Tag>
+          ) : row.deployed ? (
+            <Tag color="blue">unpacked (rollback target)</Tag>
+          ) : (
+            <Tag>uploaded</Tag>
+          ),
+      },
+      {
+        title: 'Action',
+        key: 'action',
+        render: (_, row) => (
+          <Button
+            size="small"
+            type="primary"
+            disabled={!actionsInfo.can_schedule || row.current || systemActionBusy === 'deploy'}
+            loading={systemActionBusy === 'deploy'}
+            onClick={() =>
+              askSystemAction({
+                action: 'deploy',
+                verb: `Deploy ${row.version}`,
+                version: row.version,
+                typed: row.version
+              })
+            }
+          >
+            {row.deployed ? 'Roll back to this' : 'Deploy'}
+          </Button>
+        ),
+      },
+    ];
 
     return (
       <div>
@@ -843,6 +1021,195 @@ const Settings = () => {
               <Table columns={sdiColumns} dataSource={sdiRows} pagination={false} size="small" />
             )}
           </Card>
+
+          <Card
+            title={
+              <Space>
+                <ExclamationCircleOutlined />
+                <span>Maintenance</span>
+              </Space>
+            }
+          >
+            {scheduled.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={`Scheduled: ${scheduled.map((item) => item.action).join(', ')}`}
+                description="The helper delays every action, so this can still be stopped before it runs."
+                action={
+                  <Button
+                    size="small"
+                    danger
+                    loading={systemActionBusy === 'cancel'}
+                    onClick={() =>
+                      askSystemAction({
+                        action: 'cancel',
+                        verb: `Cancel ${scheduled[0].action}`,
+                        unit: scheduled[0].unit
+                      })
+                    }
+                  >
+                    Cancel
+                  </Button>
+                }
+              />
+            )}
+
+            {!actionsInfo.can_schedule && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="Privileged actions are unavailable on this gateway"
+                description="The root helper and its sudoers drop-in are not installed, so nothing here can be scheduled. On the appliance they ship with the image; on a manual install run scripts/install-system-actions.sh as root."
+              />
+            )}
+
+            <Space wrap>
+              <Tooltip
+                title={
+                  actionsInfo.available?.restart_gateway
+                    ? 'Restart blackgate.service (3 s delay, cancellable)'
+                    : 'Needs the systemd unit — a hand-started node carries its environment in the shell that launched it'
+                }
+              >
+                <Button
+                  icon={<ReloadOutlined />}
+                  disabled={!actionsInfo.available?.restart_gateway}
+                  loading={systemActionBusy === 'restart_gateway'}
+                  onClick={() =>
+                    askSystemAction({ action: 'restart_gateway', verb: 'Restart gateway' })
+                  }
+                >
+                  Restart Gateway
+                </Button>
+              </Tooltip>
+
+              <Tooltip
+                title={
+                  actionsInfo.available?.reboot
+                    ? 'Reboot the host (10 s delay, cancellable)'
+                    : 'Needs the root helper + sudoers drop-in'
+                }
+              >
+                <Button
+                  danger
+                  disabled={!actionsInfo.available?.reboot}
+                  loading={systemActionBusy === 'reboot'}
+                  onClick={() =>
+                    askSystemAction({ action: 'reboot', verb: 'Reboot gateway', typed: 'reboot' })
+                  }
+                >
+                  Reboot Gateway
+                </Button>
+              </Tooltip>
+
+              <Tooltip
+                title={
+                  actionsInfo.available?.shutdown
+                    ? 'Power the host off (10 s delay, cancellable)'
+                    : 'Needs the root helper + sudoers drop-in'
+                }
+              >
+                <Button
+                  danger
+                  disabled={!actionsInfo.available?.shutdown}
+                  loading={systemActionBusy === 'shutdown'}
+                  onClick={() =>
+                    askSystemAction({
+                      action: 'shutdown',
+                      verb: 'Shutdown gateway',
+                      typed: 'shutdown'
+                    })
+                  }
+                >
+                  Shutdown Gateway
+                </Button>
+              </Tooltip>
+            </Space>
+
+            <div style={{ marginTop: 8, fontSize: '12px', color: '#8c8c8c' }}>
+              Scheduled through the root helper with a delay, so a mis-click can still be cancelled.
+              Every action is recorded in Events.
+            </div>
+          </Card>
+
+          <Card
+            title={
+              <Space>
+                <UploadOutlined />
+                <span>Software Update</span>
+              </Space>
+            }
+            extra={
+              <Space>
+                <span style={{ fontSize: '12px' }}>
+                  {`updater: ${updates.deploy_status || 'idle'}`}
+                </span>
+                <Button icon={<ReloadOutlined />} onClick={fetchSystemStatus} loading={loadingSystem}>
+                  Refresh
+                </Button>
+              </Space>
+            }
+          >
+            <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }}>
+              <Descriptions.Item label="Release">{release.version || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Application version">
+                {release.app_version || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Released on">{release.released_on || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Deployment root">{updates.root || '-'}</Descriptions.Item>
+            </Descriptions>
+
+            {release.changes?.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>What changed</div>
+                <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                  {release.changes.map((change, index) => (
+                    <li key={index}>{change}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <Space wrap style={{ marginBottom: 16 }}>
+              <input
+                ref={packageInputRef}
+                type="file"
+                accept=".bgupdate"
+                style={{ display: 'none' }}
+                onChange={(event) => handlePackageUpload(event.target.files?.[0])}
+              />
+              <Tooltip
+                title={
+                  actionsInfo.can_schedule
+                    ? 'A signed .bgupdate built by scripts/package-signed-update.sh'
+                    : 'Needs the root helper + sudoers drop-in to deploy, but uploading is still possible'
+                }
+              >
+                <Button
+                  icon={<UploadOutlined />}
+                  loading={uploadingPackage}
+                  onClick={() => packageInputRef.current?.click()}
+                >
+                  Upload package (.bgupdate)
+                </Button>
+              </Tooltip>
+              {uploadingPackage && (
+                <Progress percent={uploadProgress} size="small" style={{ width: '200px' }} />
+              )}
+            </Space>
+
+            {packages.length === 0 ? (
+              <span style={{ color: '#8c8c8c' }}>
+                Nothing uploaded yet. Build a package with scripts/package-signed-update.sh: it is
+                signed, and the updater refuses anything whose signature it cannot verify.
+              </span>
+            ) : (
+              <Table columns={packageColumns} dataSource={packages} pagination={false} size="small" />
+            )}
+          </Card>
         </Space>
       </div>
     );
@@ -880,6 +1247,42 @@ const Settings = () => {
     <div>
       {contextHolder}
       {modalContextHolder}
+
+      <Modal
+        open={Boolean(systemConfirm)}
+        title={systemConfirm ? `${systemConfirm.verb}?` : ''}
+        okText={systemConfirm ? systemConfirm.verb : 'Confirm'}
+        cancelText="Cancel"
+        okButtonProps={{
+          danger: systemConfirm ? ['reboot', 'shutdown'].includes(systemConfirm.action) : false,
+          disabled:
+            Boolean(systemConfirm?.typed) && typedConfirmation.trim() !== systemConfirm?.typed
+        }}
+        onOk={confirmSystemAction}
+        onCancel={() => {
+          setSystemConfirm(null);
+          setTypedConfirmation('');
+        }}
+      >
+        {systemConfirm && (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <span>{systemConfirmDescription(systemConfirm)}</span>
+            {systemConfirm.typed && (
+              <>
+                <span>
+                  Type <code>{systemConfirm.typed}</code> to confirm:
+                </span>
+                <Input
+                  value={typedConfirmation}
+                  onChange={(event) => setTypedConfirmation(event.target.value)}
+                  placeholder={systemConfirm.typed}
+                  autoFocus
+                />
+              </>
+            )}
+          </Space>
+        )}
+      </Modal>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
 
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>

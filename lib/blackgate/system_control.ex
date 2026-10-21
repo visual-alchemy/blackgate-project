@@ -1,18 +1,27 @@
 defmodule Blackgate.SystemControl do
   @moduledoc """
-  Read-only view of the gateway host for the Settings > System tab.
+  The gateway host as the Settings > System tab sees it: what the machine is, and the privileged
+  actions an operator can schedule on it.
 
-  This module deliberately stops at reading. Nothing here restarts, reboots, shuts down or deploys:
-  those actions need the privileged helper, the sudoers drop-in and the `blackgate.service` unit a
-  packaged appliance installs, and they arrive in a later phase.
+  Everything is read from the host itself (`/proc`, `df`, `systemctl`, the device tree), from the
+  deployment root (`$BLACKGATE_ROOT`, updates/releases/current) and from the gateway's own state in
+  Khepri and `Blackgate.RouteStatsRegistry`, so the tab reports what is actually running rather than
+  what was configured.
 
-  Everything is gathered from the host itself (`/proc`, `df`, `systemctl`, the device tree) plus the
-  gateway's own state in Khepri and `Blackgate.RouteStatsRegistry`, so the tab reports what is
-  actually running rather than what was configured.
+  Actions never run directly. They go through the allowlisted root helper
+  (`/usr/local/libexec/blackgate-system-action`, reached over `sudo -n`), which schedules them as
+  delayed transient systemd units: restart after 3 s, reboot/shutdown after 10, deploy after 2. That
+  delay is the cancel window, and it is why `scheduled_actions/0` can tell the dashboard what is
+  pending. Without the helper, the sudoers drop-in and the `blackgate.service` unit — installed by
+  `scripts/install-system-actions.sh` — the actions report themselves unavailable instead of failing
+  in a confusing way.
   """
 
   alias Blackgate.Db
+  alias Blackgate.EventLog
+  alias Blackgate.ReleaseNotes
   alias Blackgate.RouteStatsRegistry
+  alias Blackgate.SystemUpdates
 
   @decklink_device_pattern "/dev/blackmagic/io*"
   @documented_udp_buffer_bytes 16 * 1024 * 1024
@@ -22,10 +31,29 @@ defmodule Blackgate.SystemControl do
     "/etc/systemd/system/blackgate.service",
     "/lib/systemd/system/blackgate.service"
   ]
+  @system_action_helper "/usr/local/libexec/blackgate-system-action"
+  @sudoers_path "/etc/sudoers.d/blackgate-system-action"
+
+  # Every privileged action is scheduled as a transient systemd unit by the helper, which is what
+  # makes "what is scheduled right now" — and cancelling it — answerable.
+  @scheduled_units %{
+    "restart_gateway" => "blackgate-dashboard-restart",
+    "reboot" => "blackgate-dashboard-reboot",
+    "shutdown" => "blackgate-dashboard-shutdown",
+    "deploy" => "blackgate-dashboard-deploy"
+  }
+
+  @doc """
+  Deployment root: the update drop box, the unpacked releases and the `current` symlink.
+  `$BLACKGATE_ROOT`, `/opt/blackgate` by default (the appliance layout).
+  """
+  @spec root() :: String.t()
+  def root, do: System.get_env("BLACKGATE_ROOT") || "/opt/blackgate"
 
   @doc """
   Everything the System tab shows: host identity, resources, DeckLink devices, UDP buffers, the
-  engine binary in use, the service unit and a per-route summary (SDI included).
+  engine binary in use, the service unit, the deployment root with its updates, the actions the
+  dashboard may offer, and a per-route summary (SDI included).
   """
   @spec status() :: map()
   def status do
@@ -42,9 +70,184 @@ defmodule Blackgate.SystemControl do
       udp_buffers: udp_buffers(),
       engine: engine(),
       service: service(),
+      release: release(),
+      updates: SystemUpdates.summary(),
+      actions: actions(),
       routes: routes(),
       generated_at: DateTime.utc_now() |> DateTime.to_iso8601()
     }
+  end
+
+  @doc """
+  Release identity as the dashboard shows it: the release notes baked into the running release, the
+  version the deployment root's `current` symlink points at, and the application version.
+  """
+  @spec release() :: map()
+  def release do
+    notes = ReleaseNotes.current()
+
+    %{
+      version: (notes && notes.version) || SystemUpdates.current_version() || app_version(),
+      app_version: app_version(),
+      deployed: SystemUpdates.current_version(),
+      released_on: notes && notes.released_on,
+      changes: (notes && notes.changes) || []
+    }
+  end
+
+  @doc """
+  Which privileged actions this host can offer, and what is already scheduled.
+
+  The dashboard disables what it cannot do rather than offering a button that fails: a restart needs
+  the systemd unit (a hand-started node carries its environment in the shell that launched it, so
+  there is no safe way to restart it), while reboot/shutdown/deploy only need the helper and the
+  sudoers drop-in.
+  """
+  @spec actions() :: map()
+  def actions do
+    unit_installed = unit_installed?()
+    helper_installed = File.exists?(@system_action_helper)
+    sudoers_installed = File.exists?(@sudoers_path)
+    privileged = helper_installed and sudoers_installed
+
+    %{
+      unit_installed: unit_installed,
+      helper_installed: helper_installed,
+      sudoers_installed: sudoers_installed,
+      can_schedule: privileged,
+      available: %{
+        restart_gateway: privileged and unit_installed,
+        reboot: privileged,
+        shutdown: privileged,
+        deploy: privileged
+      },
+      scheduled: scheduled_actions()
+    }
+  end
+
+  @doc """
+  Schedules one of the allowlisted actions through the privileged helper.
+
+  `cancel` takes the transient unit name (`blackgate-dashboard-reboot`) as its argument; the helper
+  allowlists the units it will stop.
+  """
+  @spec perform_action(String.t(), String.t() | nil) :: {:ok, map()} | {:error, String.t()}
+  def perform_action(action, argument \\ nil) do
+    with {:ok, helper_command} <- helper_command(action),
+         :ok <- ensure_privileged_path() do
+      args =
+        if is_binary(argument) and argument != "" do
+          [helper_command, argument]
+        else
+          [helper_command]
+        end
+
+      case run_action(args) do
+        {:ok, output} ->
+          audit(action, argument)
+
+          {:ok,
+           %{
+             action: action,
+             argument: argument,
+             output: output,
+             scheduled: scheduled_actions()
+           }}
+
+        {:error, message} ->
+          {:error, message}
+      end
+    end
+  end
+
+  @doc """
+  Asks the privileged updater to deploy an uploaded version. The updater verifies the signature and
+  the checksum, swaps the `current` symlink and rolls back if the new release fails its health check.
+  """
+  @spec deploy_update(String.t()) :: {:ok, map()} | {:error, String.t()}
+  def deploy_update(version) when is_binary(version), do: perform_action("deploy", version)
+
+  @doc """
+  Actions already scheduled, with the transient unit and the time systemd will run them from.
+  """
+  @spec scheduled_actions() :: [map()]
+  def scheduled_actions do
+    @scheduled_units
+    |> Enum.filter(fn {_action, unit} -> unit_active?(unit) end)
+    |> Enum.map(fn {action, unit} ->
+      %{action: action, unit: unit, fires_at: unit_next_elapse(unit)}
+    end)
+  end
+
+  defp unit_installed?, do: Enum.any?(@systemd_unit_paths, &File.exists?/1)
+
+  defp helper_command("restart_gateway"), do: {:ok, "restart-blackgate"}
+  defp helper_command("reboot"), do: {:ok, "reboot"}
+  defp helper_command("shutdown"), do: {:ok, "shutdown"}
+  defp helper_command("cancel"), do: {:ok, "cancel"}
+  defp helper_command("deploy"), do: {:ok, "deploy"}
+  defp helper_command(other), do: {:error, "unsupported action: #{other}"}
+
+  defp ensure_privileged_path do
+    cond do
+      not File.exists?(@system_action_helper) ->
+        {:error, "the privileged helper is not installed (#{@system_action_helper})"}
+
+      not File.exists?(@sudoers_path) ->
+        {:error, "the sudoers drop-in is not installed (#{@sudoers_path})"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp run_action(args) do
+    case System.cmd("sudo", ["-n", @system_action_helper | args], stderr_to_stdout: true) do
+      {output, 0} -> {:ok, String.trim(output)}
+      {output, code} -> {:error, "helper exited #{code}: #{String.trim(output)}"}
+    end
+  rescue
+    error -> {:error, "helper could not be run: #{inspect(error)}"}
+  end
+
+  # Actions show up in Events: an operator who reboots a gateway from the dashboard leaves a trace of
+  # who did it and when, next to the route and SDI events.
+  defp audit(action, argument) do
+    severity = if action in ["reboot", "shutdown"], do: :warning, else: :info
+    target = if argument, do: " (#{argument})", else: ""
+
+    EventLog.log(
+      severity,
+      "system_action",
+      "Dashboard scheduled #{action}#{target}",
+      %{action: action, argument: argument}
+    )
+  end
+
+  defp unit_active?(unit) do
+    case cmd("systemctl", ["is-active", unit <> ".timer"]) do
+      {:ok, output} -> String.trim(output) == "active"
+      :error -> false
+    end
+  end
+
+  defp unit_next_elapse(unit) do
+    case cmd("systemctl", [
+           "show",
+           unit <> ".timer",
+           "--property=NextElapseUSecRealtime",
+           "--value"
+         ]) do
+      {:ok, value} ->
+        case String.trim(value) do
+          "" -> nil
+          "n/a" -> nil
+          other -> other
+        end
+
+      :error ->
+        nil
+    end
   end
 
   @doc """

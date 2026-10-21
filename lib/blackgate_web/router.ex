@@ -59,6 +59,9 @@ defmodule BlackgateWeb.Router do
 
     get "/system/status", SystemController, :status
     get "/system/report", SystemController, :report
+    post "/system/actions/:action", SystemController, :perform_action
+    get "/system/updates", SystemController, :updates
+    post "/system/updates/:version/deploy", SystemController, :deploy_update
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show
@@ -80,6 +83,10 @@ defmodule BlackgateWeb.Router do
   scope "/api", BlackgateWeb do
     pipe_through [:api_no_parse]
     post "/restore", BackupController, :restore
+
+    # Package upload: the body is the package itself, streamed to the incoming directory. The
+    # :api_no_parse pipeline still authenticates (check_auth is part of it).
+    post "/system/updates", SystemController, :upload_update
   end
 
   scope "/backup", BlackgateWeb do

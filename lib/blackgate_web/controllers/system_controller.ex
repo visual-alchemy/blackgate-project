@@ -4,6 +4,7 @@ defmodule BlackgateWeb.SystemController do
   alias Blackgate.ProcessMonitor
   alias Blackgate.Helpers
   alias Blackgate.SystemControl
+  alias Blackgate.SystemUpdates
 
   def list_pipelines(conn, _params) do
     pipelines = ProcessMonitor.list_pipeline_processes()
@@ -32,8 +33,15 @@ defmodule BlackgateWeb.SystemController do
     end
   end
 
-  # Host view for Settings > System. Read-only: the restart/reboot/deploy actions need the
-  # privileged helper and the systemd unit a packaged appliance installs, and land in a later phase.
+  # ---------------------------------------------------------------------------------------------
+  # Settings > System: the host view, the privileged actions and update packages.
+  #
+  # Actions are never executed here — they are handed to the allowlisted root helper through
+  # Blackgate.SystemControl, which schedules them as delayed systemd units so they can still be
+  # cancelled. Everything the dashboard shows comes from the host and the deployment root, not from
+  # configuration.
+  # ---------------------------------------------------------------------------------------------
+
   def status(conn, _params) do
     json(conn, SystemControl.status())
   end
@@ -45,6 +53,83 @@ defmodule BlackgateWeb.SystemController do
     |> put_resp_content_type("text/plain")
     |> put_resp_header("content-disposition", ~s(attachment; filename="#{filename}"))
     |> send_resp(200, SystemControl.report())
+  end
+
+  def perform_action(conn, %{"action" => action} = params) do
+    # `unit` for cancel, `version` for deploy: either way a single allowlisted argument.
+    case SystemControl.perform_action(action, params["unit"] || params["version"]) do
+      {:ok, result} ->
+        conn
+        |> put_status(:accepted)
+        |> json(result)
+
+      {:error, message} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: message})
+    end
+  end
+
+  def updates(conn, _params) do
+    json(conn, SystemUpdates.summary())
+  end
+
+  # The package body is streamed straight to disk: this route sits in the :api_no_parse scope, whose
+  # content type (*/*, and the client sends application/octet-stream) makes Plug.Parsers pass the
+  # body through untouched.
+  def upload_update(conn, params) do
+    filename = params["filename"] || header_filename(conn)
+
+    with {:ok, version, part_path} <- SystemUpdates.prepare_upload(filename) do
+      case SystemUpdates.store_body(conn, part_path) do
+        {:ok, _conn, bytes} ->
+          case SystemUpdates.commit_upload(version, part_path) do
+            {:ok, package} ->
+              conn
+              |> put_status(:created)
+              |> json(Map.put(package, :bytes, bytes))
+
+            {:error, message} ->
+              SystemUpdates.discard_upload(part_path)
+
+              conn
+              |> put_status(:unprocessable_entity)
+              |> json(%{error: message})
+          end
+
+        {:error, message} ->
+          SystemUpdates.discard_upload(part_path)
+
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: message})
+      end
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+    end
+  end
+
+  def deploy_update(conn, %{"version" => version}) do
+    case SystemUpdates.deploy(version) do
+      {:ok, result} ->
+        conn
+        |> put_status(:accepted)
+        |> json(result)
+
+      {:error, message} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: message})
+    end
+  end
+
+  defp header_filename(conn) do
+    conn
+    |> get_req_header("x-filename")
+    |> List.first()
   end
 
   defp timestamp do

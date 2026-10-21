@@ -1,7 +1,7 @@
 /**
  * API service for making authenticated requests to the backend
  */
-import { authFetch } from './auth';
+import { authFetch, authHeader } from './auth';
 import { API_BASE_URL } from './constants';
 
 // Auth API
@@ -58,6 +58,70 @@ export const systemApi = {
     const response = await authFetch('/api/system/report');
     return response.text();
   },
+
+  // Schedule a privileged action. The backend hands it to the root helper, which delays it and
+  // schedules a transient unit, so it can still be cancelled:
+  // restart_gateway | reboot | shutdown | cancel (with the unit to stop).
+  action: async (action, argument) => {
+    const body = action === 'cancel' ? { unit: argument } : argument ? { version: argument } : {};
+    const response = await authFetch(`/api/system/actions/${action}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return response.json();
+  },
+
+  // Uploaded packages, the deployed release, the updater's progress line
+  updates: async () => {
+    const response = await authFetch('/api/system/updates');
+    return response.json();
+  },
+
+  // Deploy an uploaded version (the updater verifies, swaps and rolls back on its own)
+  deploy: async (version) => {
+    const response = await authFetch(`/api/system/updates/${encodeURIComponent(version)}/deploy`, {
+      method: 'POST',
+    });
+    return response.json();
+  },
+
+  // Package upload with a progress callback. fetch() cannot report upload progress, so this one uses
+  // XMLHttpRequest; the body is the file itself (application/octet-stream), which the server streams
+  // straight to disk.
+  uploadPackage: (file, onProgress) =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE_URL}/api/system/updates?filename=${encodeURIComponent(file.name)}`);
+
+      const headers = authHeader();
+      Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        let payload = {};
+
+        try {
+          payload = JSON.parse(xhr.responseText || '{}');
+        } catch {
+          payload = { error: xhr.responseText };
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(payload);
+        } else {
+          reject(new Error(payload.error || `upload failed (HTTP ${xhr.status})`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('upload failed: network error'));
+      xhr.send(file);
+    }),
 };
 
 // Nodes API

@@ -1,0 +1,9 @@
+# The Blackgate dashboard may schedule only these fixed appliance actions, through the helper's
+# allowlist. Install as /etc/sudoers.d/blackgate-system-action (root:root, 0440) and validate with
+# `visudo -cf` before trusting it: a broken sudoers file locks out every sudo user on the box.
+blackgate ALL=(root) NOPASSWD: /usr/local/libexec/blackgate-system-action restart-blackgate, \
+  /usr/local/libexec/blackgate-system-action reboot, \
+  /usr/local/libexec/blackgate-system-action shutdown, \
+  /usr/local/libexec/blackgate-system-action cancel *, \
+  /usr/local/libexec/blackgate-system-action deploy *, \
+  /usr/local/libexec/blackgate-system-action test-action
