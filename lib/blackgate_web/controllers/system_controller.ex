@@ -3,6 +3,7 @@ defmodule BlackgateWeb.SystemController do
 
   alias Blackgate.ProcessMonitor
   alias Blackgate.Helpers
+  alias Blackgate.SystemControl
 
   def list_pipelines(conn, _params) do
     pipelines = ProcessMonitor.list_pipeline_processes()
@@ -29,5 +30,26 @@ defmodule BlackgateWeb.SystemController do
         |> put_status(500)
         |> json(%{error: "Failed to kill process: #{inspect(error)}"})
     end
+  end
+
+  # Host view for Settings > System. Read-only: the restart/reboot/deploy actions need the
+  # privileged helper and the systemd unit a packaged appliance installs, and land in a later phase.
+  def status(conn, _params) do
+    json(conn, SystemControl.status())
+  end
+
+  def report(conn, _params) do
+    filename = "blackgate-system-report-#{timestamp()}.txt"
+
+    conn
+    |> put_resp_content_type("text/plain")
+    |> put_resp_header("content-disposition", ~s(attachment; filename="#{filename}"))
+    |> send_resp(200, SystemControl.report())
+  end
+
+  defp timestamp do
+    DateTime.utc_now()
+    |> DateTime.to_iso8601()
+    |> String.replace(~r/[^0-9A-Za-z]/, "")
   end
 end

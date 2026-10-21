@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined } from '@ant-design/icons';
-import { backupApi, networkApi, authApi } from '../utils/api';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input, Descriptions, Alert } from 'antd';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, UserOutlined, SaveOutlined, DesktopOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { backupApi, networkApi, authApi, systemApi } from '../utils/api';
+import { DEVICE_TO_SDI } from '../utils/sdiPorts';
 import { logout } from '../utils/auth';
 
 const { Title } = Typography;
@@ -18,6 +19,74 @@ const Settings = () => {
   const routesFileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
+  const [systemStatus, setSystemStatus] = useState(null);
+  const [loadingSystem, setLoadingSystem] = useState(false);
+  const [isDownloadingReport, setIsDownloadingReport] = useState(false);
+
+  // Fetch host status when the System tab is active
+  useEffect(() => {
+    if (activeTab === 'system') {
+      fetchSystemStatus();
+    }
+  }, [activeTab]);
+
+  const fetchSystemStatus = async () => {
+    setLoadingSystem(true);
+    try {
+      setSystemStatus(await systemApi.status());
+    } catch (error) {
+      console.error('Error fetching system status:', error);
+      messageApi.error({
+        content: 'Failed to fetch system status',
+        icon: <CloseCircleOutlined />,
+        duration: 5
+      });
+    } finally {
+      setLoadingSystem(false);
+    }
+  };
+
+  // The report is fetched with the session token, so it is saved from a blob rather than
+  // opened as a URL: the token never ends up in a query string or a browser history entry.
+  const handleSystemReportDownload = async () => {
+    setIsDownloadingReport(true);
+    try {
+      const report = await systemApi.report();
+      const blob = new Blob([report], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `blackgate-system-report-${new Date().toISOString().slice(0, 19).replace(/[^0-9]/g, '')}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      messageApi.success({
+        content: 'System report downloaded',
+        icon: <CheckCircleOutlined />,
+        duration: 3
+      });
+    } catch (error) {
+      console.error('Error downloading system report:', error);
+      messageApi.error({
+        content: 'Failed to download system report',
+        icon: <CloseCircleOutlined />,
+        duration: 5
+      });
+    } finally {
+      setIsDownloadingReport(false);
+    }
+  };
+
+  const formatSystemUptime = (seconds) => {
+    if (typeof seconds !== 'number') return '-';
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  };
 
   // Set breadcrumb items for the Settings page
   useEffect(() => {
@@ -572,6 +641,213 @@ const Settings = () => {
     );
   };
 
+  // Settings > System: what the host actually is right now. Read-only — the restart/reboot/update
+  // actions need the privileged helper and the systemd unit a packaged appliance installs.
+  const SystemTabContent = () => {
+    const status = systemStatus;
+
+    const sdiColumns = [
+      {
+        title: 'Route',
+        dataIndex: 'route',
+        key: 'route',
+      },
+      {
+        title: 'SDI Port',
+        dataIndex: 'port',
+        key: 'port',
+        render: (port) => <Tag color="blue">{port}</Tag>,
+      },
+      {
+        title: 'Device',
+        dataIndex: 'device',
+        key: 'device',
+        render: (device) => <code>{device}</code>,
+      },
+      {
+        title: 'Mode',
+        dataIndex: 'mode',
+        key: 'mode',
+        render: (mode) => mode || '-',
+      },
+      {
+        title: 'Video Frames',
+        dataIndex: 'frames',
+        key: 'frames',
+        render: (frames) => (typeof frames === 'number' ? frames.toLocaleString() : '-'),
+      },
+      {
+        title: 'Dropped',
+        dataIndex: 'dropped',
+        key: 'dropped',
+        render: (dropped) => (
+          <Tag color={dropped ? 'orange' : 'green'}>{dropped || 0}</Tag>
+        ),
+      },
+      {
+        title: 'Duplicated',
+        dataIndex: 'duplicated',
+        key: 'duplicated',
+        render: (duplicated) => (
+          <Tag color={duplicated ? 'orange' : 'green'}>{duplicated || 0}</Tag>
+        ),
+      },
+      {
+        title: 'Audio Buffers',
+        dataIndex: 'audio',
+        key: 'audio',
+        render: (audio) => (typeof audio === 'number' ? audio.toLocaleString() : '-'),
+      },
+    ];
+
+    const sdiRows = status
+      ? (status.routes?.items || []).flatMap((route) =>
+          (route.sdi || []).map((sdi) => ({
+            key: `${route.id}-${sdi.device_number}`,
+            route: route.name,
+            port: DEVICE_TO_SDI[sdi.device_number]
+              ? `SDI ${DEVICE_TO_SDI[sdi.device_number]}`
+              : `device ${sdi.device_number}`,
+            device: sdi.device_number,
+            mode: sdi.detected_mode,
+            frames: sdi.video_frames,
+            dropped: sdi.dropped_frames,
+            duplicated: sdi.duplicated_frames,
+            audio: sdi.audio_buffers,
+          }))
+        )
+      : [];
+
+    if (!status) {
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+          <Spin />
+        </div>
+      );
+    }
+
+    const buffers = status.udp_buffers || {};
+    const memory = status.memory || {};
+    const disk = status.disk || {};
+    const decklink = status.decklink || { device_count: 0, devices: [] };
+    const routes = status.routes || { total: 0, started: 0, items: [] };
+    const engine = status.engine;
+    const service = status.service || {};
+
+    return (
+      <div>
+        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <Card
+            title={
+              <Space>
+                <DesktopOutlined />
+                <span>Gateway Status</span>
+              </Space>
+            }
+            extra={
+              <Space>
+                <Button icon={<ReloadOutlined />} onClick={fetchSystemStatus} loading={loadingSystem}>
+                  Refresh
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={handleSystemReportDownload}
+                  loading={isDownloadingReport}
+                >
+                  Download System Report
+                </Button>
+              </Space>
+            }
+          >
+            {!buffers.meets_documented_minimum && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="UDP socket buffers are below the documented minimum"
+                description={`rmem_max=${buffers.rmem_max_mb ?? '-'} MB, wmem_max=${buffers.wmem_max_mb ?? '-'} MB. This project documents at least ${buffers.documented_min_mb ?? 16} MB so a 9-50 Mbps SRT feed is not dropped by the kernel before the gateway sees it. Raise net.core.rmem_max and net.core.wmem_max and reload sysctl.`}
+              />
+            )}
+
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="Hostname">{status.hostname}</Descriptions.Item>
+              <Descriptions.Item label="Gateway version">{status.version}</Descriptions.Item>
+              <Descriptions.Item label="Operating system">{status.os}</Descriptions.Item>
+              <Descriptions.Item label="Kernel">{status.kernel}</Descriptions.Item>
+              <Descriptions.Item label="Uptime">{formatSystemUptime(status.uptime_seconds)}</Descriptions.Item>
+              <Descriptions.Item label="Booted at">{status.booted_at || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Memory">
+                {typeof memory.total_mb === 'number'
+                  ? `${memory.used_mb} MB used / ${memory.total_mb} MB (${memory.used_percent}%)`
+                  : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Disk (/)">
+                {typeof disk.total_gb === 'number'
+                  ? `${disk.used_gb} GB used / ${disk.total_gb} GB (${disk.used_percent}%)`
+                  : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="UDP socket buffers">
+                <Space size="small">
+                  <span>{`rmem ${buffers.rmem_max_mb ?? '-'} MB · wmem ${buffers.wmem_max_mb ?? '-'} MB`}</span>
+                  <Tag color={buffers.meets_documented_minimum ? 'green' : 'orange'}>
+                    {buffers.meets_documented_minimum ? 'OK' : 'BELOW MINIMUM'}
+                  </Tag>
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="DeckLink">
+                <Space size="small">
+                  <Tag color={decklink.device_count > 0 ? 'green' : 'red'}>
+                    {decklink.device_count > 0 ? `${decklink.device_count} device(s)` : 'no card'}
+                  </Tag>
+                  <span style={{ fontSize: '12px' }}>{(decklink.devices || []).join(', ')}</span>
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="Gateway service">
+                <Space size="small">
+                  <Tag color={service.active === 'active' ? 'green' : 'default'}>{service.active}</Tag>
+                  <span style={{ fontSize: '12px' }}>
+                    {service.unit_installed
+                      ? 'systemd unit installed'
+                      : 'unit not installed (started manually)'}
+                  </span>
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="Engine binary">
+                {engine ? (
+                  <span style={{ fontSize: '12px' }}>
+                    <code>{engine.sha256}</code> · {engine.size_mb} MB · built {engine.mtime}
+                  </span>
+                ) : (
+                  '-'
+                )}
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+
+          <Card
+            title={
+              <Space>
+                <VideoCameraOutlined />
+                <span>SDI Output</span>
+              </Space>
+            }
+            extra={
+              <span style={{ fontSize: '12px' }}>
+                {`${routes.started} of ${routes.total} routes started`}
+              </span>
+            }
+          >
+            {sdiRows.length === 0 ? (
+              <span style={{ color: '#8c8c8c' }}>No route is currently sending to an SDI output.</span>
+            ) : (
+              <Table columns={sdiColumns} dataSource={sdiRows} pagination={false} size="small" />
+            )}
+          </Card>
+        </Space>
+      </div>
+    );
+  };
+
   const items = [
     {
       key: 'backup',
@@ -592,6 +868,11 @@ const Settings = () => {
       key: 'users',
       label: 'Users',
       children: <UsersTabContent />,
+    },
+    {
+      key: 'system',
+      label: 'System',
+      children: <SystemTabContent />,
     },
   ];
 
