@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, Table, Tag, Space, Typography, Select, Button, Badge, message } from 'antd';
-import { HomeOutlined, ClearOutlined, ReloadOutlined } from '@ant-design/icons';
+import { HomeOutlined, ClearOutlined, ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { eventsApi } from '../../utils/api';
 
 const { Title, Text } = Typography;
@@ -15,6 +15,15 @@ const severityLabels = {
   info: 'Info',
   warning: 'Warning',
   critical: 'Critical',
+};
+
+// The action text is the one part of an event an operator has to read closely, so it gets its
+// own line under the message, tinted by severity. The message itself stays short: what happened
+// and the numbers behind it, no instructions glued on the end.
+const actionColors = {
+  info: '#595959',
+  warning: '#d46b08',
+  critical: '#cf1322',
 };
 
 const Events = () => {
@@ -87,11 +96,22 @@ const Events = () => {
       dataIndex: 'message',
       key: 'message',
       render: (text, record) => (
-        <Space direction="vertical" size={0}>
+        <Space direction="vertical" size={2}>
           <Text>{text}</Text>
           {record.metadata?.route_name && (
             <Text type="secondary" style={{ fontSize: 12 }}>
               Route: {record.metadata.route_name}
+            </Text>
+          )}
+          {record.metadata?.action && (
+            <Text
+              style={{
+                fontSize: 12,
+                fontStyle: 'italic',
+                color: actionColors[record.severity] || actionColors.info,
+              }}
+            >
+              <ArrowRightOutlined /> Action: {record.metadata.action}
             </Text>
           )}
         </Space>

@@ -27,13 +27,32 @@ defmodule Blackgate.EventLog do
   @doc """
   Log an event. Severity must be :info, :warning, or :critical.
 
+  The "what now?" text for the event's type is stored as `metadata[:action]`, not appended to the
+  message: the Events page renders it as its own line under the message, so the message stays
+  short (what happened, and the numbers behind it) and the instruction is easy to pick out.
+
   ## Examples
 
       EventLog.log(:info, "route_started", "Route started", %{route_id: "abc", route_name: "EPL"})
       EventLog.log(:critical, "sdi_failed", "SDI sink failed", %{route_id: "abc", device: 0})
   """
-  def log(severity, type, message, metadata \\ %{})
-      when severity in @severities and is_binary(type) and is_binary(message) do
+  def log(severity, type, message, metadata \\ %{}) do
+    # Validated rather than guarded: an invalid severity (a stray :error, say) used to fail
+    # with a FunctionClauseError from inside whichever code path logged the event, which hid
+    # the real problem at the call site.
+    unless severity in @severities do
+      raise ArgumentError,
+            "invalid event severity #{inspect(severity)}; expected one of #{inspect(@severities)}"
+    end
+
+    unless is_binary(type) and is_binary(message) do
+      raise ArgumentError,
+            "event type and message must be strings, got #{inspect(type)} / #{inspect(message)}"
+    end
+
+    action = Blackgate.EventGuidance.action(type, severity, metadata)
+    metadata = if action, do: Map.put_new(metadata, :action, action), else: metadata
+
     counter = :persistent_term.get(@counter_key) + 1
     :persistent_term.put(@counter_key, counter)
 

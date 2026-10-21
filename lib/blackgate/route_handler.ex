@@ -162,9 +162,12 @@ defmodule Blackgate.RouteHandler do
       |> Enum.reduce(data, fn line, acc ->
         Logger.warning("RouteHandler: pipeline: #{line}")
 
-        # Detect SDI graceful failure from Rust engine output
+        # Detect SDI graceful failure from Rust engine output. The engine prints
+        # "WARNING: SDI sink N failed — continuing without SDI output" and does not retry, so
+        # the route keeps running with no SDI picture and only an operator can fix it: this is
+        # not a warning that will clear on its own.
         if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
-          Blackgate.EventLog.log(:warning, "sdi_failed", String.trim(line), %{
+          Blackgate.EventLog.log(:critical, "sdi_failed", String.trim(line), %{
             route_id: acc.id,
             route_name: get_in(acc, [:route, "name"]) || acc.id
           })
@@ -1503,7 +1506,7 @@ defmodule Blackgate.RouteHandler do
         )
 
         Blackgate.EventLog.log(
-          :error,
+          :critical,
           "ffmpeg_missing",
           "ffmpeg not found on PATH; #{schema} source cannot start",
           %{route_id: route["id"], route_name: route["name"]}

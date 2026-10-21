@@ -200,9 +200,17 @@ const MainLayout = ({ children }) => {
 
   // Get the first letter of the username for the avatar
   const getAvatarText = () => {
-    if (user) {
+    // localStorage can hold anything, and a non-string `user` used to throw here during render,
+    // which blanked the whole dashboard instead of showing the login page. Accept the string the
+    // login writes, tolerate the object form, and fall back to a placeholder.
+    if (typeof user === 'string' && user.length > 0) {
       return user.charAt(0).toUpperCase();
     }
+
+    if (user && typeof user === 'object' && typeof user.username === 'string' && user.username) {
+      return user.username.charAt(0).toUpperCase();
+    }
+
     return 'U';
   };
 
