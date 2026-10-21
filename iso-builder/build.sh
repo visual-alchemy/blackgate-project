@@ -130,13 +130,17 @@ node -e '
 
 rm -rf "$POOL_DIR"
 mkdir -p "$POOL_DIR"
-apt-get -o Dir::State::status=/dev/null -o Dir::Cache::archives="$POOL_DIR" \
+# Debug::NoLocking: with the status file redirected, apt derives its lock from that path (/dev/lock-*)
+# and refuses to run as an unprivileged user.
+apt-get -o Dir::State::status=/dev/null -o Debug::NoLocking=1 -o Dir::Cache::archives="$POOL_DIR" \
     -y --download-only install $(tr '\n' ' ' < "$PACKAGES_LIST") \
     || { echo "❌ could not build the package pool — is /var/lib/apt/lists current? (apt-get update)" >&2; exit 1; }
 
 command -v dpkg-scanpackages >/dev/null \
     || { echo "❌ dpkg-scanpackages missing (install dpkg-dev)" >&2; exit 1; }
-dpkg-scanpackages -m "$POOL_DIR" /dev/null 2>/dev/null | gzip -9 > "$POOL_DIR/Packages.gz"
+# Run it from inside the pool: dpkg-scanpackages writes Filename relative to the directory it is given,
+# and an absolute path there makes apt join the repo root twice (file:/pool/pool/x.deb).
+(cd "$POOL_DIR" && dpkg-scanpackages -m . /dev/null 2>/dev/null | gzip -9 > Packages.gz)
 echo "   pool: $(ls "$POOL_DIR"/*.deb | wc -l) packages, $(du -sh "$POOL_DIR" | cut -f1) (index $(du -sh "$POOL_DIR/Packages.gz" | cut -f1))"
 
 # ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────

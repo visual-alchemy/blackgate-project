@@ -34,6 +34,10 @@ if [ -f /opt/blackgate/files/packages.list ] && [ -f /opt/blackgate/pool/Package
     done
     if [ -n "$MISSING" ]; then
         say "Runtime packages missing:$MISSING — installing from the local pool..."
+        # The package lists on disk were fetched from the archive and know nothing about the pool's own
+        # index, so index it first. file:// needs no network, and apt carries on past a source it cannot
+        # reach; short timeouts keep a dead archive from stalling first boot.
+        apt-get update -o Acquire::http::Timeout=5 -o Acquire::Retries=0 >>"$LOG" 2>&1 || true
         xargs -a /opt/blackgate/files/packages.list apt-get install -y --no-install-recommends >>"$LOG" 2>&1 \
             || say "WARNING: local pool install reported an error (see $LOG) — the gateway may not start"
         say "Local pool install finished."
