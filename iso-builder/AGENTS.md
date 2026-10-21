@@ -30,8 +30,14 @@ them through `scripts/install-system-actions.sh` (shipped as
 Packages are built by `scripts/package-signed-update.sh` (Ed25519 keypair generated at install time in
 `/etc/blackgate/`). Runbook: `docs/operations/system-actions-and-updates.md`.
 
-The ISO does not carry the Blackmagic Desktop Video `.deb` yet, so a fresh appliance has the GStreamer
-DeckLink plugin but no driver until Desktop Video is installed by hand.
+The ISO carries the Blackmagic Desktop Video `.deb` (`files/blackmagic-desktopvideo.deb`, gitignored):
+first boot installs it and DKMS builds the kernel modules, so a fresh appliance has both the GStreamer
+DeckLink plugin and the driver.
+
+The ISO also carries an apt pool (`files/pool/`, built from `packages.list`) and `packages:` in
+`autoinstall/user-data` is deliberately empty, so an install needs no network at all: first boot installs
+the runtime packages from the pool. `LICENSE_SERVER_URL` travels the same way. See README.md for the
+offline install path.
 
 ## Build and checks
 
