@@ -13,6 +13,12 @@ defmodule Blackgate.RouteStatsRegistry do
   # route look alive in the dashboard and in debugging.
   @stale_after_ms 5_000
 
+  # Rolling history used to judge loss over ~10 s instead of a single 1 s report window.
+  # The thresholds themselves live in Blackgate.RouteHealth and are reused from there, so
+  # only the window length and the history cap are needed here.
+  @loss_window_ms 10_000
+  @loss_history_limit 30
+
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
   end
@@ -26,9 +32,12 @@ defmodule Blackgate.RouteStatsRegistry do
   @doc """
   Store stats for a route. Called by UnixSockHandler.
   Also broadcasts the update via PubSub so WebSocket clients receive it immediately.
+
+  `now` is a test seam for the rolling loss window: the sustained figure only means
+  something once reports span a few seconds, which a test cannot wait for.
   """
-  def put_stats(route_id, stats) when is_binary(route_id) and is_map(stats) do
-    updated_at = System.system_time(:millisecond)
+  def put_stats(route_id, stats, now \\ nil) when is_binary(route_id) and is_map(stats) do
+    updated_at = now || System.system_time(:millisecond)
 
     {stats, warning_count, prev_health} =
       case :ets.lookup(@table_name, route_id) do
@@ -121,6 +130,16 @@ defmodule Blackgate.RouteStatsRegistry do
 
     sink_stats = get_all_sink_stats(route_id)
 
+    # Sustained loss over ~10 s plus the consecutive-report streak that gates `warning`
+    # (see Blackgate.RouteHealth). Both are published in the stats map so the dashboard and
+    # the event log can show what the verdict was based on.
+    {loss_10s, streak, burst_log?} = update_loss_window(route_id, updated_at, stats)
+
+    stats =
+      stats
+      |> Map.put("loss-window-10s-pct", loss_10s)
+      |> Map.put("loss-streak", streak)
+
     eval_stats =
       stats
       |> Map.put("warning_count", warning_count)
@@ -134,7 +153,12 @@ defmodule Blackgate.RouteStatsRegistry do
 
     # Log health transitions
     if health != prev_health do
-      log_health_change(route_id, prev_health, health)
+      log_health_change(route_id, prev_health, health, eval_stats)
+    end
+
+    # A one-second burst that SRT already recovered is information, not degradation.
+    if burst_log? and health == "healthy" do
+      log_loss_burst(route_id, eval_stats)
     end
 
     Phoenix.PubSub.broadcast(
@@ -146,11 +170,68 @@ defmodule Blackgate.RouteStatsRegistry do
     :ok
   end
 
+  # Rolling ~10 s loss window and the streak of reports at or above the warning threshold.
+  # Kept under its own ETS key ({:loss_window, route_id}) so it never leaks into the stats
+  # map served to the UI, and so a route's history is dropped with the route.
+  defp update_loss_window(route_id, now, stats) do
+    rx = stats["packets-received"] || 0
+    lost = stats["packets-received-lost"] || 0
+
+    state =
+      case :ets.lookup(@table_name, {:loss_window, route_id}) do
+        [{_, state, _}] -> state
+        _ -> %{samples: [], streak: 0, last_burst_log_at: 0}
+      end
+
+    samples =
+      (state.samples ++ [{now, rx, lost}])
+      |> Enum.filter(fn {ts, _rx, _lost} -> now - ts <= @loss_window_ms end)
+      |> Enum.take(-@loss_history_limit)
+
+    loss_10s =
+      case samples do
+        [{_, rx0, lost0} | _] ->
+          d_rx = max(0, rx - rx0)
+          d_lost = max(0, lost - lost0)
+
+          if d_rx + d_lost > 0 do
+            Float.round(d_lost / (d_rx + d_lost) * 100, 3)
+          end
+
+        _ ->
+          nil
+      end
+
+    probe = Map.put(stats, "loss-window-10s-pct", loss_10s)
+
+    # Hysteresis: count the reports in a row whose figures are past the threshold (loss or
+    # RTT — whatever tripped it), so one bad second cannot degrade a route.
+    streak = if Blackgate.RouteHealth.degraded?(probe), do: state.streak + 1, else: 0
+
+    # Rate limit burst events the same way pipeline warnings are limited: a burst can span
+    # a couple of reports and must not flood the ring.
+    burst_log? =
+      Blackgate.RouteHealth.transient_burst?(probe) and now - state.last_burst_log_at > 10_000
+
+    :ets.insert(
+      @table_name,
+      {{:loss_window, route_id},
+       %{
+         samples: samples,
+         streak: streak,
+         last_burst_log_at: if(burst_log?, do: now, else: state.last_burst_log_at)
+       }, now}
+    )
+
+    {loss_10s, streak, burst_log?}
+  end
+
   @doc """
   Store pipeline warning telemetry event.
   """
   def put_warning(route_id, element, message) when is_binary(route_id) do
     now = System.system_time(:millisecond)
+    name = route_name(route_id)
 
     case :ets.lookup(@table_name, route_id) do
       [{^route_id, stats, updated_at}] ->
@@ -164,8 +245,8 @@ defmodule Blackgate.RouteStatsRegistry do
           Blackgate.EventLog.log(
             :warning,
             "source_video_corrupted",
-            "Video corruption detected: #{message} (element: #{element})",
-            %{route_id: route_id}
+            "Video corruption detected on #{name}: #{message} (element: #{element})",
+            %{route_id: route_id, route_name: name}
           )
         end
 
@@ -202,8 +283,8 @@ defmodule Blackgate.RouteStatsRegistry do
         Blackgate.EventLog.log(
           :warning,
           "source_video_corrupted",
-          "Video corruption detected: #{message} (element: #{element})",
-          %{route_id: route_id}
+          "Video corruption detected on #{name}: #{message} (element: #{element})",
+          %{route_id: route_id, route_name: name}
         )
     end
 
@@ -271,6 +352,9 @@ defmodule Blackgate.RouteStatsRegistry do
   """
   def delete_stats(route_id) when is_binary(route_id) do
     :ets.delete(@table_name, route_id)
+    # The rolling loss history lives beside the stats row; drop it with the route so a
+    # restarted route does not inherit a stale 10 s window or streak.
+    :ets.delete(@table_name, {:loss_window, route_id})
     :ok
   end
 
@@ -321,7 +405,7 @@ defmodule Blackgate.RouteStatsRegistry do
     |> Enum.sort_by(& &1.sink_index)
   end
 
-  defp log_health_change(route_id, prev, current) do
+  defp log_health_change(route_id, prev, current, stats) do
     level =
       case current do
         "healthy" -> :info
@@ -333,7 +417,12 @@ defmodule Blackgate.RouteStatsRegistry do
 
     type = "health_changed"
 
-    message =
+    # Name the route in the message, not only in metadata: with several routes running,
+    # "Route health degraded to warning" leaves the operator guessing which one, and the
+    # Events page only shows the route when the event carries route_name.
+    name = route_name(route_id)
+
+    base_message =
       case current do
         "healthy" ->
           "Route health recovered to healthy"
@@ -360,10 +449,83 @@ defmodule Blackgate.RouteStatsRegistry do
           "Route health changed to #{current}"
       end
 
-    Blackgate.EventLog.log(level, type, message, %{
-      route_id: route_id,
-      previous_health: prev,
-      current_health: current
-    })
+    Blackgate.EventLog.log(
+      level,
+      type,
+      "#{base_message} on #{name} — #{health_evidence(stats)}",
+      %{
+        route_id: route_id,
+        route_name: name,
+        previous_health: prev,
+        current_health: current,
+        # The numbers that produced this verdict, so the event explains itself instead of
+        # sending the operator to the dashboard to guess which metric tripped it. Health is
+        # judged on the ~10 s loss window; the 1 s window is kept for diagnosis.
+        loss_window_10s_pct: stats["loss-window-10s-pct"],
+        loss_window_pct: stats["loss-window-pct"],
+        loss_streak: stats["loss-streak"],
+        cumulative_loss_pct: cumulative_loss_pct(stats),
+        rtt_ms: stats["rtt-ms"],
+        receive_rate_mbps: stats["receive-rate-mbps"],
+        warning_count: stats["warning_count"]
+      }
+    )
+  end
+
+  # A one-second loss burst that SRT already retransmitted: real measurement, healthy route.
+  defp log_loss_burst(route_id, stats) do
+    name = route_name(route_id)
+
+    Blackgate.EventLog.log(
+      :info,
+      "loss_burst",
+      "Transient loss burst on #{name}: #{stats["loss-window-pct"]}% lost in the last 1 s window " <>
+        "while the 10 s average is #{stats["loss-window-10s-pct"]}% and cumulative loss is " <>
+        "#{cumulative_loss_pct(stats)}%.",
+      %{
+        route_id: route_id,
+        route_name: name,
+        loss_window_pct: stats["loss-window-pct"],
+        loss_window_10s_pct: stats["loss-window-10s-pct"],
+        cumulative_loss_pct: cumulative_loss_pct(stats),
+        rtt_ms: stats["rtt-ms"],
+        receive_rate_mbps: stats["receive-rate-mbps"]
+      }
+    )
+  end
+
+  # Human-readable basis for a health verdict, appended to every health event.
+  defp health_evidence(stats) do
+    streak = stats["loss-streak"] || 0
+
+    [
+      is_number(stats["loss-window-10s-pct"]) && "10 s loss #{stats["loss-window-10s-pct"]}%",
+      is_number(stats["loss-window-pct"]) && "last 1 s window #{stats["loss-window-pct"]}%",
+      "cumulative loss #{cumulative_loss_pct(stats)}%",
+      is_number(stats["rtt-ms"]) && "RTT #{stats["rtt-ms"]} ms",
+      streak > 1 && "above threshold for #{streak} consecutive reports"
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.join(", ")
+  end
+
+  defp cumulative_loss_pct(stats) do
+    received = stats["packets-received"] || 0
+    lost = stats["packets-received-lost"] || 0
+
+    if received + lost == 0 do
+      0.0
+    else
+      Float.round(lost / (received + lost) * 100, 3)
+    end
+  end
+
+  # The route record's display name, falling back to the id so an event is never lost
+  # just because the route was deleted or renamed mid-flight. Khepri reads are in-process.
+  defp route_name(route_id) do
+    case Blackgate.Db.get_route(route_id) do
+      {:ok, %{"name" => name}} when is_binary(name) and name != "" -> name
+      _ -> route_id
+    end
   end
 end
