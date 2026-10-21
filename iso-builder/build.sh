@@ -125,10 +125,13 @@ PACKAGES_LIST="$SCRIPT_DIR/packages.list"
 
 # Reuse a pool this build already produced for the same package list: the download is ~400 MB and a data
 # change elsewhere in the tree should not pay for it again. A stale index or a different list rebuilds it.
-POOL_STAMP="$POOL_DIR/.packages.list.md5"
+# The cache key covers the list AND the apt options: changing either changes the pool, and silently reusing
+# a pool built with different options is how a "slimmed" image ships with the old fat pool inside.
+POOL_KEY="$( { md5sum "$PACKAGES_LIST"; echo "--no-install-recommends"; } | md5sum | cut -d' ' -f1 )"
+POOL_STAMP="$POOL_DIR/.packages.key"
 POOL_CACHE_OK=0
 if [ -s "$POOL_DIR/Packages.gz" ] && [ -f "$POOL_STAMP" ] \
-   && [ "$(md5sum "$PACKAGES_LIST" | cut -d' ' -f1)" = "$(cat "$POOL_STAMP")" ] \
+   && [ "$POOL_KEY" = "$(cat "$POOL_STAMP")" ] \
    && [ "$(ls "$POOL_DIR"/*.deb 2>/dev/null | wc -l)" = "$(zcat "$POOL_DIR/Packages.gz" | grep -c '^Package:')" ] \
    && [ "$(ls "$POOL_DIR"/*.deb 2>/dev/null | wc -l)" -gt 50 ]; then
     POOL_CACHE_OK=1
@@ -141,7 +144,7 @@ mkdir -p "$POOL_DIR"
 # Debug::NoLocking: with the status file redirected, apt derives its lock from that path (/dev/lock-*)
 # and refuses to run as an unprivileged user.
 apt-get -o Dir::State::status=/dev/null -o Debug::NoLocking=1 -o Dir::Cache::archives="$POOL_DIR" \
-    -y --download-only install $(tr '\n' ' ' < "$PACKAGES_LIST") \
+    -y --no-install-recommends --download-only install $(tr '\n' ' ' < "$PACKAGES_LIST") \
     || { echo "❌ could not build the package pool — is /var/lib/apt/lists current? (apt-get update)" >&2; exit 1; }
 
 command -v dpkg-scanpackages >/dev/null \
@@ -149,7 +152,19 @@ command -v dpkg-scanpackages >/dev/null \
 # Run it from inside the pool: dpkg-scanpackages writes Filename relative to the directory it is given,
 # and an absolute path there makes apt join the repo root twice (file:/pool/pool/x.deb).
 (cd "$POOL_DIR" && dpkg-scanpackages -m . /dev/null 2>/dev/null | gzip -9 > Packages.gz)
-md5sum "$PACKAGES_LIST" | cut -d' ' -f1 > "$POOL_STAMP"
+
+# --no-install-recommends cuts the pool from ~380 MB to ~110 MB, which is only safe if the packages the
+# appliance cannot start without are still in it: DKMS builds the decklink module (gcc/make/dpkg-dev are its
+# Depends, not Recommends), and the media runtime needs the gstreamer plugins and libsrt.
+POOL_MISSING=""
+for pkg in gcc make dpkg-dev dkms linux-headers-generic libgl1 gstreamer1.0-plugins-bad \
+           gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-vaapi libsrt1.5-gnutls \
+           libcjson1 ffmpeg iproute2 curl; do
+    zcat "$POOL_DIR/Packages.gz" | grep -q "^Package: $pkg$" || POOL_MISSING="$POOL_MISSING $pkg"
+done
+[ -n "$POOL_MISSING" ] && { echo "❌ pool is missing critical packages:$POOL_MISSING" >&2; exit 1; }
+echo "   ✅ pool covers the critical packages"
+echo "$POOL_KEY" > "$POOL_STAMP"
 fi
 echo "   pool: $(ls "$POOL_DIR"/*.deb | wc -l) packages, $(du -sh "$POOL_DIR" | cut -f1) (index $(du -sh "$POOL_DIR/Packages.gz" | cut -f1))"
 

@@ -177,6 +177,20 @@ for i in {1..30}; do
     sleep 2
 done
 
+# ─── cloud-init ───────────────────────────────────────────────────────────
+# A bare-metal appliance has no cloud datasource, but cloud-init still runs on every boot and prints SSH
+# host key fingerprints over the console - the same console the banner lives on. The Ubuntu installer marks
+# this disabled on an ordinary install; do it explicitly so it does not depend on that behaviour.
+if [ ! -f /etc/cloud/cloud-init.disabled ]; then
+    printf '%s\n' \
+        "Disabled by the Blackgate appliance first boot." \
+        "An appliance has no cloud datasource; cloud-init only added noise to the console." \
+        "To re-enable it: sudo cloud-init clean --machine-id" > /etc/cloud/cloud-init.disabled
+    say "cloud-init disabled (no datasource on an appliance)"
+else
+    say "cloud-init already disabled"
+fi
+
 # ─── Disable firstboot so it won't run again on next reboot ────────────────
 systemctl disable blackgate-firstboot.service
 rm -f /etc/systemd/system/multi-user.target.wants/blackgate-firstboot.service
