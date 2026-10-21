@@ -18,6 +18,20 @@ const formatStarted = (value) => {
   return `${month} ${day}, ${clock} ${year}`;
 };
 
+// Linux single-letter process states, as `ps` prints them in its `s` column. A working pipeline normally
+// shows "S": its main thread waits in poll() while its worker threads do the decoding.
+const STATE_LABELS = {
+  R: 'Running',
+  S: 'Sleeping',
+  D: 'Uninterruptible',
+  T: 'Stopped',
+  t: 'Tracing',
+  Z: 'Zombie',
+  I: 'Idle',
+};
+
+const formatState = (value) => STATE_LABELS[value] || value || '—';
+
 const SystemPipelines = () => {
   const [pipelines, setPipelines] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -147,8 +161,8 @@ const SystemPipelines = () => {
       title: 'State',
       dataIndex: 'state',
       key: 'state',
-      width: 90,
-      render: (value) => <Tag>{value || '—'}</Tag>,
+      width: 120,
+      render: (value) => <Tag>{formatState(value)}</Tag>,
     },
     {
       title: 'Started',
@@ -179,22 +193,21 @@ const SystemPipelines = () => {
       { label: 'Route', value: record.route_name || '—' },
       { label: 'Route ID', value: record.route_id || '—' },
       {
-        label: 'CPU now',
+        label: 'CPU now (1 core = 100%)',
         value: Number.isFinite(record.cpu_percent)
           ? `${record.cpu_percent.toFixed(1)}%`
           : '—'
       },
-      { label: 'CPU average', value: record.cpu_average || '—' },
+      { label: 'CPU average (1 core = 100%)', value: record.cpu_average || '—' },
       { label: 'CPU time', value: record.cpu_time || '—' },
       { label: 'Memory', value: `${record.resident_memory || record.memory || '—'} (${record.memory_percent || '—'})` },
       { label: 'Virtual memory', value: record.virtual_memory || '—' },
       { label: 'Swap', value: record.swap || formatBytes(record.swap_bytes) },
       { label: 'Threads', value: record.thread_count ?? '—' },
-      { label: 'State', value: record.state || '—' },
+      { label: 'State', value: formatState(record.state) },
       { label: 'Parent PID', value: record.ppid ?? '—' },
       { label: 'User', value: record.user || '—' },
       { label: 'Started', value: record.start_time || '—' },
-      { label: 'Command', value: record.command || '—' },
     ];
 
     return (
