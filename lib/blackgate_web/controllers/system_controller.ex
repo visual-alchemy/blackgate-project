@@ -1,6 +1,7 @@
 defmodule BlackgateWeb.SystemController do
   use BlackgateWeb, :controller
 
+  alias Blackgate.Db
   alias Blackgate.ProcessMonitor
   alias Blackgate.Helpers
   alias Blackgate.SystemControl
@@ -12,9 +13,36 @@ defmodule BlackgateWeb.SystemController do
   end
 
   def list_pipelines_detailed(conn, _params) do
-    pipelines = ProcessMonitor.list_pipeline_processes_detailed()
+    pipelines =
+      ProcessMonitor.list_pipeline_processes_detailed()
+      |> add_route_names()
+
     json(conn, pipelines)
   end
+
+  # Each engine process carries its route id as its only argument, so the pipeline list can say WHICH
+  # route an engine belongs to instead of showing a bare UUID. A route whose lookup misses keeps the id.
+  @doc false
+  def add_route_names(pipelines) when is_list(pipelines) do
+    route_names =
+      case Db.get_all_routes(false) do
+        {:ok, routes} ->
+          Map.new(routes, fn route ->
+            route_id = route["id"]
+            {route_id, route["name"] || route_id}
+          end)
+
+        _ ->
+          %{}
+      end
+
+    Enum.map(pipelines, fn pipeline ->
+      route_id = Map.get(pipeline, :route_id)
+      Map.put(pipeline, :route_name, Map.get(route_names, route_id))
+    end)
+  end
+
+  def add_route_names(other), do: other
 
   def kill_pipeline(conn, %{"pid" => pid_str}) do
     with {pid, _} <- Integer.parse(pid_str),
