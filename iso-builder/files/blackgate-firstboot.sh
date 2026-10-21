@@ -22,6 +22,28 @@ net.core.wmem_max=16777216
 EOF
 sysctl --system
 
+# ─── Runtime packages from the image's local pool ─────────────────────────
+# The installer fetched these from the Ubuntu archive when it had network. When it did not, the image
+# carried them: pool/ + Packages.gz on the ISO, kept on the installed system by the installer's
+# late-commands, indexed by the same list that drives the install (files/packages.list is generated from
+# iso-builder/autoinstall/user-data, so the two can never drift). Without them the release cannot start.
+if [ -f /opt/blackgate/files/packages.list ] && [ -f /opt/blackgate/pool/Packages.gz ]; then
+    MISSING=""
+    for pkg in gstreamer1.0-plugins-bad libsrt1.5-gnutls libcjson1 dkms; do
+        dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+    done
+    if [ -n "$MISSING" ]; then
+        say "Runtime packages missing:$MISSING — installing from the local pool..."
+        xargs -a /opt/blackgate/files/packages.list apt-get install -y --no-install-recommends >>"$LOG" 2>&1 \
+            || say "WARNING: local pool install reported an error (see $LOG) — the gateway may not start"
+        say "Local pool install finished."
+    else
+        say "Runtime packages already present (archive install succeeded)."
+    fi
+else
+    say "No local package pool on this system — runtime packages must come from the archive."
+fi
+
 # ─── System integration + first release ────────────────────────────────────
 # Uses the same installer a manual install runs: systemd unit, privileged action helper with its
 # sudoers drop-in, update helper, /etc/blackgate/blackgate.env (credentials, random unless the

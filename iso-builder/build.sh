@@ -107,6 +107,38 @@ ninja -C "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir" \
 cp "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir/sys/decklink/libgstdecklink.so" \
     "$SCRIPT_DIR/files/libgstdecklink.so"
 
+# ─── Step 1b: Local package pool ────────────────────────────────────────
+# The appliance has to install with no network at all, so the image carries the runtime packages named in
+# autoinstall/user-data plus everything apt would pull for them, indexed as a local apt source.
+#
+# The closure is resolved against an EMPTY dpkg status on purpose: against this machine's own status apt
+# answers "already installed" and the pool comes out a few MB short of what a fresh machine needs.
+echo ""
+echo "📦 Step 1b: Building the local package pool..."
+
+POOL_DIR="$SCRIPT_DIR/files/pool"
+PACKAGES_LIST="$SCRIPT_DIR/files/packages.list"
+
+node -e '
+  const fs = require("fs");
+  const yaml = require(process.argv[1]);
+  const doc = yaml.load(fs.readFileSync(process.argv[2], "utf8"));
+  const pkgs = (doc.autoinstall && doc.autoinstall.packages) || [];
+  if (!pkgs.length) { throw new Error("no packages: in autoinstall/user-data"); }
+  fs.writeFileSync(process.argv[3], pkgs.join("\n") + "\n");
+' "$PROJECT_ROOT/web_app/node_modules/js-yaml" "$SCRIPT_DIR/autoinstall/user-data" "$PACKAGES_LIST"
+
+rm -rf "$POOL_DIR"
+mkdir -p "$POOL_DIR"
+apt-get -o Dir::State::status=/dev/null -o Dir::Cache::archives="$POOL_DIR" \
+    -y --download-only install $(tr '\n' ' ' < "$PACKAGES_LIST") \
+    || { echo "❌ could not build the package pool — is /var/lib/apt/lists current? (apt-get update)" >&2; exit 1; }
+
+command -v dpkg-scanpackages >/dev/null \
+    || { echo "❌ dpkg-scanpackages missing (install dpkg-dev)" >&2; exit 1; }
+dpkg-scanpackages -m "$POOL_DIR" /dev/null 2>/dev/null | gzip -9 > "$POOL_DIR/Packages.gz"
+echo "   pool: $(ls "$POOL_DIR"/*.deb | wc -l) packages, $(du -sh "$POOL_DIR" | cut -f1) (index $(du -sh "$POOL_DIR/Packages.gz" | cut -f1))"
+
 # ─── Step 2: Extract Ubuntu ISO ─────────────────────────────────────────
 
 echo ""
@@ -154,6 +186,13 @@ echo "   ✅ release-version ($(tr -d '\r\n' < "$SCRIPT_DIR/release-version"))"
 # The Blackmagic Desktop Video .deb (~250 MB) is what makes SDI work on a fresh appliance: without it the
 # gateway runs but no frames reach the card. Vendor binary, so it is gitignored and the build only carries
 # it when the operator put it beside the other payload files.
+# The package pool and its index: the installed system keeps them as a local apt source (see the
+# late-commands in autoinstall/user-data), which is what makes a first boot without network possible.
+mkdir -p "$EXTRACT_DIR/blackgate/pool"
+cp -r "$POOL_DIR"/. "$EXTRACT_DIR/blackgate/pool/"
+cp "$PACKAGES_LIST" "$EXTRACT_DIR/blackgate/packages.list"
+echo "   ✅ pool/ + Packages.gz + packages.list"
+
 DESKTOP_VIDEO_DEB="$SCRIPT_DIR/files/blackmagic-desktopvideo.deb"
 if [ -f "$DESKTOP_VIDEO_DEB" ]; then
     cp "$DESKTOP_VIDEO_DEB" "$EXTRACT_DIR/blackgate/blackmagic-desktopvideo.deb"
