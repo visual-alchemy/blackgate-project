@@ -1036,7 +1036,11 @@ const Settings = () => {
                 showIcon
                 style={{ marginBottom: 16 }}
                 message={`Scheduled: ${scheduled.map((item) => item.action).join(', ')}`}
-                description="The helper delays every action, so this can still be stopped before it runs."
+                description={
+                  scheduled[0].fires_at
+                    ? `Runs at ${new Date(scheduled[0].fires_at).toLocaleTimeString()} — the helper delays every action, so this can still be stopped.`
+                    : 'The helper delays every action, so this can still be stopped before it runs.'
+                }
                 action={
                   <Button
                     size="small"

@@ -211,17 +211,19 @@ defmodule Blackgate.SystemControl do
   end
 
   # Actions show up in Events: an operator who reboots a gateway from the dashboard leaves a trace of
-  # who did it and when, next to the route and SDI events.
+  # what was scheduled and when, next to the route and SDI events. The severity is a literal (rather
+  # than a computed value) on purpose: the guidance coverage test finds event types by scanning for
+  # `EventLog.log(:severity, "type"` call sites, and a variable there would hide this type from it.
   defp audit(action, argument) do
-    severity = if action in ["reboot", "shutdown"], do: :warning, else: :info
     target = if argument, do: " (#{argument})", else: ""
+    metadata = %{action: action, argument: argument}
+    message = "Dashboard scheduled #{action}#{target}"
 
-    EventLog.log(
-      severity,
-      "system_action",
-      "Dashboard scheduled #{action}#{target}",
-      %{action: action, argument: argument}
-    )
+    if action in ["reboot", "shutdown"] do
+      EventLog.log(:warning, "system_action", message, metadata)
+    else
+      EventLog.log(:info, "system_action", message, metadata)
+    end
   end
 
   defp unit_active?(unit) do
@@ -231,18 +233,19 @@ defmodule Blackgate.SystemControl do
     end
   end
 
+  # `NextElapseUSecRealtime` is empty for the transient timers systemd-run creates, but `list-timers
+  # --output=json` reports the real fire time (microseconds since the epoch), which is what the
+  # dashboard shows while an action is counting down.
   defp unit_next_elapse(unit) do
-    case cmd("systemctl", [
-           "show",
-           unit <> ".timer",
-           "--property=NextElapseUSecRealtime",
-           "--value"
-         ]) do
-      {:ok, value} ->
-        case String.trim(value) do
-          "" -> nil
-          "n/a" -> nil
-          other -> other
+    args = ["list-timers", unit <> ".timer", "--all", "--output=json", "--no-pager"]
+
+    case cmd("systemctl", args) do
+      {:ok, output} ->
+        with {:ok, [entry | _]} <- Jason.decode(output),
+             %{"next" => next} when is_integer(next) and next > 0 <- entry do
+          next |> DateTime.from_unix!(:microsecond) |> DateTime.to_iso8601()
+        else
+          _ -> nil
         end
 
       :error ->

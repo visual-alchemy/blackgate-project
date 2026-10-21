@@ -20,6 +20,8 @@ defmodule Blackgate.EventGuidance do
 
   # One entry per event type. Types with no entry are bookkeeping and get no action text.
   @actions %{
+    "system_action" =>
+      "scheduled from Settings > System: it runs after a short delay and can still be cancelled from the same card",
     "loss_burst" => "none — SRT is retransmitting, the stream is not affected",
     "route_reconnected" => "none — the pipeline reconnected on its own",
     "route_reconnecting" =>
