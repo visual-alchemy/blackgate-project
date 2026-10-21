@@ -115,8 +115,9 @@ fi
 
 # ─── Console banner ────────────────────────────────────────────────────────
 # A headless install has no way to learn its own address before somebody logs in, and the login prompt
-# itself carries no information. Write one for the console (getty prints /etc/issue.d/*), without the
-# password: that stays in the 0640 credentials file.
+# itself carries no information. Write one for the console without the password: that stays in the 0640
+# credentials file. agetty only reads /etc/issue.d/*.issue - the suffix is required, a file called plain
+# "99-blackgate" is silently ignored.
 IP_NOW="$(hostname -I | awk '{print $1}')"
 if [ -n "$IP_NOW" ]; then
     mkdir -p /etc/issue.d
@@ -125,7 +126,7 @@ if [ -n "$IP_NOW" ]; then
         echo "  Dashboard : http://$IP_NOW:4000"
         echo "  Login     : admin (password: /home/blackgate/blackgate-dashboard-credentials.txt)"
         echo
-    } > /etc/issue.d/99-blackgate
+    } > /etc/issue.d/99-blackgate.issue
     say "Console banner written with IP $IP_NOW"
 else
     say "WARNING: no IPv4 address yet - console banner skipped"
