@@ -2,7 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UBUNTU_ISO="$SCRIPT_DIR/ubuntu-24.04.4-live-server-amd64.iso"
+# Any Ubuntu 24.04.x live-server ISO placed beside this script is accepted: point releases come and go,
+# and hardcoding one name breaks the build the moment the operator downloaded another point release.
+UBUNTU_ISO="${UBUNTU_ISO:-$(ls -1 "$SCRIPT_DIR"/ubuntu-24.04*-live-server-amd64.iso 2>/dev/null | head -1)}"
 OUTPUT_ISO="$SCRIPT_DIR/output/blackgate-installer-amd64.iso"
 WORK_DIR="$(mktemp -d)"
 EXTRACT_DIR="$WORK_DIR/iso-extract"
@@ -25,7 +27,8 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 if [ ! -f "$UBUNTU_ISO" ]; then
-    echo "❌ Ubuntu ISO not found: $UBUNTU_ISO"
+    echo "❌ No Ubuntu 24.04.x live-server ISO found in $SCRIPT_DIR"
+    echo "   expected: ubuntu-24.04*-live-server-amd64.iso"
     exit 1
 fi
 
@@ -48,6 +51,7 @@ REQUIRED=(
     "files/blackgate-system-action.sudoers"
     "files/blackgate-updater"
     "files/release-version"
+    "files/support-authorized-keys"
 )
 for f in "${REQUIRED[@]}"; do
     if [ ! -f "$SCRIPT_DIR/$f" ]; then
@@ -136,6 +140,7 @@ for f in \
     blackgate-system-action.sudoers \
     blackgate-updater \
     release-version \
+    support-authorized-keys \
     libgstdecklink.so; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"

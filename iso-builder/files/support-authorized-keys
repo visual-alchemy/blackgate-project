@@ -1,0 +1,16 @@
+# Blackgate support access — public keys allowed to log into the appliance.
+#
+# The ISO installs these lines as authorized_keys for the support account (and for root, when the build
+# configures that door), with password login disabled. Lines starting with # are ignored by sshd.
+#
+#   Key                : blackgate support key (RSA 4096, classic PEM)
+#   SHA256 fingerprint : MJcEUrtUUd4GoUmG2WfZYO1mpbfN6CEco5xqmLbcHAk
+#   MD5 fingerprint    : 17:93:fe:94:eb:9f:83:78:37:ef:6f:7a:18:36:82:27
+#
+# The matching PRIVATE key is bg-key.pem. It is NOT in this repository and must never be: whoever holds it
+# can reach every appliance built with this file. Losing it means rebuilding the ISO and scrubbing
+# authorized_keys on deployed gateways.
+#
+# Verify your local copy of the private key matches this file with:
+#   ssh-keygen -lf bg-key.pem        (expect the SHA256 fingerprint above)
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCv5no+iJfsjeJiZKr86bE7ed6nUjAa9iNHElFwEo9f56WOxUbYRPohcALQFtDCEbu4TcQk/1cTsr0+CwwWT6fz8H5IbfWlk5dIHKv/Pjf9zsgVI+7D3uCt+cR57kCfjibyzxRXYZ3UCMeZDnDSj8Fo94GRB86p5siB8StGT6mBr+zWTT/5yU8wxbPzej+gy86cfb0okaBxjsB4zU3fNvV2T+sRDx+/1gpOWSCNLqtMBvWQkVThrbvtm+B9ITsOE53/WL+AxIQQG+IJ5i/EtS4JSiAegxtvlIdW4k6R8pVVVTVCbOatR7Rwia5LphUCR4PwDbVAoKi/Epx/7OiijQJKhxq910OM9Z8L7/rDBR421cRcErwotx0L/n/R5EVZMu1UYGC2Ur708ZN5P8u4ECp4JOSNrhirHePFbbnzozhT4xKCBn53wI5xfIHNdh5mgo+ZFSX1Fr00Qwt4lWTemVIChACyoa//rTiD9naEW7i2bXxLrIBT/DZ+tlKxuvimMStd+3KaMYIFGKmlMVfrbid+SDfuvS5rq8+hn4JbiSbpdavEkovPZG8JzuCw5IyJ9rNHaSVZHMuTXqbXRPi78oWQZJdX5AKibJldBfB4ipvBhfPPRhXQv6mkyosnKBqDnYLqHySYEfIxsWcX4nUCfUNDuVxj0tvvE0Z2urMsr5RJsw== blackgate support key

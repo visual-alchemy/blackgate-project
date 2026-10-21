@@ -26,10 +26,10 @@ echo "  ║  SSH        :  ssh blackgate@${IP}"
 else
 echo "  ║  Dashboard  :  http://<waiting for IP...>:4000"
 fi
-echo "  ║  Login      :  admin / password123"
+echo "  ║  Login      :  admin - ~/blackgate-dashboard-credentials.txt"
 echo "  ║  Service    :  ${STATUS}"
 echo "  ╠══════════════════════════════════════════════════════╣"
-echo "  ║  Logs       :  sudo journalctl -u blackgate -f       ║"
-echo "  ║  Status     :  sudo systemctl status blackgate       ║"
+echo "  ║  Logs       :  journalctl -u blackgate -f"
+echo "  ║  Status     :  systemctl status blackgate"
 echo "  ╚══════════════════════════════════════════════════════╝"
 echo ""

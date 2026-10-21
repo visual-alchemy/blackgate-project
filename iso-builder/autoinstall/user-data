@@ -51,12 +51,34 @@ autoinstall:
 
   # ─── Late commands — run after install, before reboot ───────────────
   late-commands:
-    # Enable root login for developers (password: blackgate212514)
+    # ─── Support access: key-only SSH, two doors (root + bg-support) ───────────────────────────────
+    # The public key in iso-builder/files/support-authorized-keys belongs to the vendor. Nobody gets a
+    # password: one that is identical on every appliance is worse than no password at all.
     - curtin in-target -- usermod -s /bin/bash root
-    - curtin in-target -- usermod -p '$6$BGdev2025salt$JSPuWJdO5tqqc8Nv9IrKJZdX24RgSe9tn4hJZzkmfT81j4umd8/xZbYI1.r9F661HjS.YhwycOXtMsHijBtCP/' root
-    - curtin in-target -- sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+    - curtin in-target -- mkdir -p /root/.ssh
+    - curtin in-target -- chmod 700 /root/.ssh
+    - cp /cdrom/blackgate/support-authorized-keys /target/root/.ssh/authorized_keys
+    - curtin in-target -- chmod 600 /root/.ssh/authorized_keys
 
-    # Remove sudo access for blackgate user (client has no root)
+    # Root keeps one randomly generated password, for the physical console only (break-glass). SSH for root
+    # is key-only, so this password never travels over the network.
+    - |
+      curtin in-target -- bash -c 'umask 077; ROOT_PW=$(head -c 18 /dev/urandom | base64); echo "root:$ROOT_PW" | chpasswd; { echo "Blackgate break-glass root password (physical console only - root SSH is key-only)"; echo "user: root"; echo "password: $ROOT_PW"; } > /root/blackgate-root-password.txt; chmod 600 /root/blackgate-root-password.txt'
+    - curtin in-target -- sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+
+    # bg-support: the day-to-day support door. Key-only, sudo for debugging, locked if the key is removed.
+    - curtin in-target -- useradd -m -s /bin/bash bg-support
+    - curtin in-target -- passwd -l bg-support
+    - curtin in-target -- usermod -aG sudo bg-support
+    - mkdir -p /target/home/bg-support/.ssh
+    - cp /cdrom/blackgate/support-authorized-keys /target/home/bg-support/.ssh/authorized_keys
+    - chmod 700 /target/home/bg-support/.ssh
+    - chmod 600 /target/home/bg-support/.ssh/authorized_keys
+    - curtin in-target -- chown -R bg-support:bg-support /home/bg-support/.ssh
+    - |
+      curtin in-target -- bash -c 'printf "%s\n" "bg-support ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/99-blackgate-support; chmod 0440 /etc/sudoers.d/99-blackgate-support; visudo -c -f /etc/sudoers.d/99-blackgate-support || rm -f /etc/sudoers.d/99-blackgate-support'
+
+    # Remove sudo access for the application user (the client drives the dashboard, not the shell)
     - curtin in-target -- bash -c 'deluser blackgate sudo || true'
 
     # Create required directories
@@ -80,6 +102,7 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate-updater /target/opt/blackgate/files/
     - cp /cdrom/blackgate/blackgate.service /target/opt/blackgate/files/
     - cp /cdrom/blackgate/release-version /target/opt/blackgate/
+    - cp /cdrom/blackgate/support-authorized-keys /target/opt/blackgate/files/
     - cp /cdrom/blackgate/blackgate-install-system-actions.sh /target/opt/blackgate/
 
     # Set permissions
@@ -105,7 +128,7 @@ autoinstall:
         ethernets:
           all-eth:
             match:
-              name: "en*"
+              name: "e*"
             dhcp4: true
             optional: true
       EOF

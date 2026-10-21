@@ -60,6 +60,35 @@ if [ -f /etc/blackgate/blackgate.env ] && [ ! -f /root/blackgate-credentials.txt
     say "API credentials written to /root/blackgate-credentials.txt (0600)"
 fi
 
+# ─── Hand the client the dashboard credentials ─────────────────────────────
+# The dashboard password is generated at install and lives in a root-only file, while the client has no
+# root: without this copy they cannot log in at all.
+if [ -f /etc/blackgate/blackgate.env ] && [ ! -f /home/blackgate/blackgate-dashboard-credentials.txt ]; then
+    API_USER="$(grep -m1 -oP '(?<=API_AUTH_USERNAME=)\S+' /etc/blackgate/blackgate.env 2>/dev/null || echo admin)"
+    API_PASS="$(grep -m1 -oP '(?<=API_AUTH_PASSWORD=)\S+' /etc/blackgate/blackgate.env 2>/dev/null || true)"
+    if [ -n "$API_PASS" ]; then
+        {
+            echo "Blackgate dashboard"
+            echo "  URL      : http://$(hostname -I | awk '{print $1}'):4000"
+            echo "  username : $API_USER"
+            echo "  password : $API_PASS"
+            echo
+            echo "Change the password after the first login (Settings > Users)."
+        } > /home/blackgate/blackgate-dashboard-credentials.txt
+        chown blackgate:blackgate /home/blackgate/blackgate-dashboard-credentials.txt
+        chmod 0640 /home/blackgate/blackgate-dashboard-credentials.txt
+        say "Dashboard credentials written to /home/blackgate/blackgate-dashboard-credentials.txt"
+    fi
+fi
+
+# ─── DeckLink driver presence ──────────────────────────────────────────────
+# Without the vendor driver the gateway runs but SDI stays dark, so say it plainly at first boot.
+if ls /dev/blackmagic/io* >/dev/null 2>&1; then
+    say "DeckLink devices present: $(ls /dev/blackmagic/ | tr '\n' ' ')"
+else
+    say "WARNING: no /dev/blackmagic/* devices - SDI needs the Blackmagic Desktop Video driver"
+fi
+
 # ─── Wait for the dashboard ────────────────────────────────────────────────
 say "Waiting for Blackgate to start (port 4000)..."
 for i in {1..30}; do
