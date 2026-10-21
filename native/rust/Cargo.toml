@@ -1,6 +1,6 @@
 [workspace]
-members = ["blackgate-engine", "engine-config", "engine-gst", "engine-failover", "engine-sdi", "engine-metadata", "engine-stats", "engine-thumbnail"]
-default-members = ["blackgate-engine"]
+members = ["blackgate-engine", "engine-config", "engine-gst", "engine-failover", "engine-sdi", "engine-metadata", "engine-stats", "engine-thumbnail", "engine-ingest"]
+default-members = ["blackgate-engine", "engine-ingest"]
 resolver = "2"
 # Migration-era binaries (spikes and the stats-socket shadow client) live under tools/ and
 # are deliberately not members: nothing depends on them, so they must not be built by every

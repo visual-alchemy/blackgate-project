@@ -1,0 +1,13 @@
+[package]
+name = "engine-ingest"
+version = "0.1.0"
+edition = "2021"
+
+# Native replacement for the ffmpeg loopback sidecar: pulls RTMP/HLS/HTTP sources with GStreamer
+# and pushes MPEG-TS over SRT (listener) for the engine to call as an SRT source.
+[[bin]]
+name = "blackgate-ingest"
+path = "src/main.rs"
+
+[dependencies]
+gstreamer = "0.22"

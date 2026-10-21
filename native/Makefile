@@ -4,6 +4,7 @@
 RUST_SRC_DIR := rust
 RUST_BUILD_DIR := build/rust
 RUST_BINARY := $(RUST_BUILD_DIR)/release/blackgate-engine
+INGEST_BINARY := $(RUST_BUILD_DIR)/release/blackgate-ingest
 
 .PHONY: all clean rust-build rust-clean help
 
@@ -12,6 +13,7 @@ all: rust-build
 rust-build:
 	cd $(RUST_SRC_DIR) && cargo build --release --target-dir ../$(RUST_BUILD_DIR)
 	cp $(RUST_BINARY) build/blackgate-engine
+	cp $(INGEST_BINARY) build/blackgate-ingest
 
 rust-clean:
 	cd $(RUST_SRC_DIR) && cargo clean
