@@ -23,7 +23,15 @@ prune_releases() {
 VERSION="${2:-}"
 echo "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || fail "invalid version"
 PACKAGE="$INCOMING/$VERSION.bgupdate"
-[ -f "$PACKAGE" ] && [ -f "$KEY" ] || fail "package or verification key missing"
+if [ ! -f "$KEY" ]; then
+  fail "verification key missing ($KEY) — install the signing pair with scripts/install-system-actions.sh"
+fi
+# A version can only be (re)activated from its package: the updater swaps `current` to releases/<v>,
+# but it starts by verifying a package, so an unpacked release without its .bgupdate in incoming/ is
+# not deployable. Say that instead of the generic "package or verification key missing".
+if [ ! -f "$PACKAGE" ]; then
+  fail "no package for $VERSION in $INCOMING — only a version whose .bgupdate is still retained can be deployed"
+fi
 WORK="$(mktemp -d /var/tmp/blackgate-update.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 tar tzf "$PACKAGE" | grep -qx manifest.txt || fail "manifest missing"
