@@ -19,24 +19,28 @@ set -euo pipefail
 PROJECT_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-VERSION_FILE="iso-builder/release-version"
-VERSION="${1:-$(tr -d '\r\n' < "$VERSION_FILE" 2>/dev/null || true)}"
-PRIVATE_KEY="${2:-/etc/blackgate/update-private-key.pem}"
-OUTPUT_DIR="${3:-$PROJECT_ROOT/dist}"
-NOTES_FILE="iso-builder/release-notes.txt"
-
 # The signing key is 0600 root, so signing has to run as root — but `make build` must not: it writes
 # priv/static and web_app/dist, which would then be root-owned and break the next non-root build.
 # So build as yourself, then package:
 #
 #     make build && sudo BLACKGATE_SKIP_BUILD=1 scripts/package-signed-update.sh
+#     make build && sudo scripts/package-signed-update.sh --no-build
 #
+# Flags are stripped before the positional arguments, so `--no-build` can stand alone or beside them.
 SKIP_BUILD="${BLACKGATE_SKIP_BUILD:-0}"
+positional=()
 for arg in "$@"; do
-  if [ "$arg" = "--no-build" ]; then
-    SKIP_BUILD=1
-  fi
+  case "$arg" in
+    --no-build) SKIP_BUILD=1 ;;
+    *) positional+=("$arg") ;;
+  esac
 done
+
+VERSION_FILE="iso-builder/release-version"
+VERSION="${positional[0]:-$(tr -d '\r\n' < "$VERSION_FILE" 2>/dev/null || true)}"
+PRIVATE_KEY="${positional[1]:-/etc/blackgate/update-private-key.pem}"
+OUTPUT_DIR="${positional[2]:-$PROJECT_ROOT/dist}"
+NOTES_FILE="iso-builder/release-notes.txt"
 
 [ -n "$VERSION" ] || { echo "No version: pass one or write $VERSION_FILE" >&2; exit 64; }
 printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || { echo "Invalid version '$VERSION'" >&2; exit 64; }

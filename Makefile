@@ -122,7 +122,15 @@ build:
 	@echo "Step 3: Building Elixir Release..."
 	MIX_ENV=prod mix phx.digest
 	rm -rf _build/prod/rel/blackgate
-	MIX_ENV=prod mix release --overwrite
+	@# Mix.Release.copy_erts intermittently dies with "could not change mode for
+	@# _build/prod/rel/blackgate/erts-*/bin/erl: no such file or directory" while assembling the release
+	@# in parallel tasks. It is a race in the assembler, not a permissions or disk problem, and a second
+	@# attempt succeeds; retry once here instead of making every operator rediscover it.
+	@MIX_ENV=prod mix release --overwrite || { \
+		echo "release assembly failed (known copy_erts race) — retrying once..."; \
+		rm -rf _build/prod/rel/blackgate; \
+		MIX_ENV=prod mix release --overwrite; \
+	}
 	@test -d _build/prod/rel/blackgate/lib && ls _build/prod/rel/blackgate/lib | grep -q '^blackgate-' || { \
 		echo "ERROR: release is incomplete — no blackgate app under _build/prod/rel/blackgate/lib."; \
 		echo "       Booting it fails with load_failed for core modules. Recover with:"; \

@@ -73,3 +73,7 @@ graphify-out/
 *.dets
 *.wal
 /KHEPRI*/
+
+# === Update packages ===
+# Build output from scripts/package-signed-update.sh: tens of megabytes of release tarball.
+/dist/
