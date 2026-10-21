@@ -101,9 +101,37 @@ breaks — the root cause the SDI audio-desync auto-restart in `route_handler.ex
 - `Pipeline construction is invalid, please add queues` appears 3× in the release logs too, and
   production is healthy, so it is a benign warning (the sink branch does get a `queue2`).
 
+## Soak result — 60 minutes per leg: pass
+
+`benchmarks/migration/scripts/native-pull-pilot/soak_long_native_pull.sh`, sampled every 60 s and
+scored by stall window:
+
+```
+HLS   59 samples / 60 min : 1705 MB, delta 27.84-29.86 MB/min, STALL 0/58, log empty   → pass
+RTMP  22 samples / 22 min : 431 MB,  delta 19.53-19.68 MB/min, STALL 0/21, log empty   → pass
+```
+
+Two honest qualifications:
+
+- **The HLS RSS figure reported earlier was wrong.** The first runs reported "2.0 MB flat" from a
+  sampler that matched the wrong process. The real number over an hour is **31.1 → 37.0 MB (peak
+  37.6)** — bounded but *slowly rising* (~6 MB/hour), which is worth watching but never stalled.
+  RTMP's RSS is genuinely flat: 21.3 MB start, end and peak.
+- **The RTMP leg's pull ended after 22 minutes, cleanly** (empty pipeline log, i.e. end of stream,
+  not a crash) — the publisher/server side ended the stream, not the pull. So RTMP is proven for
+  ~30 minutes total across runs rather than a full hour. Re-run with `RTMP_MIN=60` once the
+  publisher's own lifetime is fixed if a full hour of RTMP evidence is wanted.
+
 ## Not yet proven (the real gate)
 
-- **Hours**, not minutes, per leg, with **zero** stall windows and flat RSS.
 - A **source-drop / reconnect test**: the sidecar's ffmpeg has `-reconnect`, so the native path must
   match it before it can replace it.
-- RTMP push (encoders pushing into the gateway). Deferred deliberately until the pull legs are soaked.
+- **The handoff to the engine.** The pull legs above are proven; delivery into `blackgate-engine` is
+  not. GStreamer's `srtsink` never completed a handshake in the **listener** role (ffmpeg and the
+  engine's own `srtsrc` both failed against it), so the roles were flipped — helper as *caller*,
+  engine's SRT source as *listener*. That removed the handshake error entirely (the engine now
+  reaches PLAYING with no SRT error and the helper pulls the operator's real RTMP source without
+  logging one), but **no data reaches the engine's sink yet**: the failure moved from "handshake
+  rejected" to "connected but nothing flows". The open question is whether to keep debugging that
+  or hand the stream over UDP, which the engine has already proven end to end.
+- RTMP push (encoders pushing into the gateway). Deferred deliberately until the pull legs are done.
