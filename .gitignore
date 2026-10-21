@@ -66,3 +66,10 @@ docs/superpowers/skills/
 # Generated code-graph output (stale by construction; regenerate instead of committing).
 graphify-out/
 /priv/native/build/
+
+# === Khepri store artifacts ===
+# The route database lives in khepri#<node>/ (ignored). A mis-set DATABASE_DATA_DIR can drop these
+# straight into the project root, where they must never be committed — they are someone's routes.
+*.dets
+*.wal
+/KHEPRI*/

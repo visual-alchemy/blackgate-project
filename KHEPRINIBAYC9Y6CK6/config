@@ -1,9 +1,0 @@
-#{id => {khepri,nonode@nohost},
-  machine =>
-      {module,khepri_machine,
-              #{member => {khepri,nonode@nohost},store_id => khepri}},
-  friendly_name => "Khepri store \"khepri\"",uid => <<"KHEPRINIBAYC9Y6CK6">>,
-  cluster_name => khepri,initial_members => [],
-  log_init_args => #{uid => <<"KHEPRINIBAYC9Y6CK6">>},
-  await_condition_timeout => 30000,tick_timeout => 1000,
-  install_snap_rpc_timeout => 120000,broadcast_time => 100}.
