@@ -32,7 +32,7 @@ if [ ! -f "$UBUNTU_ISO" ]; then
     exit 1
 fi
 
-for command_name in xorriso mkfs.vfat fdisk git meson ninja mix npm; do
+for command_name in xorriso mkfs.vfat fdisk git meson ninja mix npm dpkg-scanpackages; do
     if ! command -v "$command_name" &>/dev/null; then
         echo "❌ $command_name not found; install ISO and Blackgate build dependencies"
         exit 1
@@ -52,6 +52,7 @@ REQUIRED=(
     "files/blackgate-updater"
     "release-version"
     "files/support-authorized-keys"
+    "packages.list"
 )
 for f in "${REQUIRED[@]}"; do
     if [ ! -f "$SCRIPT_DIR/$f" ]; then
@@ -108,8 +109,8 @@ cp "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir/sys/decklink/libgst
     "$SCRIPT_DIR/files/libgstdecklink.so"
 
 # ─── Step 1b: Local package pool ────────────────────────────────────────
-# The appliance has to install with no network at all, so the image carries the runtime packages named in
-# autoinstall/user-data plus everything apt would pull for them, indexed as a local apt source.
+# The appliance has to install with no network at all, so the image carries the runtime packages listed in
+# packages.list plus everything apt would pull for them, indexed as a local apt source.
 #
 # The closure is resolved against an EMPTY dpkg status on purpose: against this machine's own status apt
 # answers "already installed" and the pool comes out a few MB short of what a fresh machine needs.
