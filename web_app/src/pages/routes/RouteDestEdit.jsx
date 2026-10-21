@@ -10,6 +10,7 @@ import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, routesApi, networkApi } from '../../utils/api';
+import { SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
 import React from 'react';
 
 const { Title } = Typography;
@@ -504,7 +505,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         }
                                     </Form.Item>
 
-                                    {/* SDI specific options (DeckLink Quad 2) */}
+                                    {/* SDI specific options (DeckLink Duo 2) */}
                                     <Form.Item noStyle dependencies={['schema']}>
                                         {({ getFieldValue }) =>
                                             getFieldValue('schema') === 'SDI' && (
@@ -513,20 +514,11 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         label="SDI Output Port"
                                                         name={['schema_options', 'device_number']}
                                                         required
-                                                        extra="DeckLink Quad 2 port number. Each card provides 8 SDI channels (0-7)."
+                                                        extra="DeckLink Duo 2 port number. This card provides 4 SDI channels (0-3)."
                                                     >
                                                         <Select
                                                             placeholder="Select SDI port"
-                                                            options={[
-                                                                { label: 'SDI 1', value: 0 },
-                                                                { label: 'SDI 2', value: 4 },
-                                                                { label: 'SDI 3', value: 1 },
-                                                                { label: 'SDI 4', value: 5 },
-                                                                { label: 'SDI 5', value: 2 },
-                                                                { label: 'SDI 6', value: 6 },
-                                                                { label: 'SDI 7', value: 3 },
-                                                                { label: 'SDI 8', value: 7 },
-                                                            ].map(opt => ({
+                                                            options={SDI_PORT_OPTIONS.map(opt => ({
                                                                 ...opt,
                                                                 label: sdiPortUsage[opt.value]
                                                                     ? `${opt.label} (used by ${sdiPortUsage[opt.value]})`
@@ -541,30 +533,33 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         label="Video Mode"
                                                         name={['schema_options', 'video_mode']}
                                                         required
-                                                        extra="Output video format. Must match source resolution and frame rate."
+                                                        extra="Progressive modes use frame rate. Interlaced modes show complete frames per second and fields per second."
                                                     >
                                                         <Select
                                                             placeholder="Select video mode"
                                                             options={[
-                                                                { label: 'Auto (detect from source)', value: 0 },
-                                                                { label: '1080p 25fps (PAL)', value: 9 },
-                                                                { label: '1080p 30fps (NTSC)', value: 11 },
-                                                                { label: '1080p 50fps', value: 12 },
-                                                                { label: '1080p 60fps', value: 13 },
-                                                                { label: '1080i 50fps (PAL)', value: 7 },
-                                                                { label: '1080i 60fps (NTSC)', value: 8 },
-                                                                { label: '720p 50fps', value: 14 },
-                                                                { label: '720p 60fps', value: 15 },
-                                                                { label: '576i 50fps (PAL SD)', value: 17 },
-                                                                { label: '480i 60fps (NTSC SD)', value: 18 },
-                                                                { label: '2160p 25fps (4K)', value: 22 },
-                                                                { label: '2160p 30fps (4K)', value: 23 },
-                                                                { label: '2160p 50fps (4K)', value: 24 },
-                                                                { label: '2160p 60fps (4K)', value: 25 },
+                                                                { label: 'Auto — detect source format (fallback: 1080p25)', value: 0 },
+                                                                { label: '1080p23.98 — 23.98 fps', value: 1 },
+                                                                { label: '1080p24 — 24 fps', value: 2 },
+                                                                { label: '1080p25 — 25 fps', value: 9 },
+                                                                { label: '1080p29.97 — 29.97 fps', value: 3 },
+                                                                { label: '1080p30 — 30 fps', value: 11 },
+                                                                { label: '1080p50 — 50 fps', value: 12 },
+                                                                { label: '1080p59.94 — 59.94 fps', value: 4 },
+                                                                { label: '1080p60 — 60 fps', value: 13 },
+                                                                { label: '1080i50 — 25 fps / 50 fields', value: 7 },
+                                                                { label: '1080i59.94 — 29.97 fps / 59.94 fields', value: 5 },
+                                                                { label: '1080i60 — 30 fps / 60 fields', value: 8 },
+                                                                { label: '720p50 — 50 fps', value: 14 },
+                                                                { label: '720p59.94 — 59.94 fps', value: 6 },
+                                                                { label: '720p60 — 60 fps', value: 15 },
+                                                                { label: '576i50 (PAL) — 25 fps / 50 fields', value: 17 },
+                                                                { label: '480i59.94 (NTSC) — 29.97 fps / 59.94 fields', value: 18 },
                                                             ]}
                                                             style={{ width: '250px' }}
                                                         />
                                                     </Form.Item>
+
                                                 </>
                                             )
                                         }

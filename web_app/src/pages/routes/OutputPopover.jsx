@@ -3,28 +3,17 @@ import { Popover, Select, InputNumber, Input, Button, Space, Typography, Tag, Di
 import { EditOutlined, PlusOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons';
 import { destinationsApi, routesApi } from '../../utils/api';
 import { useNavigate } from 'react-router-dom';
+import { DEVICE_TO_SDI, SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
 
 const { Text } = Typography;
 
-const DEVICE_TO_SDI = { 0: 1, 4: 2, 1: 3, 5: 4, 2: 5, 6: 6, 3: 7, 7: 8 };
-const SDI_TO_DEVICE = { 1: 0, 2: 4, 3: 1, 4: 5, 5: 2, 6: 6, 7: 3, 8: 7 };
-
-const SDI_PORT_OPTIONS = [
-  { label: 'SDI 1', value: 0 },
-  { label: 'SDI 2', value: 4 },
-  { label: 'SDI 3', value: 1 },
-  { label: 'SDI 4', value: 5 },
-  { label: 'SDI 5', value: 2 },
-  { label: 'SDI 6', value: 6 },
-  { label: 'SDI 7', value: 3 },
-  { label: 'SDI 8', value: 7 },
-];
-
 const VIDEO_MODE_MAP = {
   0: 'Auto',
+  1: '1080p23.98', 2: '1080p24', 3: '1080p29.97', 4: '1080p59.94',
+  5: '1080i59.94', 6: '720p59.94',
   9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60',
   7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60',
-  17: 'PAL', 18: 'NTSC', 22: '4K25', 23: '4K30', 24: '4K50', 25: '4K60'
+  17: 'PAL', 18: 'NTSC'
 };
 
 const OutputPopover = ({ route, allRoutes, onUpdate }) => {
