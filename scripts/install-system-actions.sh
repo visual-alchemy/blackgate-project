@@ -98,7 +98,19 @@ echo "installed /etc/sudoers.d/blackgate-system-action (validated by visudo)"
 echo "=== 4/7 environment file ==="
 ENV_FILE=/etc/blackgate/blackgate.env
 if [ -f "$ENV_FILE" ]; then
-  echo "$ENV_FILE exists — left as is"
+  echo "$ENV_FILE exists — keeping the existing credentials"
+  # Re-installing under a different root (dev box -> appliance layout, say) must not leave the
+  # dashboard pointing at the old one: the update card works against BLACKGATE_ROOT.
+  existing_root="$(grep -m1 -oP '(?<=^BLACKGATE_ROOT=).*' "$ENV_FILE" || true)"
+  if [ "$existing_root" = "$ROOT" ]; then
+    echo "  BLACKGATE_ROOT already $ROOT"
+  elif [ -n "$existing_root" ]; then
+    sed -i "s|^BLACKGATE_ROOT=.*|BLACKGATE_ROOT=$ROOT|" "$ENV_FILE"
+    echo "  BLACKGATE_ROOT updated: $existing_root -> $ROOT"
+  else
+    printf 'BLACKGATE_ROOT=%s\n' "$ROOT" >> "$ENV_FILE"
+    echo "  BLACKGATE_ROOT added: $ROOT"
+  fi
 else
   API_USER=admin
   API_PASSWORD=""
