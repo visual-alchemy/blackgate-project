@@ -27,25 +27,31 @@ sysctl --system
 # carried them: pool/ + Packages.gz on the ISO, kept on the installed system by the installer's
 # late-commands, indexed by the same list that drives the install (files/packages.list is generated from
 # iso-builder/autoinstall/user-data, so the two can never drift). Without them the release cannot start.
-if [ -f /opt/blackgate/files/packages.list ] && [ -f /opt/blackgate/pool/Packages.gz ]; then
+PACKAGE_LIST=/opt/blackgate/files/packages.list
+[ -f "$PACKAGE_LIST" ] || PACKAGE_LIST=/opt/blackgate/packages.list
+if [ -f "$PACKAGE_LIST" ]; then
     MISSING=""
     for pkg in gstreamer1.0-plugins-bad libsrt1.5-gnutls libcjson1 dkms; do
         dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
     done
     if [ -n "$MISSING" ]; then
-        say "Runtime packages missing:$MISSING — installing from the local pool..."
-        # The package lists on disk were fetched from the archive and know nothing about the pool's own
-        # index, so index it first. file:// needs no network, and apt carries on past a source it cannot
-        # reach; short timeouts keep a dead archive from stalling first boot.
+        if [ -f /opt/blackgate/pool/Packages.gz ]; then
+            say "Installing runtime packages from the image's own pool (no network needed)..."
+        else
+            say "No local pool on this system — installing runtime packages from the archive..."
+        fi
+        # The package lists on disk came from the archive and know nothing about the pool's own index, so
+        # index it first. file:// needs no network, apt carries on past a source it cannot reach, and the
+        # short timeouts stop a dead archive from stalling first boot.
         apt-get update -o Acquire::http::Timeout=5 -o Acquire::Retries=0 >>"$LOG" 2>&1 || true
-        xargs -a /opt/blackgate/files/packages.list apt-get install -y --no-install-recommends >>"$LOG" 2>&1 \
-            || say "WARNING: local pool install reported an error (see $LOG) — the gateway may not start"
-        say "Local pool install finished."
+        xargs -a "$PACKAGE_LIST" apt-get install -y --no-install-recommends >>"$LOG" 2>&1 \
+            || say "WARNING: runtime package install reported an error (see $LOG) — the gateway may not start"
+        say "Runtime package install finished."
     else
-        say "Runtime packages already present (archive install succeeded)."
+        say "Runtime packages already present."
     fi
 else
-    say "No local package pool on this system — runtime packages must come from the archive."
+    say "WARNING: no package list on this system — the runtime packages have to be installed by hand"
 fi
 
 # ─── System integration + first release ────────────────────────────────────

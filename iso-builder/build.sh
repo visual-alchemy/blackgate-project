@@ -117,16 +117,10 @@ echo ""
 echo "📦 Step 1b: Building the local package pool..."
 
 POOL_DIR="$SCRIPT_DIR/files/pool"
-PACKAGES_LIST="$SCRIPT_DIR/files/packages.list"
-
-node -e '
-  const fs = require("fs");
-  const yaml = require(process.argv[1]);
-  const doc = yaml.load(fs.readFileSync(process.argv[2], "utf8"));
-  const pkgs = (doc.autoinstall && doc.autoinstall.packages) || [];
-  if (!pkgs.length) { throw new Error("no packages: in autoinstall/user-data"); }
-  fs.writeFileSync(process.argv[3], pkgs.join("\n") + "\n");
-' "$PROJECT_ROOT/web_app/node_modules/js-yaml" "$SCRIPT_DIR/autoinstall/user-data" "$PACKAGES_LIST"
+# packages.list is the single source of truth for what the appliance needs at runtime: the pool below and
+# the first-boot install both read it, and it is committed, so the two cannot drift.
+PACKAGES_LIST="$SCRIPT_DIR/packages.list"
+[ -f "$PACKAGES_LIST" ] || { echo "❌ missing $PACKAGES_LIST" >&2; exit 1; }
 
 rm -rf "$POOL_DIR"
 mkdir -p "$POOL_DIR"

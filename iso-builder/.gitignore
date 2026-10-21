@@ -6,4 +6,3 @@ files/blackgate-image.tar.gz
 *.iso
 files/*.deb
 files/pool/
-files/packages.list
