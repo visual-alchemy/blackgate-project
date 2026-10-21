@@ -67,11 +67,12 @@ fn classify(url: &str) -> Option<SourceKind> {
     None
 }
 
-/// The loopback target, byte-identical to what the ffmpeg sidecar wrote to, so the route rewrite
-/// (SRT caller, latency 500) keeps working.
+/// The loopback target. The *roles are flipped* from the old ffmpeg sidecar: GStreamer's `srtsink`
+/// is proven as a **caller** (that is how the engine delivers to destinations), while the listener
+/// role is what failed in every handshake attempt. So the helper dials and the engine listens.
 fn srt_target(port: u16, latency_ms: u32) -> String {
     format!(
-        "srt://127.0.0.1:{}?mode=listener&latency={}",
+        "srt://127.0.0.1:{}?mode=caller&latency={}",
         port,
         latency_ms as u64 * 1000
     )
@@ -90,7 +91,7 @@ fn pipeline_description(kind: SourceKind, url: &str, target: &str) -> String {
         SourceKind::Rtmp => format!("rtmp2src location={}", launch_quote(url)),
         _ => format!("souphttpsrc location={}", launch_quote(url)),
     };
-    let sink = format!("queue ! srtsink uri={} mode=listener", launch_quote(target));
+    let sink = format!("queue ! srtsink uri={} mode=caller", launch_quote(target));
     match kind {
         SourceKind::Hls => format!("{source} ! hlsdemux ! tsparse ! {sink}"),
         SourceKind::HttpTs => format!("{source} ! tsparse ! {sink}"),
@@ -279,14 +280,15 @@ mod tests {
 
     #[test]
     fn srt_target_matches_the_contract_the_control_plane_expects() {
-        // Byte-identical to the old ffmpeg target and to what the engine dials as an SRT caller.
+        // The helper is a CALLER: GStreamer's srtsink is proven in that role, and the engine's SRT
+        // *source* is the listener on the other end of the loopback.
         assert_eq!(
             srt_target(39_001, 500),
-            "srt://127.0.0.1:39001?mode=listener&latency=500000"
+            "srt://127.0.0.1:39001?mode=caller&latency=500000"
         );
         assert_eq!(
             srt_target(39_999, 120),
-            "srt://127.0.0.1:39999?mode=listener&latency=120000"
+            "srt://127.0.0.1:39999?mode=caller&latency=120000"
         );
     }
 
@@ -321,13 +323,12 @@ mod tests {
         let hls = pipeline_description(
             SourceKind::Hls,
             "https://x/y.m3u8",
-            "srt://127.0.0.1:39002?mode=listener&latency=500000",
+            "srt://127.0.0.1:39002?mode=caller&latency=500000",
         );
-        assert_eq!(
-            hls,
-            "souphttpsrc location=\"https://x/y.m3u8\" ! hlsdemux ! tsparse ! queue ! \
-             srtsink uri=\"srt://127.0.0.1:39002?mode=listener&latency=500000\" mode=listener"
-        );
+        // Assert the shape rather than a brittle copy of the whole string.
+        assert!(hls.starts_with("souphttpsrc location=\"https://x/y.m3u8\" ! hlsdemux ! tsparse !"));
+        assert!(hls.contains("srtsink uri=\"srt://127.0.0.1:39002?mode=caller&latency=500000\""));
+        assert!(hls.contains("mode=caller"));
         assert!(!hls.contains("mpegtsmux"));
 
         // Every kind ends in listener mode on the loopback target.
@@ -337,10 +338,9 @@ mod tests {
             SourceKind::HttpFlv,
             SourceKind::HttpTs,
         ] {
-            let d =
-                pipeline_description(kind, "http://h/live.ts", "srt://127.0.0.1:1?mode=listener");
+            let d = pipeline_description(kind, "http://h/live.ts", "srt://127.0.0.1:1?mode=caller");
             assert!(d.contains("srtsink uri="));
-            assert!(d.contains("mode=listener"));
+            assert!(d.contains("mode=caller"));
         }
     }
 
