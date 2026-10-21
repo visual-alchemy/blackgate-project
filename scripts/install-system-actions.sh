@@ -50,16 +50,25 @@ done
 [ "$(id -u)" -eq 0 ] || { echo "Run this as root (it installs a systemd unit and a sudoers drop-in)." >&2; exit 77; }
 id "$SERVICE_USER" >/dev/null 2>&1 || { echo "User $SERVICE_USER does not exist." >&2; exit 67; }
 
+echo "=== 0/7 pre-flight ==="
+for tool in install visudo openssl systemctl tar sed awk grep pgrep; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 69; }
+done
+echo "tools ok (install visudo openssl systemctl tar sed awk grep pgrep)"
+
 FILES="${BLACKGATE_ARTIFACT_DIR:-$PROJECT_ROOT/iso-builder/files}"
 for required in blackgate.service blackgate-system-action blackgate-system-action.sudoers blackgate-updater; do
   [ -r "$FILES/$required" ] || { echo "Missing $FILES/$required — run from the project checkout, or point BLACKGATE_ARTIFACT_DIR at the directory that ships them." >&2; exit 66; }
 done
 
 echo "=== 1/7 directories ==="
-mkdir -p "$ROOT/releases" "$ROOT/incoming" "$ROOT/backups" "$DATA_DIR" /etc/blackgate
+# /usr/local/libexec is a Debian-ism that Ubuntu does not create; the privileged helpers live there
+# because that is where a packaged appliance expects them.
+mkdir -p "$ROOT/releases" "$ROOT/incoming" "$ROOT/backups" "$DATA_DIR" /etc/blackgate /usr/local/libexec
 chown -R "$SERVICE_USER:$SERVICE_USER" "$ROOT" "$DATA_DIR"
 echo "root     : $ROOT (releases, incoming, backups)"
 echo "data dir : $DATA_DIR"
+echo "helpers  : /usr/local/libexec"
 
 echo "=== 2/7 privileged helpers ==="
 install -o root -g root -m 0750 "$FILES/blackgate-system-action" /usr/local/libexec/blackgate-system-action

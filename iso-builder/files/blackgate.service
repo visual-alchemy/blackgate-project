@@ -18,7 +18,9 @@ Environment=PORT=4000
 Environment=PHX_HOST=0.0.0.0
 Environment=HOME=/opt/blackgate/current
 Environment=DATABASE_DATA_DIR=/var/lib/blackgate/khepri
-Environment=ERL_AFLAGS=-proto_dist inet_tcp
+# Quoted: systemd splits an unquoted Environment value on whitespace, which would silently set
+# ERL_AFLAGS=-proto_dist and drop the argument (and make the node refuse to start).
+Environment="ERL_AFLAGS=-proto_dist inet_tcp"
 Environment=RELEASE_DISTRIBUTION=none
 
 # A leftover socket file from a previous run makes the Ranch unix listener fail to bind.
