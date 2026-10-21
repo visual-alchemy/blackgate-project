@@ -37,6 +37,10 @@ pub struct SdiState {
     pub audio_silence_reported: [AtomicBool; 8],
     pub video_buffer_count: [AtomicI64; 8],
     pub detected_mode: Mutex<[Option<String>; 8]>,
+    /// Set when the bus handler gave up on this device's SDI branch (it detaches the branch and
+    /// keeps the route running). Health monitors must stay quiet for a branch nobody feeds, and the
+    /// stats must say "failed" instead of reporting zero frames as if the card were merely idle.
+    pub branch_failed: [AtomicBool; 8],
 }
 
 impl SdiState {
@@ -51,6 +55,7 @@ impl SdiState {
             self.audio_buffer_count[i].store(0, Ordering::Relaxed);
             self.audio_silence_reported[i].store(false, Ordering::Relaxed);
             self.video_buffer_count[i].store(0, Ordering::Relaxed);
+            self.branch_failed[i].store(false, Ordering::Relaxed);
         }
         if let Ok(mut modes) = self.detected_mode.lock() {
             *modes = Default::default();
@@ -537,6 +542,11 @@ pub fn build_sdi_video_stats(
 pub fn check_sdi_audio_silence(sdi: &SdiState, now_us: i64) -> Vec<(i32, f64, i64)> {
     let mut silent = Vec::new();
     for i in 0..8usize {
+        // A branch the bus handler already dropped must not report silence: nobody feeds it, and the
+        // operator got the sdi_failed event instead — repeating "audio silent" only adds noise.
+        if sdi.branch_failed[i].load(Ordering::Relaxed) {
+            continue;
+        }
         let last = sdi.audio_last_buffer_us[i].load(Ordering::Relaxed);
         if last == 0 {
             continue; // never received audio on this device

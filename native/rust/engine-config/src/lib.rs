@@ -12,7 +12,7 @@
 // Element objects: {"type":"srtsrc","uri":"srt://...?mode=..&latency=..", ...extra numeric props}
 //                  {"type":"udpsink","host":"..","port":..}
 //                  {"type":"sdisink","device-number":..,"video-mode":"..","width":..,"height":..,
-//                   "framerate":"25/1","interlaced":bool}
+//                   "framerate":"25/1","interlaced":bool,"profile":"two-sub-devices-half"}
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -103,6 +103,12 @@ pub enum SinkProtocol {
     Udp,
     Sdi,
 }
+
+/// DeckLink profile the engine pins every SDI sink to. Half-duplex exposes all four connectors of a
+/// Duo 2 as independent outputs (device numbers 0-3), where the driver's default full-duplex profile
+/// offers only two; measured on the lab card. Deliberately not configurable: a per-route knob only
+/// created a way to pick a profile the card cannot run, which fails the SDI sink.
+pub const SDI_PROFILE: &str = "two-sub-devices-half";
 
 /// SDI sink config — mirrors the C JSON keys in add_sink_to_pipeline(sdisink).
 #[derive(Debug, Clone)]
@@ -293,6 +299,7 @@ const SINK_SKIP_KEYS: &[&str] = &[
     "width",
     "height",
     "framerate",
+    "profile",
 ];
 
 fn extra_props(obj: &serde_json::Value, skip: &[&str]) -> BTreeMap<String, PropValue> {
@@ -704,6 +711,21 @@ mod tests {
         assert_eq!(sdi.height, 1080);
         assert_eq!(sdi.framerate, "25/1");
         assert!(!sdi.interlaced);
+    }
+
+    /// The card's duplex profile is pinned in the engine, not configured per route. A `"profile"`
+    /// key left behind in a stored destination config must be ignored, not turned into an unknown
+    /// property on the sink.
+    #[test]
+    fn legacy_profile_key_is_ignored() {
+        let cfg = RouteConfig::from_json(
+            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"sinks":[{"type":"sdisink","profile":"two-sub-devices-half"}]}"#,
+        )
+        .unwrap();
+
+        let sdi = cfg.sinks[0].sdi.as_ref().unwrap();
+        assert_eq!(sdi.device_number, 0);
+        assert_eq!(sdi.video_mode, "1080p25");
     }
 
     /// C lite 2061-2068: persisted selection survives restart so later

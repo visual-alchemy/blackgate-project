@@ -89,6 +89,35 @@ fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
     }
 }
 
+/// Stop decodebin from picking the VA (hardware) decoders.
+///
+/// The appliance's VA stack cannot initialise ("VA error: iHD_drv_video.so init failed", no usable
+/// DRM render node) yet decodebin still picks `vah264dec` for H.264 by rank. That decoder reports
+/// its output as `video/x-raw, format=NV12, interlace-mode=mixed`, and an interlaced SDI mode has to
+/// demand `interlace-mode=interleaved` — nothing bridges the two (videoconvert refuses the
+/// conversion, and the `interlace` element cannot output UYVY on GStreamer 1.24). Negotiation then
+/// fails, the resulting not-negotiated error stops the SRT source's task, and the whole route dies
+/// and reconnects forever: exactly the "SDI out 1 keeps reconnecting" symptom on PLTV. Software
+/// decoding (avdec_h264 — what the thumbnail branch already uses) negotiates and puts frames on the
+/// card, so keep the broken decoders out of the ranking.
+fn demote_broken_va_decoders() {
+    for name in [
+        "vah264dec",
+        "vah265dec",
+        "vaapih264dec",
+        "vaapih265dec",
+        "vaapidecodebin",
+    ] {
+        if let Some(factory) = gstreamer::ElementFactory::find(name) {
+            factory.set_rank(gstreamer::Rank::NONE);
+            println!(
+                "[rust-engine] {} disabled (rank NONE): its VA output caps break SDI negotiation",
+                name
+            );
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut shadow_mode = false;
     let route_id = std::env::args()
@@ -136,6 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     gstreamer::init().map_err(|e| format!("GStreamer init: {}", e))?;
+    demote_broken_va_decoders();
 
     let built = match engine_gst::build_pipeline(&config, socket.clone()) {
         Ok(b) => b,
@@ -255,7 +285,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Main thread = bus loop (C g_main_loop_run with bus_callback)
-    engine_gst::run_bus_watch(&pipeline, socket.clone(), &config.route_id, stop.clone());
+    engine_gst::run_bus_watch(
+        &pipeline,
+        socket.clone(),
+        &config.route_id,
+        stop.clone(),
+        &built.sdi_branches,
+        &built.sdi_state,
+    );
 
     // C cleanup_pipeline
     running.store(false, Ordering::Relaxed);

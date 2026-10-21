@@ -31,6 +31,36 @@ pub struct BuiltPipeline {
     pub video_info: SharedVideoInfo,
     pub sdi_state: Arc<SdiState>,
     pub vrate_elements: Arc<Mutex<[Option<gst::Element>; 8]>>,
+    /// One handle per SDI sink, so the bus handler can drop a broken SDI branch without killing the
+    /// route (its SRT output and the source must survive a DeckLink failure).
+    pub sdi_branches: Vec<SdiBranchHandle>,
+}
+
+/// Everything the bus handler needs to detach one SDI output after its sink errors.
+///
+/// A DeckLink sink that fails at runtime ("Failed to enable video output", "Failed to schedule
+/// frame") posts a stream error on the pipeline bus. Letting that error end the run took the whole
+/// route down — the SRT output died with the SDI sink and RouteHandler reconnected every ~40 s
+/// (seen on PLTV SDI 1 and on an experimental 50p HDR route). The documented contract
+/// (lib/blackgate/route_handler.ex) is the opposite: the engine warns
+/// "WARNING: SDI sink N failed — continuing without SDI output" and keeps running.
+pub struct SdiBranchHandle {
+    pub sink_index: usize,
+    pub device_number: i32,
+    /// Every element of this branch (sinks and chain). A bus error whose source — or whose parent,
+    /// for elements inside the SDI decodebin — is one of these came from SDI output, not from the
+    /// source or an SRT/UDP sink. Pointer identity, so no element renaming is needed.
+    pub elements: Vec<gst::Element>,
+    /// Tee request pad that feeds the branch. Releasing it removes SDI from the stream while the
+    /// tee keeps feeding the remaining outputs (`allow-not-linked` is already set).
+    pub tee_pad: gst::Pad,
+    /// The branch's entry queue — its sink pad must be unlinked before the tee pad is released.
+    pub queue: gst::Element,
+    /// DeckLink sinks; set to NULL so the driver releases the device instead of holding the last
+    /// frame forever.
+    pub sinks: Vec<gst::Element>,
+    /// True once the bus handler has dropped this branch (only the first error acts).
+    pub failed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct Ctx {
@@ -137,11 +167,20 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
     install_ts_probe(&tee, &ctx);
 
     let mut srt_sinks = Vec::new();
+    let mut sdi_branches: Vec<SdiBranchHandle> = Vec::new();
     let vrate_elements: Arc<Mutex<[Option<gst::Element>; 8]>> =
         Arc::new(Mutex::new(Default::default()));
 
     for (idx, sink_cfg) in config.sinks.iter().enumerate() {
-        match add_sink(&pipeline, &tee, sink_cfg, idx, &ctx, &vrate_elements) {
+        match add_sink(
+            &pipeline,
+            &tee,
+            sink_cfg,
+            idx,
+            &ctx,
+            &vrate_elements,
+            &mut sdi_branches,
+        ) {
             Ok(Some(srt_sink)) => {
                 println!(
                     "Stored SRT sink element at index {} for stats collection",
@@ -206,6 +245,7 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
         video_info: ctx.video_info,
         sdi_state: ctx.sdi_state,
         vrate_elements,
+        sdi_branches,
     })
 }
 
@@ -537,10 +577,19 @@ fn add_sink(
     sink_index: usize,
     ctx: &Ctx,
     vrate_elements: &Arc<Mutex<[Option<gst::Element>; 8]>>,
+    sdi_branches: &mut Vec<SdiBranchHandle>,
 ) -> Result<Option<gst::Element>, String> {
     match cfg.protocol {
         SinkProtocol::Sdi => {
-            add_sdi_sink(pipeline, tee, cfg, sink_index, ctx, vrate_elements)?;
+            add_sdi_sink(
+                pipeline,
+                tee,
+                cfg,
+                sink_index,
+                ctx,
+                vrate_elements,
+                sdi_branches,
+            )?;
             Ok(None)
         }
         SinkProtocol::Srt => add_srt_sink(pipeline, tee, cfg).map(Some),
@@ -688,6 +737,7 @@ fn add_sdi_sink(
     sink_index: usize,
     ctx: &Ctx,
     vrate_elements: &Arc<Mutex<[Option<gst::Element>; 8]>>,
+    sdi_branches: &mut Vec<SdiBranchHandle>,
 ) -> Result<(), String> {
     let sdi = cfg.sdi.as_ref().cloned().unwrap_or_default();
 
@@ -732,9 +782,13 @@ fn add_sdi_sink(
     let vcaps = gst::ElementFactory::make("capsfilter")
         .build()
         .map_err(|e| format!("SDI sink {}: capsfilter: {}", sink_index, e))?;
+    // Pinned, not configurable: half-duplex is what makes all four Duo 2 connectors usable as
+    // outputs (in the driver's default full-duplex profile only device numbers 0 and 1 accept
+    // playback). The profile is card-wide and has to be set before the sink opens the device.
     let videosink = gst::ElementFactory::make("decklinkvideosink")
         .property("device-number", sdi.device_number)
         .property("sync", false)
+        .property_from_str("profile", engine_config::SDI_PROFILE)
         .build()
         .map_err(|e| format!("SDI sink {}: decklinkvideosink: {}", sink_index, e))?;
 
@@ -745,9 +799,6 @@ fn add_sdi_sink(
     let aconvert = gst::ElementFactory::make("audioconvert")
         .build()
         .map_err(|e| format!("SDI sink {}: audioconvert: {}", sink_index, e))?;
-    let amix = gst::ElementFactory::make("audiomixmatrix")
-        .build()
-        .map_err(|e| format!("SDI sink {}: audiomixmatrix: {}", sink_index, e))?;
     let aresample = gst::ElementFactory::make("audioresample")
         .build()
         .map_err(|e| format!("SDI sink {}: audioresample: {}", sink_index, e))?;
@@ -770,8 +821,6 @@ fn add_sdi_sink(
         .build()
         .map_err(|e| format!("SDI sink {}: identity: {}", sink_index, e))?;
 
-    engine_sdi::setup_audio_upmix(&amix)?;
-
     let elements: Vec<&gst::Element> = vec![
         &queue,
         &tsdemux,
@@ -786,7 +835,6 @@ fn add_sdi_sink(
         &adecodebin,
         &aqueue,
         &aconvert,
-        &amix,
         &aresample,
         &arate,
         &acaps,
@@ -803,11 +851,10 @@ fn add_sdi_sink(
         }
     }
 
-    // Static audio chain: aqueue → aconvert → amix → aresample → arate → acaps → audiosink
-    gst::Element::link_many([
-        &aqueue, &aconvert, &amix, &aresample, &arate, &acaps, &audiosink,
-    ])
-    .map_err(|_| format!("SDI sink {}: Failed to link audio output chain", sink_index))?;
+    // Static audio chain: aqueue → aconvert → aresample → arate → acaps → audiosink
+    // (stereo all the way: see engine_sdi::SDI_AUDIO_CAPS for why the 2→8 upmix is gone)
+    gst::Element::link_many([&aqueue, &aconvert, &aresample, &arate, &acaps, &audiosink])
+        .map_err(|_| format!("SDI sink {}: Failed to link audio output chain", sink_index))?;
 
     // Static tee → queue → tsdemux
     gst::Element::link_many([tee, &queue, &tsdemux]).map_err(|_| {
@@ -967,6 +1014,24 @@ fn add_sdi_sink(
 
     println!("SDI sink {}: Audio health monitor installed", sink_index);
     println!("SDI sink {}: Video health monitor installed", sink_index);
+
+    // Register how to detach this branch. See SdiBranchHandle: a runtime DeckLink failure has to cost
+    // the SDI output only, never the route's other outputs.
+    let tee_pad = queue
+        .static_pad("sink")
+        .and_then(|p| p.peer())
+        .ok_or_else(|| format!("SDI sink {}: branch is not attached to the tee", sink_index))?;
+
+    sdi_branches.push(SdiBranchHandle {
+        sink_index,
+        device_number: sdi.device_number,
+        elements: elements.iter().map(|el| (*el).clone()).collect(),
+        tee_pad,
+        queue: queue.clone(),
+        sinks: vec![videosink.clone(), audiosink.clone()],
+        failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    });
+
     Ok(())
 }
 
@@ -1178,6 +1243,11 @@ fn install_sdi_health_probes(
     if let Some(pad) = audiosink.static_pad("sink") {
         let sdi = sdi.clone();
         pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+            // A branch the bus handler dropped is unlinked from the tee: reporting silence (or
+            // "recovered") for it would talk about a chain that no longer exists.
+            if sdi.branch_failed[idx].load(Ordering::Relaxed) {
+                return gst::PadProbeReturn::Ok;
+            }
             let now = now_monotonic_us();
             sdi.audio_last_buffer_us[idx].store(now, Ordering::Relaxed);
             sdi.audio_buffer_count[idx].fetch_add(1, Ordering::Relaxed);

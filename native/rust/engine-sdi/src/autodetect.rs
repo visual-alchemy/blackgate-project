@@ -109,9 +109,13 @@ pub fn decide_from_caps(
         .get::<gst::Fraction>("framerate")
         .map(|f| (f.numer(), f.denom()))
         .unwrap_or((0, 1));
+    // decodebin reports `interlace-mode=mixed` for an interlaced H.264 stream whose frames carry
+    // their own field flags — that is what PLTV's 1080i50 feed produces. Accepting only the literal
+    // "interleaved" treated it as progressive, picked mode 1080p25 for an interlaced source, and the
+    // SDI chain then failed at runtime and took the engine (and the SRT output) down with it.
     let interlaced = s
         .get::<&str>("interlace-mode")
-        .map(|m| m == "interleaved")
+        .map(|m| m != "progressive")
         .unwrap_or(false);
 
     let (lookup_num, lookup_den) = normalize_framerate(fps_num, fps_den);
@@ -172,6 +176,33 @@ mod tests {
         let intc = lookup_decklink_mode(1920, 1080, 25, 1, true).unwrap();
         assert_eq!(intc.mode_str, "1080i50");
         assert_eq!(intc.caps_interlace_mode, Some("interleaved"));
+    }
+
+    /// Regression: an interlaced 1080i50 feed reaches decodebin as `interlace-mode=mixed` (PLTV does
+    /// exactly this). Reading only "interleaved" as interlaced picked 1080p25 for it, and the SDI
+    /// chain then failed at runtime — which shut the whole engine down, taking the SRT output with it.
+    #[test]
+    fn mixed_interlace_mode_decides_interlaced() {
+        gst::init().expect("gst init for caps test");
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "NV12")
+            .field("width", 1920i32)
+            .field("height", 1080i32)
+            .field("framerate", gst::Fraction::new(25, 1))
+            .field("interlace-mode", "mixed")
+            .build();
+        let fallback = crate::FallbackConfig {
+            mode: "1080p25".to_string(),
+            width: 1920,
+            height: 1080,
+            framerate: "25/1".to_string(),
+        };
+
+        let decision = decide_from_caps(&caps, &fallback).expect("decision for video/x-raw");
+
+        assert_eq!(decision.mode_str, "1080i50");
+        assert!(decision.need_interlace_element);
+        assert_eq!(decision.interlace_mode, Some("interleaved"));
     }
 
     #[test]
