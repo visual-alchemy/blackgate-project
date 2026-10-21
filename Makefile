@@ -137,6 +137,17 @@ build:
 
 .PHONY: start
 start:
+	@# A gateway installed as a systemd unit has to be started through systemd. A manual node starts
+	@# without BLACKGATE_ROOT (so the dashboard's update root falls back to /opt/blackgate) and without
+	@# DATABASE_DATA_DIR, and while it holds port 4000 the unit sits in "activating" forever. Set
+	@# BLACKGATE_ALLOW_MANUAL_START=1 only on a box that is deliberately not service-managed.
+	@if [ "$${BLACKGATE_ALLOW_MANUAL_START:-0}" != "1" ] && [ -e /etc/systemd/system/blackgate.service ]; then \
+		echo "blackgate.service is installed — this box runs the gateway under systemd."; \
+		echo "  start it:  sudo systemctl start blackgate   (or the Restart button in Settings > System)"; \
+		echo "  change it: make build, then deploy a package (scripts/package-signed-update.sh)"; \
+		echo "  override:  BLACKGATE_ALLOW_MANUAL_START=1 make start"; \
+		exit 1; \
+	fi
 	@if RELEASE_COOKIE=blackgate_production_cookie _build/prod/rel/blackgate/bin/blackgate pid > /dev/null 2>&1; then \
 		echo "Blackgate is already running — run 'make stop' first."; \
 		echo "(two nodes at once leave a stale /tmp/hydra_unix_sock behind; every engine then fails to connect with ECONNREFUSED and the routes crash-loop)"; \
@@ -169,6 +180,14 @@ start:
 
 .PHONY: stop
 stop:
+	@# Reverse of the guard in `start`: when the unit is what runs the gateway, `make stop` would
+	@# report success while the service keeps serving.
+	@if [ "$${BLACKGATE_ALLOW_MANUAL_START:-0}" != "1" ] && systemctl is-active --quiet blackgate.service 2>/dev/null; then \
+		echo "blackgate.service is running this gateway — nothing for the Makefile to stop."; \
+		echo "  stop it:   sudo systemctl stop blackgate"; \
+		echo "  restart:   sudo systemctl restart blackgate   (or Settings > System)"; \
+		exit 1; \
+	fi
 	@echo "Stopping Blackgate..."
 	@RELEASE_COOKIE=blackgate_production_cookie \
 	_build/prod/rel/blackgate/bin/blackgate stop || true
