@@ -22,16 +22,13 @@ defmodule Blackgate do
   """
   @spec running_routes() :: [map()]
   def running_routes do
-    merge_running_routes(registered_routes(), engine_process_route_ids())
+    routes_holding_outputs(engine_process_route_ids(), &route_including_destinations/1)
   end
 
-  # Routes with a live process in the registry.
-  defp registered_routes do
-    case Db.get_all_routes(true) do
-      {:ok, routes} -> Enum.filter(routes, &match?({:ok, _}, get_route(&1["id"])))
-      _ -> []
-    end
-  end
+  ## The destinations ARE the question: a route record fetched without them makes every route hold nothing and the
+  # gate silently allows everything. `Db.get_route/1` omits them by default - caught live, because the holder map
+  # came back empty while two engines were running.
+  defp route_including_destinations(id), do: Db.get_route(id, true)
 
   # Route ids read off the live engine processes.
   defp engine_process_route_ids do
@@ -43,32 +40,25 @@ defmodule Blackgate do
   end
 
   @doc """
-  The registry's routes, plus any route that only the engine list knows about.
+  The routes that hold an output, judged by their ENGINES.
 
-  Neither source is sufficient on its own. The registry is what a route's own supervisor publishes, and the
-  engine list is what the kernel says is really streaming - and they can disagree: measured on this box, two
-  routes were reconnecting with live engine processes while their registry entries were gone, so a gate that
-  trusted the registry alone would have handed their SDI output to another route, and the loser would have died
-  at its first frame.
+  The connector is held by the engine process - it is the one with the DeckLink handle - so the live engine list is
+  the ground truth and the route record is only used to give those entries their real destinations. The registry
+  alone is not usable here: it can keep a route whose engine is gone, and measured on this box that made RTMP the
+  listed holder of SDI 1 with no engine of its own, which then refused the WORKING route on that connector.
 
-  A route that only the engine list knows is taken from the database so its destinations still count; when even
-  that is missing it is kept as a bare id, which holds no SDI output (a route with no destinations cannot).
+  A route that only the engine list knows (its record missing) is kept as a bare id: it still counts as running but
+  holds no output, because a route with no destinations cannot.
   """
-  def merge_running_routes(registry_routes, engine_route_ids) do
-    known = MapSet.new(registry_routes, & &1["id"])
-
-    missing =
-      engine_route_ids
-      |> Enum.uniq()
-      |> Enum.reject(&MapSet.member?(known, &1))
-
-    registry_routes ++
-      Enum.map(missing, fn id ->
-        case Db.get_route(id) do
-          {:ok, route} -> route
-          _ -> %{"id" => id, "name" => id}
-        end
-      end)
+  def routes_holding_outputs(engine_route_ids, lookup) do
+    engine_route_ids
+    |> Enum.uniq()
+    |> Enum.map(fn id ->
+      case lookup.(id) do
+        {:ok, route} -> route
+        _ -> %{"id" => id, "name" => id}
+      end
+    end)
   end
 
   # A shared SDI connector is judged at START time, not at configuration time: the operator may point a route at

@@ -158,39 +158,59 @@ defmodule Blackgate.SdiClaimsTest do
     end
   end
 
-  describe "merge_running_routes/2 (via Blackgate)" do
-    # The gate is only as good as the list of routes it judges against, and the two sources can disagree:
-    # on this box two routes were reconnecting with live engines while their registry entries were gone.
-    test "keeps everything the registry knows" do
-      a = %{"id" => "a", "name" => "A", "destinations" => []}
-
-      assert Blackgate.merge_running_routes([a], []) == [a]
+  describe "routes_holding_outputs/2 (what the gate judges against)" do
+    # The connector is held by the ENGINE, so the live engine list is the ground truth and the route record only
+    # supplies destinations. A registry entry whose engine is gone must not hold anything - on this box that
+    # listed RTMP as the holder of SDI 1 and refused the working route on that connector.
+    defp lookup_from(routes) do
+      fn id ->
+        Enum.find_value(routes, {:error, :not_found}, fn r -> if r["id"] == id, do: {:ok, r} end)
+      end
     end
 
-    test "adds a route that only the engine list knows, so its output still counts" do
-      merged = Blackgate.merge_running_routes([], ["not-in-the-db"])
+    test "a race-free list of the routes that really have an engine" do
+      a = route("a", "A", [0])
 
-      assert Enum.map(merged, & &1["id"]) == ["not-in-the-db"]
-      assert SdiClaims.holders(merged) == %{}
+      assert Blackgate.routes_holding_outputs(["a"], lookup_from([a])) == [a]
     end
 
-    test "does not list the same route twice" do
-      known = %{"id" => "a", "name" => "A", "destinations" => []}
+    test "a route with no engine holds nothing, even though its record exists" do
+      a = route("a", "A", [0])
 
-      merged = Blackgate.merge_running_routes([known], ["a", "a"])
-
-      assert length(merged) == 1
+      # Nothing is passed in, so nothing is running: the record existing is not the question.
+      assert Blackgate.routes_holding_outputs([], lookup_from([a])) == []
     end
 
-    test "a bare engine-only route holds nothing, because it has no destinations" do
-      # When the database has no such route either, the id is kept as a bare entry: it belongs in the list of
-      # running routes but it cannot hold an output, so it never refuses anybody. The database-backed case is
-      # exercised in production (and was what the live proof checked), so it needs no Khepri fixture here.
-      merged = Blackgate.merge_running_routes([], ["only-an-engine"])
+    test "an engine whose record is gone is kept as a bare id and holds nothing" do
+      listed = Blackgate.routes_holding_outputs(["gone"], lookup_from([]))
 
-      assert Enum.map(merged, & &1["id"]) == ["only-an-engine"]
-      assert SdiClaims.holders(merged) == %{}
-      assert SdiClaims.conflict(route("b", "B", [0]), merged) == nil
+      assert Enum.map(listed, & &1["id"]) == ["gone"]
+      assert SdiClaims.holders(listed) == %{}
+      assert SdiClaims.conflict(route("b", "B", [0]), listed) == nil
+    end
+
+    test "a record fetched WITHOUT its destinations holds nothing - the failure mode this shape prevents" do
+      # Db.get_route/1 omits destinations, and a gate fed those records reports an empty holder map while engines
+      # are running, i.e. it allows everything. This pins the failure so the next reader sees which mistake to
+      # avoid; the live call uses Db.get_route/2.
+      without_destinations = %{"id" => "a", "name" => "A"}
+
+      listed = Blackgate.routes_holding_outputs(["a"], fn _ -> {:ok, without_destinations} end)
+
+      assert SdiClaims.holders(listed) == %{}
+      assert SdiClaims.conflict(route("b", "B", [0]), listed) == nil
+
+      with_destinations = route("a", "A", [0])
+      listed = Blackgate.routes_holding_outputs(["a"], fn _ -> {:ok, with_destinations} end)
+
+      assert SdiClaims.holders(listed)[0].route_name == "A"
+      assert SdiClaims.conflict(route("b", "B", [0]), listed).label == "SDI 1"
+    end
+
+    test "does not list one route twice when it reports more than one engine" do
+      a = route("a", "A", [0])
+
+      assert length(Blackgate.routes_holding_outputs(["a", "a"], lookup_from([a]))) == 1
     end
   end
 end
