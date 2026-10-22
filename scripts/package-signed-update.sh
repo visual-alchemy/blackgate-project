@@ -10,7 +10,10 @@
 #   blackgate-updater        the root updater, so an old appliance can be updated too
 #
 # Usage:
-#   scripts/package-signed-update.sh [VERSION] [PRIVATE_KEY] [OUTPUT_DIR]
+#   scripts/package-signed-update.sh [--no-build] [VERSION] [PRIVATE_KEY] [OUTPUT_DIR]
+#
+# --no-build packages the release that already exists in _build/prod/rel (the usual case: building as the
+# repository's owner and signing as root). Without it the script runs the build itself.
 #
 # VERSION defaults to iso-builder/release-version, the key to /etc/blackgate/update-private-key.pem
 # (generate the pair once with scripts/install-system-actions.sh), output to ./dist.
