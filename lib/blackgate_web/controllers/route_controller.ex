@@ -113,29 +113,45 @@ defmodule BlackgateWeb.RouteController do
           # Its SDI output is already playing somewhere else. Refusing here - and naming the holder - is what
           # keeps this from becoming a route that starts with a silently missing picture: a second engine cannot
           # enable that connector, and it drops the SDI branch without failing the route.
-          {:error, {:sdi_in_use, conflict}} ->
+          {:error, {:resource_in_use, claims}} ->
             name = route_name(route_id)
 
-            Blackgate.EventLog.log(
-              :warning,
-              "sdi_output_in_use",
-              "Cannot start #{name}: #{conflict.label} is in use by #{conflict.held_by.route_name}",
-              %{
-                route_id: route_id,
-                route_name: name,
-                sdi: conflict.label,
-                device: conflict.device,
-                held_by_route_id: conflict.held_by.route_id,
-                held_by_route_name: conflict.held_by.route_name
-              }
-            )
+            # One line per claim, so the operator sees every reason at once instead of fixing one and hitting the
+            # next on the second attempt.
+            Enum.each(claims, fn claim ->
+              Blackgate.EventLog.log(
+                :warning,
+                "output_in_use",
+                "Cannot start #{name}: #{claim.label} is in use by #{claim.held_by.route_name}",
+                %{
+                  route_id: route_id,
+                  route_name: name,
+                  kind: claim.kind,
+                  label: claim.label,
+                  held_by_route_id: claim.held_by.route_id,
+                  held_by_route_name: claim.held_by.route_name
+                }
+              )
+            end)
+
+            first = hd(claims)
 
             conn
             |> put_status(:conflict)
             |> json(%{
-              error: "SDI being used by #{conflict.held_by.route_name}",
-              sdi: conflict.label,
-              held_by: %{id: conflict.held_by.route_id, name: conflict.held_by.route_name}
+              error: "SDI being used by #{first.held_by.route_name}",
+              message:
+                Enum.map_join(claims, "; ", fn claim ->
+                  "#{claim.label} is in use by #{claim.held_by.route_name}"
+                end),
+              conflicts:
+                Enum.map(claims, fn claim ->
+                  %{
+                    kind: claim.kind,
+                    label: claim.label,
+                    held_by: %{id: claim.held_by.route_id, name: claim.held_by.route_name}
+                  }
+                end)
             })
 
           {:error, reason} ->

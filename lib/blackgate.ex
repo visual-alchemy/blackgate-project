@@ -66,15 +66,18 @@ defmodule Blackgate do
   defp check_sdi_claims(id) do
     case Db.get_route(id) do
       {:ok, route} ->
-        # A route with no SDI destination cannot conflict with anybody's output, so it is not even asked: the
-        # check reads a process listing, and starting an SRT/UDP/RTMP-only route has to stay exactly as cheap
-        # and as unguarded as it was before any of this existed.
-        if Blackgate.SdiClaims.devices_of(route) == [] do
+        # A route with neither an SDI destination nor a listening port cannot conflict with anybody, so it is not
+        # even asked: the check reads a process listing, and starting an SRT/RTMP-only route has to stay exactly as
+        # cheap as it was before any of this existed.
+        if Blackgate.SdiClaims.devices_of(route) == [] and
+             Blackgate.SdiClaims.listening_ports_of(route) == [] do
           :ok
         else
-          case Blackgate.SdiClaims.conflict(route, running_routes()) do
-            nil -> :ok
-            conflict -> {:error, {:sdi_in_use, conflict}}
+          # Every claim is collected BEFORE anything is reported, so a route that would be refused is refused
+          # whole: it does not start its SRT output and then fail on its SDI one.
+          case Blackgate.SdiClaims.claims_of(route, running_routes()) do
+            [] -> :ok
+            claims -> {:error, {:resource_in_use, claims}}
           end
         end
 
@@ -134,16 +137,22 @@ defmodule Blackgate do
 
   @spec restart_route(String.t()) :: {:ok, term()} | {:error, term()}
   def restart_route(id) do
-    case stop_route(id) do
-      {:error, reason} ->
-        Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
+    # Checked BEFORE stopping: changing a destination restarts a running route, and that path used to go straight to
+    # start_route/1 with no check at all - so a route could be pointed at an output somebody else already held, get
+    # its own engine stopped, and then be refused (or worse, race the holder). Refusing first leaves it running on
+    # its previous, valid destination, which is the state the operator can still see and fix.
+    with :ok <- check_sdi_claims(id) do
+      case stop_route(id) do
+        {:error, reason} ->
+          Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
 
-      _ ->
-        nil
-    end
+        _ ->
+          nil
+      end
 
-    with {:ok, _pid} <- start_route(id) do
-      {:ok, :restarted}
+      with {:ok, _pid} <- start_route(id) do
+        {:ok, :restarted}
+      end
     end
   end
 

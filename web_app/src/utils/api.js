@@ -207,11 +207,11 @@ export const routesApi = {
   start: async (id) => {
     const response = await authFetch(`/api/routes/${id}/start`);
 
-    // A refusal carries a reason the operator must see verbatim - "SDI being used by <route>" - so read
-    // the body and throw THAT, instead of letting a generic failure reach the toast.
+    // A refusal carries a reason the operator must see verbatim - "SDI 1 is in use by <route>" - and it can name
+    // more than one resource, so `message` wins over `error` when both are present.
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || `Start failed (${response.status})`);
+      throw new Error(body.message || body.error || `Start failed (${response.status})`);
     }
 
     return response.json();

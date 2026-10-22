@@ -1,6 +1,6 @@
 defmodule Blackgate.SdiClaims do
   @moduledoc """
-  Which running route holds which SDI output.
+  Which running route holds which exclusive resource: an SDI connector, or a listening port.
 
   The card's connectors are a shared resource, and the failure mode without a gate is bad: a second engine that
   opens a DeckLink device already in use fails to enable video output, warns, and drops that SDI branch while its
@@ -72,5 +72,95 @@ defmodule Blackgate.SdiClaims do
         holder -> %{device: device, label: device_label(device), held_by: holder}
       end
     end)
+  end
+
+  # ── Listening ports ────────────────────────────────────────────────────────────────────────────────
+  #
+  # The same class of failure as the card, one layer down: two routes that both LISTEN on one local port cannot
+  # both bind it, and the engine that loses fails to start with nothing explaining why. Only listeners are a
+  # claim - a caller dials out and binds nothing.
+
+  @doc "Local ports this route wants to listen on."
+  def listening_ports_of(route) do
+    if Map.get(route, "schema") == "SRT" do
+      opts = route["schema_options"] || %{}
+
+      if Map.get(opts, "mode") == "listener" do
+        case Map.get(opts, "localport") || Map.get(opts, "port") do
+          port when is_integer(port) ->
+            [port]
+
+          port when is_binary(port) ->
+            case Integer.parse(port) do
+              {number, ""} -> [number]
+              _ -> []
+            end
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
+    else
+      []
+    end
+  end
+
+  @doc """
+  Ports held by the given running routes: `%{port => %{route_id: id, route_name: name}}`.
+  """
+  def port_holders(running_routes) do
+    Enum.reduce(running_routes, %{}, fn route, acc ->
+      Enum.reduce(listening_ports_of(route), acc, fn port, acc ->
+        Map.put_new(acc, port, %{
+          route_id: route["id"],
+          route_name: route["name"] || route["id"]
+        })
+      end)
+    end)
+  end
+
+  @doc """
+  Every exclusive resource this route cannot take, as a list of maps.
+
+  Each conflict carries a `kind` (`:sdi` or `:port`), a `label` for the operator ("SDI 1", "port 17001") and the
+  holder. The route's own claims are excluded, so restarting a route never conflicts with itself.
+  """
+  def claims_of(route, running_routes) do
+    others = Enum.reject(running_routes, &(&1["id"] == route["id"]))
+
+    sdi =
+      case conflict(route, running_routes) do
+        nil -> []
+        conflict -> [Map.put(conflict, :kind, :sdi)]
+      end
+
+    held_ports = port_holders(others)
+
+    ports =
+      route
+      |> listening_ports_of()
+      |> Enum.flat_map(fn port ->
+        case Map.get(held_ports, port) do
+          nil ->
+            []
+
+          holder ->
+            [%{kind: :port, port: port, label: "port #{port}", held_by: holder}]
+        end
+      end)
+
+    sdi ++ ports
+  end
+
+  @doc """
+  True when this route's listener port is already taken by another running route.
+
+  Used to keep the form honest: a port is a hard bind, so the operator should see the conflict while typing it
+  rather than after pressing Start.
+  """
+  def port_conflict?(route, running_routes) do
+    Enum.any?(claims_of(route, running_routes), &(&1.kind == :port))
   end
 end

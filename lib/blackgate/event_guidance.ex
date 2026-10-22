@@ -56,8 +56,8 @@ defmodule Blackgate.EventGuidance do
       "none if the backup source takes over; check the primary source if it keeps timing out",
     "failover_switched" => "none — failover is automatic; check the source that failed",
     "failover_auto" => "none — failover is automatic; check the source that failed",
-    "sdi_output_in_use" =>
-      "stop the route that holds this output, or point this route at another one",
+    "output_in_use" =>
+      "stop the route that holds this output or port, or point this route at another one",
     "failover_inprocess_switch" =>
       "none — the pipeline switched source in place; check the source that failed",
     "failover_inprocess_requested" =>

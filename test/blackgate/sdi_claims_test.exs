@@ -213,4 +213,88 @@ defmodule Blackgate.SdiClaimsTest do
       assert length(Blackgate.routes_holding_outputs(["a", "a"], lookup_from([a]))) == 1
     end
   end
+
+  describe "listening ports" do
+    # Same class as the card, one layer down: two listeners on one port cannot both bind it, and the engine that
+    # loses dies at start with nothing explaining why.
+
+    defp srt(mode, port) do
+      %{
+        "id" => "s",
+        "name" => "SRT",
+        "schema" => "SRT",
+        "schema_options" => %{"mode" => mode, "localport" => port},
+        "destinations" => []
+      }
+    end
+
+    test "a listener claims its port" do
+      assert SdiClaims.listening_ports_of(srt("listener", 17001)) == [17001]
+    end
+
+    test "a caller claims nothing - it dials out and binds no port" do
+      assert SdiClaims.listening_ports_of(srt("caller", 17001)) == []
+    end
+
+    test "a port given as a string is understood" do
+      assert SdiClaims.listening_ports_of(srt("listener", "17001")) == [17001]
+    end
+
+    test "junk ports are ignored rather than crashing the start path" do
+      assert SdiClaims.listening_ports_of(srt("listener", "abc")) == []
+      assert SdiClaims.listening_ports_of(srt("listener", nil)) == []
+    end
+
+    test "two listeners on one port conflict, and the holder is named" do
+      holder = Map.merge(srt("listener", 17001), %{"id" => "a", "name" => "PLTV"})
+      other = Map.merge(srt("listener", 17001), %{"id" => "b", "name" => "PLTV 2"})
+
+      claims = SdiClaims.claims_of(other, [holder])
+
+      assert [%{kind: :port, label: "port 17001", held_by: %{route_name: "PLTV"}}] = claims
+    end
+
+    test "a listener and a caller on the same number do not conflict" do
+      holder = Map.merge(srt("listener", 17001), %{"id" => "a", "name" => "PLTV"})
+      caller = Map.merge(srt("caller", 17001), %{"id" => "b", "name" => "Dial out"})
+
+      assert SdiClaims.claims_of(caller, [holder]) == []
+    end
+
+    test "a route never conflicts with its own port" do
+      route = Map.merge(srt("listener", 17001), %{"id" => "a", "name" => "A"})
+
+      assert SdiClaims.claims_of(route, [route]) == []
+    end
+
+    test "both kinds are reported together, so nothing is discovered on the second attempt" do
+      holder = route("a", "SPOTV2 (Copy)", [0])
+
+      holder =
+        Map.merge(holder, %{
+          "schema" => "SRT",
+          "schema_options" => %{"mode" => "listener", "localport" => 17001}
+        })
+
+      mine = route("b", "B", [0])
+
+      mine =
+        Map.merge(mine, %{
+          "schema" => "SRT",
+          "schema_options" => %{"mode" => "listener", "localport" => 17001}
+        })
+
+      kinds = SdiClaims.claims_of(mine, [holder]) |> Enum.map(& &1.kind) |> Enum.sort()
+
+      assert kinds == [:port, :sdi]
+    end
+
+    test "port_conflict?/2 is true only for a taken listener port" do
+      holder = Map.merge(srt("listener", 17001), %{"id" => "a", "name" => "PLTV"})
+
+      assert SdiClaims.port_conflict?(srt("listener", 17001), [holder])
+      refute SdiClaims.port_conflict?(srt("listener", 17002), [holder])
+      refute SdiClaims.port_conflict?(srt("caller", 17001), [holder])
+    end
+  end
 end
