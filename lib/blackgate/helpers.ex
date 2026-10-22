@@ -15,6 +15,9 @@ defmodule Blackgate.Helpers do
   end
 
   def sys_kill(process_id) do
-    System.cmd("kill", ["-9", "#{process_id}"])
+    # A child that already exited makes `kill` print "No such process" on stderr, which then lands
+    # in the release log as a scary line during every normal reconnect. Keep the exit status, drop
+    # the noise.
+    System.cmd("kill", ["-9", "#{process_id}"], stderr_to_stdout: true)
   end
 end

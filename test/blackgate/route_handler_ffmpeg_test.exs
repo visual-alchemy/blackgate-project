@@ -42,4 +42,56 @@ defmodule Blackgate.RouteHandlerFfmpegTest do
     assert "-f" in args
     assert "mpegts" in args
   end
+
+  describe "sidecar lifecycle" do
+    # Pins the leak found on the live gateway: eleven ffmpeg processes, born three seconds apart
+    # during a reconnect storm, were still running a day later with their route deleted — each
+    # blocked on an SRT listener nobody read, each still holding its port. Rebuilding the pipeline
+    # must reap the previous child, which means killing its OS pid, not just dropping the handle.
+    test "close_recorded_handles kills the OS process, not merely the handle" do
+      port = spawn_sleeper()
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+      assert os_alive?(os_pid)
+
+      cleared =
+        Blackgate.RouteHandler.close_recorded_handles(%{port: port, ffmpeg_port: nil, id: "r"})
+
+      assert cleared.port == nil
+      assert cleared.ffmpeg_port == nil
+      refute Port.info(port)
+      refute os_alive?(os_pid)
+    end
+
+    test "clears the sidecar handle too when that is the one recorded" do
+      port = spawn_sleeper()
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+
+      cleared =
+        Blackgate.RouteHandler.close_recorded_handles(%{port: nil, ffmpeg_port: port, id: "r"})
+
+      assert cleared.port == nil
+      assert cleared.ffmpeg_port == nil
+      refute os_alive?(os_pid)
+    end
+
+    test "tolerates a handle that already closed" do
+      port = spawn_sleeper()
+      Port.close(port)
+
+      assert %{port: nil, ffmpeg_port: nil} =
+               Blackgate.RouteHandler.close_recorded_handles(%{port: port, ffmpeg_port: nil})
+    end
+
+    defp spawn_sleeper do
+      Port.open({:spawn_executable, "/bin/sleep"}, [:binary, :exit_status, args: ["300"]])
+    end
+
+    # A zombie still has /proc/<pid>; treat it as dead, because that is what "reaped" means here.
+    defp os_alive?(pid) do
+      case System.cmd("ps", ["-o", "stat=", "-p", to_string(pid)], stderr_to_stdout: true) do
+        {out, 0} -> not String.starts_with?(String.trim(out), "Z")
+        _ -> false
+      end
+    end
+  end
 end

@@ -504,6 +504,12 @@ defmodule Blackgate.RouteHandler do
       count = data.reconnect_count + 1
       Logger.info("RouteHandler: Reconnect attempt ##{count} (#{div(elapsed, 1000)}s elapsed)")
 
+      # Nothing from the previous attempt may survive into this one. `trigger_restart` clears the
+      # handles on its normal path, but the failover branch does not, and any path that replaced a
+      # handle without closing it leaves the OS process alive — blocked on an SRT listener nobody
+      # reads, still holding its port. Close first, then build.
+      data = close_recorded_handles(data)
+
       try do
         # Re-fetch route from DB so destinations added/edited after route start
         # are included in the new pipeline. The in-memory data.route is stale.
@@ -1294,6 +1300,26 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
+  @doc false
+  # Close whatever handles are recorded in the state, then clear them.
+  #
+  # A reconnect builds a fresh engine and a fresh sidecar. Any handle still recorded from the
+  # previous attempt must die first: `Port.close/1` alone does not reliably reap a child that is
+  # blocked writing into an SRT listener nobody reads, and an unclosed handle is how a restart
+  # storm turns into eleven orphaned ffmpeg processes holding eleven ports for a day.
+  # Public so the regression test can assert the OS process is actually gone, not merely dropped.
+  def close_recorded_handles(data) do
+    Enum.each([data[:port], data[:ffmpeg_port]], fn
+      port when is_port(port) ->
+        if Port.info(port), do: close_port(port)
+
+      _ ->
+        :ok
+    end)
+
+    %{data | port: nil, ffmpeg_port: nil}
+  end
+
   defp close_port(port) do
     try do
       case Port.info(port, :os_pid) do
@@ -1307,8 +1333,10 @@ defmodule Blackgate.RouteHandler do
 
       Port.close(port)
     rescue
-      error ->
-        Logger.error("RouteHandler: Error closing port: #{inspect(error)}")
+      # Port.close races the child exiting: the handle can be gone between the check and the call.
+      # Logging that as an error trained operators to ignore the line.
+      e in ArgumentError -> Logger.debug("RouteHandler: port already closed (#{inspect(e)})")
+      error -> Logger.error("RouteHandler: Error closing port: #{inspect(error)}")
     end
   end
 
