@@ -113,8 +113,6 @@ defmodule Blackgate.SystemControlTest do
       assert is_integer(status.uptime_seconds)
       assert is_binary(status.generated_at)
       assert is_boolean(status.udp_buffers.meets_documented_minimum)
-      assert is_integer(status.decklink.device_count)
-      assert is_list(status.decklink.devices)
       assert is_boolean(status.service.unit_installed)
       assert is_integer(status.routes.total)
       assert is_integer(status.routes.started)
@@ -197,7 +195,7 @@ defmodule Blackgate.SystemControlTest do
       assert report =~ "gateway version:"
       assert report =~ "uptime:"
       assert report =~ "udp buffers:"
-      assert report =~ "decklink:"
+      refute report =~ "decklink"
       assert report =~ "routes"
     end
   end

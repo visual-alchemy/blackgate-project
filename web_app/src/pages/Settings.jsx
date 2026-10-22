@@ -846,7 +846,6 @@ const Settings = () => {
     const buffers = status.udp_buffers || {};
     const memory = status.memory || {};
     const disk = status.disk || {};
-    const decklink = status.decklink || { device_count: 0, devices: [] };
     const engine = status.engine;
     const service = status.service || {};
     const updates = status.updates || {};
@@ -973,14 +972,6 @@ const Settings = () => {
                   <Tag color={buffers.meets_documented_minimum ? 'green' : 'orange'}>
                     {buffers.meets_documented_minimum ? 'OK' : 'BELOW MINIMUM'}
                   </Tag>
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="DeckLink">
-                <Space size="small">
-                  <Tag color={decklink.device_count > 0 ? 'green' : 'red'}>
-                    {decklink.device_count > 0 ? `${decklink.device_count} device(s)` : 'no card'}
-                  </Tag>
-                  <span style={{ fontSize: '12px' }}>{(decklink.devices || []).join(', ')}</span>
                 </Space>
               </Descriptions.Item>
               <Descriptions.Item label="Gateway service">

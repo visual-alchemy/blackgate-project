@@ -23,7 +23,6 @@ defmodule Blackgate.SystemControl do
   alias Blackgate.RouteStatsRegistry
   alias Blackgate.SystemUpdates
 
-  @decklink_device_pattern "/dev/blackmagic/io*"
   @documented_udp_buffer_bytes 16 * 1024 * 1024
   @engine_relative_path "priv/native/build/blackgate-engine"
   @service_unit "blackgate.service"
@@ -51,7 +50,7 @@ defmodule Blackgate.SystemControl do
   def root, do: System.get_env("BLACKGATE_ROOT") || "/opt/blackgate"
 
   @doc """
-  Everything the System tab shows: host identity, resources, DeckLink devices, UDP buffers, the
+  Everything the System tab shows: host identity, resources, UDP buffers, the
   engine binary in use, the service unit, the deployment root with its updates, the actions the
   dashboard may offer, and a per-route summary.
   """
@@ -66,7 +65,6 @@ defmodule Blackgate.SystemControl do
       booted_at: booted_at(),
       memory: memory(),
       disk: disk("/"),
-      decklink: decklink(),
       udp_buffers: udp_buffers(),
       engine: engine(),
       service: service(),
@@ -254,7 +252,7 @@ defmodule Blackgate.SystemControl do
   end
 
   @doc """
-  Plain-text dump of `status/0` plus the DeckLink firmware view, for an operator to keep or hand over.
+  Plain-text dump of `status/0`, for an operator to keep or hand over.
   """
   @spec report() :: String.t()
   def report do
@@ -273,45 +271,15 @@ defmodule Blackgate.SystemControl do
       "memory: #{memory_line(status.memory)}",
       "disk (/): #{disk_line(status.disk)}",
       "udp buffers: #{udp_buffer_line(status.udp_buffers)}",
-      "decklink: #{decklink_line(status.decklink)}",
       "engine: #{engine_line(status.engine)}",
       "service: #{service_line(status.service)}",
       "",
-      routes_report(status.routes),
-      firmware_section()
+      routes_report(status.routes)
     ]
     |> List.flatten()
     |> Enum.join("\n")
   end
 
-  @doc """
-  DeckLink firmware/devices as reported by Blackmagic's own tool, when it is installed and readable.
-  Empty when the tool is missing or refuses to run, so the report never depends on it.
-  """
-  @spec firmware_section() :: [String.t()]
-  def firmware_section do
-    case System.find_executable("BlackmagicFirmwareUpdater") do
-      nil ->
-        []
-
-      _path ->
-        task = Task.async(fn -> cmd("BlackmagicFirmwareUpdater", ["status"]) end)
-
-        case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
-          {:ok, {:ok, output}} ->
-            ["", "decklink firmware:", output |> String.trim_trailing() |> indent()]
-
-          _ ->
-            []
-        end
-    end
-  end
-
-  defp indent(text) do
-    text
-    |> String.split("\n")
-    |> Enum.map_join("\n", &("  " <> &1))
-  end
 
   ## Host identity
 
@@ -480,16 +448,7 @@ defmodule Blackgate.SystemControl do
 
   def parse_df(_), do: nil
 
-  ## Devices and kernel buffers
-
-  defp decklink do
-    devices = @decklink_device_pattern |> Path.wildcard() |> Enum.sort()
-
-    %{
-      device_count: length(devices),
-      devices: Enum.map(devices, &Path.basename/1)
-    }
-  end
+  ## Kernel buffers
 
   defp udp_buffers do
     rmem_max = read_int("/proc/sys/net/core/rmem_max")
@@ -642,12 +601,6 @@ defmodule Blackgate.SystemControl do
 
     "rmem_max=#{buffers.rmem_max_mb} MB wmem_max=#{buffers.wmem_max_mb} MB " <>
       "(documented minimum #{buffers.documented_min_mb} MB: #{status})"
-  end
-
-  defp decklink_line(%{device_count: 0}), do: "no /dev/blackmagic devices"
-
-  defp decklink_line(decklink) do
-    "#{decklink.device_count} device(s): #{Enum.join(decklink.devices, ", ")}"
   end
 
   defp engine_line(nil), do: "engine binary not found"

@@ -96,13 +96,12 @@ fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
 ///
 /// The appliance's VA stack cannot initialise ("VA error: iHD_drv_video.so init failed", no usable
 /// DRM render node) yet decodebin still picks `vah264dec` for H.264 by rank. That decoder reports
-/// its output as `video/x-raw, format=NV12, interlace-mode=mixed`, and an interlaced SDI mode has to
-/// demand `interlace-mode=interleaved` — nothing bridges the two (videoconvert refuses the
-/// conversion, and the `interlace` element cannot output UYVY on GStreamer 1.24). Negotiation then
-/// fails, the resulting not-negotiated error stops the SRT source's task, and the whole route dies
-/// and reconnects forever: exactly the "SDI out 1 keeps reconnecting" symptom on PLTV. Software
-/// decoding (avdec_h264 — what the thumbnail branch already uses) negotiates and puts frames on the
-/// card, so keep the broken decoders out of the ranking.
+/// its output as `video/x-raw, format=NV12, interlace-mode=mixed`, which the rest of the pipeline
+/// cannot negotiate: videoconvert refuses the conversion, negotiation fails, the resulting
+/// not-negotiated error stops the SRT source's task, and the whole route dies and reconnects
+/// forever - measured on this box as a route that never stayed up. Software decoding (avdec_h264 -
+/// what the thumbnail branch already uses) negotiates, so keep the broken decoders out of the
+/// ranking.
 fn demote_broken_va_decoders() {
     for name in [
         "vah264dec",
@@ -114,7 +113,7 @@ fn demote_broken_va_decoders() {
         if let Some(factory) = gstreamer::ElementFactory::find(name) {
             factory.set_rank(gstreamer::Rank::NONE);
             println!(
-                "[rust-engine] {} disabled (rank NONE): its VA output caps break SDI negotiation",
+                "[rust-engine] {} disabled (rank NONE): its VA output caps do not negotiate on this box",
                 name
             );
         }

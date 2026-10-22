@@ -47,7 +47,7 @@ export const systemPipelinesApi = {
 
 // System API — host view and report for Settings > System
 export const systemApi = {
-  // Host status: resources, DeckLink devices, UDP buffers, engine binary, service unit, routes
+  // Host status: resources, UDP buffers, engine binary, service unit, routes
   status: async () => {
     const response = await authFetch('/api/system/status');
     return response.json();
