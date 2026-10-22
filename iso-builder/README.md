@@ -11,7 +11,7 @@ the Rust media engine. Docker is not installed or required at runtime.
 - Elixir: 1.18.2
 - Node.js: 20.19.0
 - Rust: 1.96.0
-- GStreamer: Ubuntu Noble 1.24 runtime plus bundled DeckLink plugin
+- GStreamer: Ubuntu Noble 1.24 runtime (srt, udp, ts, decode, vaapi)
 
 GitHub Actions installs these exact toolchains and downloads source ISO. For a
 local build, place source ISO beside `build.sh`, install dependencies listed in
@@ -31,7 +31,7 @@ Output: `iso-builder/output/blackgate-installer-amd64.iso`.
 | Application | `/opt/blackgate`, systemd service `blackgate` |
 | Media engine | Rust `blackgate-engine` bundled inside OTP release |
 | Database | Khepri data under `/var/lib/blackgate/khepri` |
-| DeckLink | Bundled GStreamer 1.24 DeckLink plugin |
+| Delivery | SRT and UDP only — no SDI outputs |
 | Network | DHCP, 16 MiB UDP send/receive buffer ceiling |
 
 ## Credentials and access
@@ -89,4 +89,4 @@ ls /tmp/iso-check/blackgate/pool | wc -l            # 608 = 607 .deb + Packages.
 wc -l /tmp/iso-check/blackgate/packages.list        # 22
 ```
 
-Physical DeckLink/SDI validation remains manual release sign-off step.
+The appliance delivers over the network only; there is no SDI hardware path to sign off.

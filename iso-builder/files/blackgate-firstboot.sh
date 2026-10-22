@@ -139,31 +139,6 @@ else
     say "WARNING: no IPv4 address yet - console banner skipped"
 fi
 
-# ─── DeckLink driver ───────────────────────────────────────────────────────
-# The vendor driver is what makes the card usable: the GStreamer plugin only talks to it. The ISO ships
-# the .deb, so a fresh appliance gets SDI without anyone logging in.
-DV_DEB=/opt/blackgate/files/blackmagic-desktopvideo.deb
-if [ -f "$DV_DEB" ]; then
-    say "Installing Blackmagic Desktop Video driver..."
-    if apt-get install -y --no-install-recommends "$DV_DEB" >> "$LOG" 2>&1; then
-        modprobe blackmagic 2>/dev/null || true
-        modprobe blackmagic-io 2>/dev/null || true
-        say "Desktop Video installed; dkms: $(dkms status | tr '\n' ' ')"
-    else
-        say "WARNING: Desktop Video installation failed — see above"
-    fi
-else
-    say "WARNING: no Desktop Video .deb on this image — SDI needs the vendor driver installed by hand"
-fi
-
-# ─── DeckLink driver presence ──────────────────────────────────────────────
-# Without the vendor driver the gateway runs but SDI stays dark, so say it plainly at first boot.
-if ls /dev/blackmagic/io* >/dev/null 2>&1; then
-    say "DeckLink devices present: $(ls /dev/blackmagic/ | tr '\n' ' ')"
-else
-    say "WARNING: no /dev/blackmagic/* devices - SDI needs the Blackmagic Desktop Video driver"
-fi
-
 # ─── Wait for the dashboard ────────────────────────────────────────────────
 say "Waiting for Blackgate to start (port 4000)..."
 for i in {1..30}; do

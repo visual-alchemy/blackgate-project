@@ -2,7 +2,6 @@ ARG BUILDER_IMAGE="hexpm/elixir:1.18.2-erlang-27.0.1-ubuntu-noble-20260509.1"
 ARG RUNNER_IMAGE="ubuntu:24.04"
 ARG NODE_VERSION="20.19.0"
 ARG NODE_SHA256="b4e336584d62abefad31baecff7af167268be9bb7dd11f1297112e6eed3ca0d5"
-ARG GST_VERSION="1.24.2"
 ARG HEX_VERSION="2.3.1"
 ARG REBAR_VERSION="3.22.0"
 ARG REBAR_URL="https://github.com/erlang/rebar3/releases/download/3.22.0/rebar3"
@@ -12,7 +11,6 @@ FROM ${BUILDER_IMAGE} AS builder
 
 ARG NODE_VERSION
 ARG NODE_SHA256
-ARG GST_VERSION
 ARG HEX_VERSION
 ARG REBAR_VERSION
 ARG REBAR_URL
@@ -51,38 +49,6 @@ RUN apt-get update -y \
     libglib2.0-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# Build gst-plugins-bad from source with DeckLink plugin enabled
-# =============================================================================
-# The Ubuntu packaged gst-plugins-bad does not use bundled proprietary headers
-# because it depends on proprietary Blackmagic SDK headers.
-# We compile just the decklink plugin from source and install it alongside
-# the system-packaged plugins.
-
-# Install build deps for gst-plugins-bad (meson, ninja, etc.)
-RUN apt-get update -y \
-    && apt-get install -y --no-install-recommends \
-    meson \
-    ninja-build \
-    libgudev-1.0-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy DeckLink SDK headers into the system include path
-COPY native/vendor/decklink-sdk /usr/include/decklink
-
-# Clone, configure, and build ONLY the decklink plugin from gst-plugins-bad
-# Version pinned to match Ubuntu 24.04 GStreamer
-RUN cd /tmp \
-    && git clone --depth 1 --branch "${GST_VERSION}" https://gitlab.freedesktop.org/gstreamer/gstreamer.git \
-    && cd gstreamer/subprojects/gst-plugins-bad \
-    && meson setup builddir \
-        -Ddecklink=enabled \
-        --prefix=/usr \
-    && ninja -C builddir -j$(nproc) sys/decklink/libgstdecklink.so \
-    && cp builddir/sys/decklink/libgstdecklink.so \
-        /usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/gstreamer-1.0/ \
-    && rm -rf /tmp/gstreamer
 
 # Prepare build directory
 WORKDIR /app
@@ -173,9 +139,6 @@ RUN apt-get update -y && \
     libgstreamer1.0-0 \
     libgstreamer-plugins-base1.0-0 \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
-
-# Copy the compiled DeckLink plugin from the builder stage
-COPY --from=builder /usr/lib/*/gstreamer-1.0/libgstdecklink.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen

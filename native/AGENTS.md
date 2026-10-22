@@ -10,11 +10,10 @@ Ubuntu 24.04 LTS with GStreamer 1.24 and Rust 1.96.0.
 - Run rustfmt, Clippy with `-D warnings`, workspace tests, and IPC smoke after
   behavior changes.
 - Never add production references to `native/archive/c-engine/`.
-- Treat `native/vendor/decklink-sdk/` as vendor headers, not application source.
-- Keep SDI video pacing and eight-channel audio behavior compatible with
-  current `engine-sdi` contract.
-- Physical DeckLink testing remains manual; never infer pass from software-only
-  GStreamer checks.
+- Delivery is SRT/UDP only: there is no SDI crate, no DeckLink SDK, and an
+  `sdisink` element is rejected at config parse time.
+- The wire contract with Elixir is TCP/TS in, SRT/UDP out; verify a real route
+  before claiming a change works.
 
 ## Commands
 

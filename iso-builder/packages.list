@@ -17,6 +17,4 @@ gstreamer1.0-vaapi
 libsrt1.5-gnutls
 libcjson1
 iproute2
-dkms
-linux-headers-generic
 libgl1

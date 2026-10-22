@@ -8,8 +8,7 @@ This folder builds Blackgate bare-metal installer.
 - Runtime: systemd-managed OTP release with bundled ERTS.
 - Media runtime: Rust-only `blackgate-engine`; archived C code is never shipped.
 - Database: Khepri at `/var/lib/blackgate/khepri`.
-- DeckLink: GStreamer 1.24 plugin built during ISO creation and installed with
-  appliance.
+- Delivery: SRT/UDP only. No SDI plugin and no Blackmagic driver in the image.
 - Docker: allowed for development and CI image checks, never required by
   installed appliance.
 
@@ -29,10 +28,6 @@ them through `scripts/install-system-actions.sh` (shipped as
 
 Packages are built by `scripts/package-signed-update.sh` (Ed25519 keypair generated at install time in
 `/etc/blackgate/`). Runbook: `docs/operations/system-actions-and-updates.md`.
-
-The ISO carries the Blackmagic Desktop Video `.deb` (`files/blackmagic-desktopvideo.deb`, gitignored):
-first boot installs it and DKMS builds the kernel modules, so a fresh appliance has both the GStreamer
-DeckLink plugin and the driver.
 
 The ISO also carries an apt pool (`files/pool/`, built from `packages.list`) and `packages:` in
 `autoinstall/user-data` is deliberately empty, so an install needs no network at all: first boot installs

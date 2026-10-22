@@ -77,7 +77,6 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate-firstboot.service /target/etc/systemd/system/
     - cp /cdrom/blackgate/blackgate-firstboot.sh /target/opt/blackgate/
     - cp /cdrom/blackgate/99-blackgate-motd.sh /target/etc/update-motd.d/99-blackgate
-    - cp /cdrom/blackgate/libgstdecklink.so /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
     # System-tab integration: first boot installs these with blackgate-install-system-actions.sh
     - mkdir -p /target/opt/blackgate/files
@@ -87,8 +86,6 @@ autoinstall:
     - cp /cdrom/blackgate/blackgate.service /target/opt/blackgate/files/
     - cp /cdrom/blackgate/release-version /target/opt/blackgate/
     - cp /cdrom/blackgate/support-authorized-keys /target/opt/blackgate/files/
-    - |
-      [ -f /cdrom/blackgate/blackmagic-desktopvideo.deb ] && cp /cdrom/blackgate/blackmagic-desktopvideo.deb /target/opt/blackgate/files/ || echo 'no Desktop Video deb in the image'
 
     # Offline package pool: keep the image's .deb set on the installed system as a local apt source, so a
     # first boot with no network can still finish the runtime install (blackgate-firstboot.sh uses it).
@@ -107,7 +104,6 @@ autoinstall:
     - chmod +x /target/opt/blackgate/blackgate-firstboot.sh
     - chmod +x /target/opt/blackgate/blackgate-install-system-actions.sh
     - chmod +x /target/etc/update-motd.d/99-blackgate
-    - chmod 644 /target/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdecklink.so
     - chown -R 1000:1000 /target/opt/blackgate
     - chown -R 1000:1000 /target/var/lib/blackgate
 

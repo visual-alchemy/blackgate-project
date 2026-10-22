@@ -103,20 +103,6 @@ echo "   Packaging release tarball..."
 tar czf "$SCRIPT_DIR/files/blackgate-release.tar.gz" -C "$PROJECT_ROOT/_build/prod/rel" blackgate
 echo "   Release size: $(du -h "$SCRIPT_DIR/files/blackgate-release.tar.gz" | cut -f1)"
 
-echo "   Building GStreamer 1.24.2 DeckLink plugin..."
-git clone --depth 1 --branch 1.24.2 \
-    https://gitlab.freedesktop.org/gstreamer/gstreamer.git \
-    "$WORK_DIR/gstreamer"
-meson setup "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir" \
-    "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad" \
-    -Ddecklink=enabled \
-    -Dcpp_args="-I$PROJECT_ROOT/native/vendor/decklink-sdk" \
-    --prefix=/usr
-ninja -C "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir" \
-    sys/decklink/libgstdecklink.so
-cp "$WORK_DIR/gstreamer/subprojects/gst-plugins-bad/builddir/sys/decklink/libgstdecklink.so" \
-    "$SCRIPT_DIR/files/libgstdecklink.so"
-
 # ─── Step 1b: Local package pool ────────────────────────────────────────
 # The appliance has to install with no network at all, so the image carries the runtime packages listed in
 # packages.list plus everything apt would pull for them, indexed as a local apt source.
@@ -163,14 +149,13 @@ command -v dpkg-scanpackages >/dev/null \
 (cd "$POOL_DIR" && dpkg-scanpackages -m . /dev/null 2>/dev/null | gzip -9 > Packages.gz)
 
 # --no-install-recommends cuts the pool from ~380 MB to ~110 MB, which is only safe if the packages the
-# appliance cannot start without are still in it: DKMS builds the decklink module (gcc/make/dpkg-dev are its
-# Depends, not Recommends), and the media runtime needs the gstreamer plugins and libsrt.
+# appliance cannot start without are still in it: the media runtime needs the gstreamer plugins and libsrt.
 # Decompress the index once, and say how many entries it had when it fails to match: a check that only
 # reports "missing" cannot tell a short pool from an unreadable index.
 POOL_INDEX="$(mktemp)"
 zcat "$POOL_DIR/Packages.gz" > "$POOL_INDEX" 2>/dev/null || true
 POOL_MISSING=""
-for pkg in gcc make dpkg-dev dkms linux-headers-generic libgl1 gstreamer1.0-plugins-bad \
+for pkg in libgl1 gstreamer1.0-plugins-bad \
            gstreamer1.0-plugins-good gstreamer1.0-libav gstreamer1.0-vaapi libsrt1.5-gnutls \
            libcjson1 ffmpeg iproute2 curl; do
     grep -q "^Package: $pkg$" "$POOL_INDEX" || POOL_MISSING="$POOL_MISSING $pkg"
@@ -218,8 +203,7 @@ for f in \
     blackgate-system-action \
     blackgate-system-action.sudoers \
     blackgate-updater \
-    support-authorized-keys \
-    libgstdecklink.so; do
+    support-authorized-keys; do
     cp "$SCRIPT_DIR/files/$f" "$EXTRACT_DIR/blackgate/$f"
     echo "   ✅ $f ($(du -h "$SCRIPT_DIR/files/$f" | cut -f1))"
 done
@@ -230,9 +214,6 @@ done
 cp "$SCRIPT_DIR/release-version" "$EXTRACT_DIR/blackgate/release-version"
 echo "   ✅ release-version ($(tr -d '\r\n' < "$SCRIPT_DIR/release-version"))"
 
-# The Blackmagic Desktop Video .deb (~250 MB) is what makes SDI work on a fresh appliance: without it the
-# gateway runs but no frames reach the card. Vendor binary, so it is gitignored and the build only carries
-# it when the operator put it beside the other payload files.
 # The package pool and its index: the installed system keeps them as a local apt source (see the
 # late-commands in autoinstall/user-data), which is what makes a first boot without network possible.
 mkdir -p "$EXTRACT_DIR/blackgate/pool"
@@ -250,14 +231,6 @@ if [ -n "$LICENSE_URL" ]; then
     echo "   ✅ license-server-url ($LICENSE_URL)"
 else
     echo "   ⚠️  no LICENSE_SERVER_URL (env or Makefile) — license activation will not work on the appliance"
-fi
-
-DESKTOP_VIDEO_DEB="$SCRIPT_DIR/files/blackmagic-desktopvideo.deb"
-if [ -f "$DESKTOP_VIDEO_DEB" ]; then
-    cp "$DESKTOP_VIDEO_DEB" "$EXTRACT_DIR/blackgate/blackmagic-desktopvideo.deb"
-    echo "   ✅ blackmagic-desktopvideo.deb ($(du -h "$DESKTOP_VIDEO_DEB" | cut -f1))"
-else
-    echo "   ⚠️  blackmagic-desktopvideo.deb missing — the image will need the DeckLink driver by hand"
 fi
 
 # The first boot installs the unit/helper/sudoers/updater/keypair through this script rather than

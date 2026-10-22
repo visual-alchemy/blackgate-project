@@ -17,7 +17,6 @@ Blackgate Unix socket.
 | `engine-metadata` | MPEG-TS metadata parsing |
 | `engine-thumbnail` | JPEG preview extraction |
 | `engine-failover` | Dual-ingest switching state |
-| `engine-sdi` | DeckLink mode and audio handling |
 
 ## Build and verify
 
@@ -37,7 +36,6 @@ GStreamer 1.24 is required production baseline.
 - `native/Makefile` builds Rust only.
 - `mix.exs` packages only `blackgate-engine` in OTP release.
 - `scripts/check_rust_only_runtime.sh` rejects legacy executables/references.
-- `native/vendor/decklink-sdk/` supplies DeckLink headers for plugin build.
 
 ## Historical benchmark oracle
 
@@ -46,6 +44,5 @@ It exists only for migration performance comparison and must never be imported,
 packaged, or used as production fallback. See archive README and
 `benchmarks/migration/README.md`.
 
-Physical DeckLink/SDI behavior requires
-`docs/migration/SDI_MANUAL_SIGNOFF.md`; automated checks cannot claim hardware
-completion.
+Delivery is SRT/UDP only; an `sdisink` in a route config is refused at parse
+time, so a route that starts is one the engine can actually feed.
