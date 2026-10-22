@@ -709,11 +709,12 @@ defmodule Blackgate.RouteHandlerTest do
              end)
     end
 
-    # Scenario (b): mode="manual" with a live port + SRT secondary is
-    # dual-ingest eligible, so trigger_restart routes through evaluate_failover.
-    # The mode-aware engine treats "manual" as fully operator-driven: with no
-    # health signal forcing a switch, it holds position on primary.
-    test "mode=manual with live port: evaluate_failover no-ops on unknown health" do
+    # Scenario (b): mode="manual" + a live port + an SRT secondary is dual-ingest eligible, but an
+    # engine exit must still rebuild the pipeline: an exited engine cannot switch in-process. The old
+    # expectation here - keep_state with the dead port still attached - is exactly what left a route
+    # reporting "started" while nothing was running and the SDI output stayed black. Manual mode means
+    # operator action is required, so the route stops, honestly.
+    test "mode=manual on engine exit: route stops instead of pretending to run" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -721,23 +722,16 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :keep_state
-
-      new_data = elem(res, 1)
-      # manual mode + unknown health → no automatic switch
-      assert new_data.active_source == "primary"
-      assert new_data.port == port
-
-      Port.close(port)
+      assert elem(res, 0) == :stop
+      assert elem(res, 1) == :normal
     end
 
-    # Scenario (c): mode="maintain-stability" with a live port + SRT secondary
-    # is dual-ingest eligible, so trigger_restart routes through evaluate_failover.
-    # With source_health=unknown (no stats yet) the engine has no signal to
-    # switch, so it holds position. The in-process switch path is exercised by
-    # the dedicated "failover mode engine" describe block below via
+    # Scenario (c): on an engine exit, maintain-stability rebuilds the pipeline on the source its
+    # policy picks (toggle away from primary) and enters :reconnecting, instead of holding a dead
+    # port in :started. The in-process switch path - which is only legal for a route without an SDI
+    # destination - is exercised by the "failover mode engine" describe block below via
     # evaluate_failover_for_test/1 with explicit health maps.
-    test "mode=maintain-stability on live port: no switch without health signal" do
+    test "mode=maintain-stability on engine exit: switches source and reconnects" do
       capture_update_route()
 
       port = Port.open({:spawn, "cat"}, [:binary])
@@ -745,14 +739,12 @@ defmodule Blackgate.RouteHandlerTest do
 
       res = RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
 
-      assert elem(res, 0) == :keep_state
+      assert elem(res, 0) == :next_state
+      assert elem(res, 1) == :reconnecting
 
-      new_data = elem(res, 1)
-      # unknown health -> engine holds position
-      assert new_data.active_source == "primary"
-      assert new_data.port == port
-
-      Port.close(port)
+      new_data = elem(res, 2)
+      assert new_data.active_source == "secondary"
+      assert new_data.port == nil
     end
 
     # Scenario (d): maintain-primary reconnect timeout -> one-shot fallback to

@@ -257,9 +257,11 @@ defmodule Blackgate.RouteHandler do
     if now - data.started_at < @watchdog_grace_period_ms do
       {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
     else
-      # Dual-ingest routes never kill/respawn on stall — they switch sources
-      # in-process via evaluate_failover based on stats-driven health.
-      if dual_ingest_eligible?(data.route) do
+      # A dual-ingest route whose destinations are not SDI switches sources in-process, driven by
+      # stats-based health. An SDI route does not: the in-process cut needs the guarded seamless
+      # machinery, so it falls through to the frame-stall handling below and restarts the pipeline
+      # on the selected source instead.
+      if in_process_switch_allowed?(data.route) do
         refreshed = refresh_source_health_from_stats(data)
 
         {:keep_state, new_data} = evaluate_failover(refreshed)
@@ -268,15 +270,7 @@ defmodule Blackgate.RouteHandler do
         # Get current bytes from stats registry
         current_bytes = get_total_bytes_received(data.id)
 
-        # Determine if the route has an active SDI destination
-        has_sdi_destination? =
-          case data.route["destinations"] do
-            destinations when is_list(destinations) ->
-              Enum.any?(destinations, &(&1["schema"] == "SDI"))
-
-            _ ->
-              false
-          end
+        has_sdi_destination? = route_has_sdi_destination?(data.route)
 
         # Query latest SDI video stats
         stats =
@@ -447,6 +441,18 @@ defmodule Blackgate.RouteHandler do
 
       true ->
         :keep_state_and_data
+    end
+  end
+
+  # A linked port's exit arrives as {:EXIT, port, reason} (trap_exit is on). Without this clause it
+  # hit the catch-all, which printed "Undefined msg" and kept the state untouched. It is only
+  # meaningful while that port is still the live one - once the fsm has moved on it is our own
+  # close_port/1 coming back round.
+  def handle_event(:info, {:EXIT, port, _reason}, :started, data) when is_port(port) do
+    if port == data.port do
+      handle_event(:info, {port, {:exit_status, 0}}, :started, data)
+    else
+      :keep_state_and_data
     end
   end
 
@@ -726,6 +732,33 @@ defmodule Blackgate.RouteHandler do
   # Failover Helpers (pure)
   # ===========================================================================
 
+  # A route whose destinations include SDI may only switch sources inside the RUNNING pipeline when
+  # the SDI branch can survive it. Flipping the input-selector under a live decklink branch without
+  # the guarded seamless machinery (matching MPEG-TS map, target-keyframe wait, PCR/PTS/continuity
+  # normalization) feeds a foreign timeline into the decoder: measured as macroblocks in one
+  # direction and a starved demuxer in the other. The reference branch encodes the same rule in its
+  # in_process_switch_allowed?/1 and keeps SDI routes on restart-based switching by default.
+  @doc false
+  def route_has_sdi_destination?(route) when is_map(route) do
+    case Map.get(route, "destinations") do
+      destinations when is_list(destinations) ->
+        Enum.any?(destinations, &(is_map(&1) and &1["schema"] == "SDI"))
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
+  def route_has_sdi_destination?(_), do: false
+
+  # In-process switching needs a live port as well; that part is checked at the call site because it
+  # depends on runtime state, not on the route's configuration.
+  @doc false
+  def in_process_switch_allowed?(route) do
+    dual_ingest_eligible?(route) and not route_has_sdi_destination?(route)
+  end
+
   @doc false
   def failover_active?(route_map) when is_map(route_map) do
     Map.get(route_map, "failover_enabled") == true and
@@ -834,19 +867,20 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
+  # The pipeline is gone by the time this runs, so it always rebuilds it. It used to hand dual-ingest
+  # routes to evaluate_failover/1 first, which can return keep_state: the fsm then stayed in :started
+  # with a dead port, no reconnect timer was ever armed, and the route kept reporting "started" while
+  # nothing was running and the SDI output stayed black. An exited engine cannot switch sources
+  # in-process either, so the switch decision belongs to the source-health paths, not here.
   defp trigger_restart(data) do
-    if dual_ingest_eligible?(data.route) and is_port(data.port) do
-      evaluate_failover(data)
-    else
-      if data.port && is_port(data.port), do: close_port(data.port)
-      if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+    if data.port && is_port(data.port), do: close_port(data.port)
+    if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
 
-      cleared = %{data | port: nil, ffmpeg_port: nil}
+    cleared = %{data | port: nil, ffmpeg_port: nil}
 
-      if failover_active?(data.route),
-        do: failover_restart(cleared),
-        else: enter_reconnecting(cleared)
-    end
+    if failover_active?(data.route),
+      do: failover_restart(cleared),
+      else: enter_reconnecting(cleared)
   end
 
   # Dual-ingest stats-driven health refresh. Pulls primary + secondary stats
