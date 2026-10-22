@@ -143,43 +143,65 @@ impl SelectorState {
             return;
         };
         let state = state.clone();
-        // A buffer that some other element still holds cannot be rewritten in place. Say so once
-        // rather than skipping the normalisation silently, because a silent skip looks exactly like
-        // a working switch with macroblocks in it.
-        let shared = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Rewriting the output timeline means modifying the buffer, and a buffer that something else
+        // still holds cannot be modified in place - the C's gst_buffer_make_writable is what handles
+        // that. So take the data out of the probe, work on a private deep copy when the buffer is
+        // shared, and put the result back. This is proven necessary on the box: the tee hands out a
+        // shared buffer, and without the copy every switch ran with the timeline left alone.
+        let copied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_pad, info| {
-            let Some(buffer) = info.buffer_mut() else {
-                return gstreamer::PadProbeReturn::Ok;
-            };
-            let Some(buffer) = buffer.get_mut() else {
-                if !shared.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!(
-                        "[seamless] tee buffer is shared, so the timeline cannot be rewritten in \
-                         place; switches will not be seamless"
-                    );
-                }
-                return gstreamer::PadProbeReturn::Ok;
-            };
-            let Ok(mut map) = buffer.map_writable() else {
-                return gstreamer::PadProbeReturn::Ok;
-            };
-            let Ok(mut guard) = state.lock() else {
-                return gstreamer::PadProbeReturn::Ok;
-            };
-            let Some(state) = guard.as_mut() else {
+            let Some(data) = info.data.take() else {
                 return gstreamer::PadProbeReturn::Ok;
             };
 
-            if let Some(result) = state.normalize(map.as_mut_slice()) {
-                if result.source_changed {
-                    println!(
-                        "TS_TIMELINE_NORMALIZED:{} offset-90k={} continuity-rewritten={}",
-                        state.active().as_str(),
-                        result.offset_90k,
-                        result.continuity_rewritten
-                    );
+            let mut buffer = match data {
+                gstreamer::PadProbeData::Buffer(mut buffer) => {
+                    if buffer.get_mut().is_some() {
+                        buffer
+                    } else {
+                        match buffer.copy_deep() {
+                            Ok(copy) => {
+                                if !copied.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    eprintln!(
+                                        "[seamless] tee buffers are shared; rewriting a private copy \
+                                         so the output timeline stays continuous"
+                                    );
+                                }
+                                copy
+                            }
+                            Err(_) => {
+                                info.data = Some(gstreamer::PadProbeData::Buffer(buffer));
+                                return gstreamer::PadProbeReturn::Ok;
+                            }
+                        }
+                    }
+                }
+                other => {
+                    info.data = Some(other);
+                    return gstreamer::PadProbeReturn::Ok;
+                }
+            };
+
+            if let Some(exclusive) = buffer.get_mut() {
+                if let Ok(mut map) = exclusive.map_writable() {
+                    if let Ok(mut guard) = state.lock() {
+                        if let Some(state) = guard.as_mut() {
+                            if let Some(result) = state.normalize(map.as_mut_slice()) {
+                                if result.source_changed {
+                                    println!(
+                                        "TS_TIMELINE_NORMALIZED:{} offset-90k={} continuity-rewritten={}",
+                                        state.active().as_str(),
+                                        result.offset_90k,
+                                        result.continuity_rewritten
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
+            info.data = Some(gstreamer::PadProbeData::Buffer(buffer));
             gstreamer::PadProbeReturn::Ok
         });
     }

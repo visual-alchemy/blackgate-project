@@ -293,10 +293,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     match (cmd, sel_guard.as_mut()) {
                         (Command::SwitchSource(tgt), Some(sel)) => {
-                            let pending = sel.request_switch(tgt);
-                            if !pending {
+                            // `true` means the engine is holding the switch: it moves the selector
+                            // once THIS source reports a keyframe. Printing it on the other branch
+                            // would label an already-completed move as pending.
+                            if sel.request_switch(tgt) {
                                 println!(
-                                    "SOURCE_SWITCH_PENDING:{} (awaiting keyframe or rejected)",
+                                    "SOURCE_SWITCH_PENDING:{} (held until this source carries a keyframe)",
                                     tgt.as_str()
                                 );
                             }
