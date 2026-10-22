@@ -246,6 +246,14 @@ impl TsNormalizer {
     }
 }
 
+/// PID of a transport packet.
+pub fn packet_pid(packet: &[u8]) -> Option<u16> {
+    if packet.len() < TS_PACKET_SIZE || packet[0] != TS_SYNC_BYTE {
+        return None;
+    }
+    Some((((packet[1] & 0x1F) as u16) << 8) | packet[2] as u16)
+}
+
 /// Offset of the sync byte in the leading bytes of a buffer (a buffer may start mid-packet).
 fn first_sync_offset(data: &[u8]) -> usize {
     let mut offset = 0;
@@ -256,7 +264,9 @@ fn first_sync_offset(data: &[u8]) -> usize {
 }
 
 /// Payload slice of a packet, honouring the adaptation field.
-fn packet_payload(packet: &[u8]) -> Option<&[u8]> {
+/// The payload slice of a packet, honouring the adaptation field (used by the per-source
+/// probes as well, which is why it is public).
+pub fn packet_payload(packet: &[u8]) -> Option<&[u8]> {
     let adaptation_control = (packet[3] >> 4) & 0x03;
     if adaptation_control & 0x01 == 0 {
         return None;
@@ -651,6 +661,180 @@ impl PendingSwitch {
     /// Drop any request (a pipeline rebuild, or a stop).
     pub fn clear(&mut self) {
         self.pending = None;
+    }
+}
+
+// ── Program identification: PAT → PMT → the elementary streams ───────────────────────────────────
+//
+// The per-source probes need to know which PID carries video before they can look for a cut point,
+// and whether two sources carry the same program shape before a switch may complete. `engine-metadata`
+// parses this too, but for its own (stats) purposes and privately; this is the small, testable slice
+// the switch needs, kept here so the logic stays in one provable place.
+
+/// Walks a transport stream's PSI far enough to identify the video and audio elementary streams.
+#[derive(Debug, Default, Clone)]
+pub struct ProgramTracker {
+    pmt_pid: Option<u16>,
+    map: ProgramMap,
+    audio_pids: Vec<u16>,
+    changed: bool,
+}
+
+impl ProgramTracker {
+    pub const PAT_PID: u16 = 0x0000;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The program map as it is currently known.
+    pub fn map(&self) -> ProgramMap {
+        ProgramMap {
+            audio_pids: self.audio_pids.clone(),
+            ..self.map.clone()
+        }
+    }
+
+    pub fn video_pid(&self) -> Option<u16> {
+        if self.map.video_pid == 0 {
+            None
+        } else {
+            Some(self.map.video_pid)
+        }
+    }
+
+    /// Which codec the video stream carries.
+    pub fn stream_kind(&self) -> StreamKind {
+        StreamKind::from_stream_type(self.map.video_stream_type)
+    }
+
+    /// Stamp the codec configuration hash once the elementary-stream scan has seen it.
+    pub fn set_config_hash(&mut self, hash: u64) {
+        if self.map.codec_config_hash != Some(hash) {
+            self.map.codec_config_hash = Some(hash);
+            self.changed = true;
+        }
+    }
+
+    /// Take the "something changed" flag, so the caller only republishes the map when it really did.
+    pub fn take_changed(&mut self) -> bool {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Feed one 188-byte transport packet. Safe on anything: a malformed or unrelated packet is
+    /// simply not a PAT or PMT and changes nothing.
+    pub fn feed_packet(&mut self, packet: &[u8]) {
+        if packet.len() < TS_PACKET_SIZE || packet[0] != TS_SYNC_BYTE {
+            return;
+        }
+
+        let pid = (((packet[1] & 0x1F) as u16) << 8) | packet[2] as u16;
+        let payload_unit_start = packet[1] & 0x40 != 0;
+
+        if pid == Self::PAT_PID {
+            if payload_unit_start {
+                self.parse_pat(packet);
+            }
+        } else if Some(pid) == self.pmt_pid && payload_unit_start {
+            self.parse_pmt(packet);
+        }
+    }
+
+    /// Locate the PSI section inside a packet payload (pointer_field, then the table).
+    fn payload_section(packet: &[u8]) -> Option<&[u8]> {
+        let payload = packet_payload(packet)?;
+        if payload.is_empty() {
+            return None;
+        }
+        let pointer = payload[0] as usize;
+        let start = 1 + pointer;
+        if start >= payload.len() {
+            return None;
+        }
+        Some(&payload[start..])
+    }
+
+    fn parse_pat(&mut self, packet: &[u8]) {
+        let Some(section) = Self::payload_section(packet) else {
+            return;
+        };
+        if section.len() < 8 || section[0] != 0x00 {
+            return;
+        }
+
+        let section_length = (((section[1] & 0x0F) as usize) << 8) | section[2] as usize;
+        // 8 header bytes before the entries, minus the 3 already counted in section_length, and
+        // without the trailing CRC.
+        let entries_end = (3 + section_length).saturating_sub(4).min(section.len());
+        let mut i = 8;
+        while i + 4 <= entries_end {
+            let program_number = ((section[i] as u16) << 8) | section[i + 1] as u16;
+            let pid = (((section[i + 2] & 0x1F) as u16) << 8) | section[i + 3] as u16;
+            // program_number 0 is the network PID, not a program.
+            if program_number != 0 {
+                if self.pmt_pid != Some(pid) {
+                    self.pmt_pid = Some(pid);
+                    self.changed = true;
+                }
+                return;
+            }
+            i += 4;
+        }
+    }
+
+    fn parse_pmt(&mut self, packet: &[u8]) {
+        let Some(section) = Self::payload_section(packet) else {
+            return;
+        };
+        if section.len() < 12 || section[0] != 0x02 {
+            return;
+        }
+
+        let section_length = (((section[1] & 0x0F) as usize) << 8) | section[2] as usize;
+        let program_info_length = (((section[10] & 0x0F) as usize) << 8) | section[11] as usize;
+        let mut i = 12 + program_info_length;
+        let entries_end = (3 + section_length).saturating_sub(4).min(section.len());
+
+        let mut video: Option<(u16, u8)> = None;
+        let mut audio: Vec<u16> = Vec::new();
+
+        while i + 5 <= entries_end {
+            let stream_type = section[i];
+            let elementary_pid = (((section[i + 1] & 0x1F) as u16) << 8) | section[i + 2] as u16;
+            let es_info_length =
+                (((section[i + 3] & 0x0F) as usize) << 8) | section[i + 4] as usize;
+
+            match StreamKind::from_stream_type(stream_type) {
+                StreamKind::H264 | StreamKind::Hevc | StreamKind::Mpeg2 => {
+                    if video.is_none() {
+                        video = Some((elementary_pid, stream_type));
+                    }
+                }
+                StreamKind::Unknown => {
+                    if matches!(stream_type, 0x03 | 0x04 | 0x0F | 0x11) {
+                        audio.push(elementary_pid);
+                    }
+                }
+            }
+
+            i += 5 + es_info_length;
+        }
+
+        if let Some((pid, stream_type)) = video {
+            if self.map.video_pid != pid || self.map.video_stream_type != stream_type {
+                self.map.video_pid = pid;
+                self.map.video_stream_type = stream_type;
+                // A different video stream cannot keep the previous configuration's fingerprint.
+                self.map.codec_config_hash = None;
+                self.changed = true;
+            }
+        }
+
+        audio.sort_unstable();
+        if audio != self.audio_pids {
+            self.audio_pids = audio;
+            self.changed = true;
+        }
     }
 }
 
@@ -1117,5 +1301,141 @@ mod tests {
             pending.request(2, 0),
             SwitchOutcome::Rejected("invalid target")
         );
+    }
+
+    // ── Program identification ────────────────────────────────────────────────────────────────
+
+    /// A PSI packet: sync, the given PID, payload_unit_start, then pointer_field + section.
+    fn psi_packet(pid: u16, section: &[u8]) -> Vec<u8> {
+        let mut packet = vec![0xFFu8; TS_PACKET_SIZE];
+        packet[0] = TS_SYNC_BYTE;
+        packet[1] = 0x40 | (((pid >> 8) as u8) & 0x1F);
+        packet[2] = (pid & 0xFF) as u8;
+        packet[3] = 0x01 << 4; // payload only
+        packet[4] = 0x00; // pointer_field
+        packet[5..5 + section.len()].copy_from_slice(section);
+        packet
+    }
+
+    fn pat_section(programs: &[(u16, u16)]) -> Vec<u8> {
+        let mut section = vec![0x00u8, 0x00, 0x00, 0x00, 0x01, 0xC1, 0x00, 0x00];
+        for (number, pid) in programs {
+            section.push((number >> 8) as u8);
+            section.push((*number & 0xFF) as u8);
+            section.push(0xE0 | ((pid >> 8) as u8 & 0x1F));
+            section.push((*pid & 0xFF) as u8);
+        }
+        let len = section.len() - 3 + 4;
+        section[1] = 0xB0 | (((len >> 8) & 0x0F) as u8);
+        section[2] = (len & 0xFF) as u8;
+        section.extend_from_slice(&[0, 0, 0, 0]); // CRC placeholder
+        section
+    }
+
+    fn pmt_section(streams: &[(u8, u16)]) -> Vec<u8> {
+        let mut section = vec![
+            0x02u8, 0x00, 0x00, 0x00, 0x01, 0xC1, 0x00, 0x00, 0xE0, 0x01, 0xF0, 0x00,
+        ];
+        for (stream_type, pid) in streams {
+            section.push(*stream_type);
+            section.push(0xE0 | ((pid >> 8) as u8 & 0x1F));
+            section.push((*pid & 0xFF) as u8);
+            section.push(0xF0);
+            section.push(0x00);
+        }
+        let len = section.len() - 3 + 4;
+        section[1] = 0xB0 | (((len >> 8) & 0x0F) as u8);
+        section[2] = (len & 0xFF) as u8;
+        section.extend_from_slice(&[0, 0, 0, 0]);
+        section
+    }
+
+    #[test]
+    fn pat_then_pmt_identifies_the_video_and_audio_streams() {
+        let mut tracker = ProgramTracker::new();
+        assert_eq!(tracker.video_pid(), None);
+
+        tracker.feed_packet(&psi_packet(
+            ProgramTracker::PAT_PID,
+            &pat_section(&[(0, 0x0011), (1, 0x0100)]),
+        ));
+        assert!(tracker.take_changed(), "learning the PMT PID is a change");
+
+        tracker.feed_packet(&psi_packet(
+            0x0100,
+            &pmt_section(&[(0x03, 0x0201), (0x0F, 0x0202), (0x1B, 0x0101)]),
+        ));
+
+        let map = tracker.map();
+        assert_eq!(map.video_pid, 0x0101, "the H.264 stream is the video PID");
+        assert_eq!(map.video_stream_type, 0x1B);
+        assert_eq!(map.audio_pids, vec![0x0201, 0x0202]);
+        assert_eq!(tracker.stream_kind(), StreamKind::H264);
+        assert!(
+            !map.is_ready(),
+            "no codec configuration seen yet, so not ready to cut to"
+        );
+    }
+
+    #[test]
+    fn a_network_pid_entry_is_not_a_program() {
+        let mut tracker = ProgramTracker::new();
+        tracker.feed_packet(&psi_packet(
+            ProgramTracker::PAT_PID,
+            &pat_section(&[(0, 0x0011)]),
+        ));
+        assert_eq!(tracker.video_pid(), None);
+        assert!(
+            !tracker.take_changed(),
+            "a network PID alone teaches nothing"
+        );
+    }
+
+    #[test]
+    fn the_configuration_hash_completes_a_map() {
+        let mut tracker = ProgramTracker::new();
+        tracker.feed_packet(&psi_packet(
+            ProgramTracker::PAT_PID,
+            &pat_section(&[(1, 0x0100)]),
+        ));
+        tracker.feed_packet(&psi_packet(0x0100, &pmt_section(&[(0x1B, 0x0101)])));
+        assert!(!tracker.map().is_ready());
+
+        tracker.set_config_hash(7);
+        assert!(tracker.map().is_ready());
+        assert_eq!(tracker.map().codec_config_hash, Some(7));
+    }
+
+    #[test]
+    fn a_new_video_stream_drops_the_stale_configuration_hash() {
+        let mut tracker = ProgramTracker::new();
+        tracker.feed_packet(&psi_packet(
+            ProgramTracker::PAT_PID,
+            &pat_section(&[(1, 0x0100)]),
+        ));
+        tracker.feed_packet(&psi_packet(0x0100, &pmt_section(&[(0x1B, 0x0101)])));
+        tracker.set_config_hash(7);
+
+        // The encoder restarted with a different video PID: the old fingerprint cannot apply.
+        tracker.feed_packet(&psi_packet(0x0100, &pmt_section(&[(0x24, 0x0102)])));
+        assert_eq!(tracker.map().video_pid, 0x0102);
+        assert_eq!(tracker.stream_kind(), StreamKind::Hevc);
+        assert_eq!(tracker.map().codec_config_hash, None);
+        assert!(!tracker.map().is_ready());
+    }
+
+    #[test]
+    fn garbage_packets_change_nothing() {
+        let mut tracker = ProgramTracker::new();
+        tracker.feed_packet(&[]);
+        tracker.feed_packet(&[0x00; TS_PACKET_SIZE]);
+        let mut random = vec![0x11u8; TS_PACKET_SIZE];
+        random[0] = TS_SYNC_BYTE;
+        random[1] = 0x40;
+        random[2] = 0x50; // an unrelated PID
+        tracker.feed_packet(&random);
+
+        assert_eq!(tracker.video_pid(), None);
+        assert!(!tracker.take_changed());
     }
 }

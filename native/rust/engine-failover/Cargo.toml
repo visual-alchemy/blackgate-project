@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+engine-ts = { path = "../engine-ts" }
 gstreamer = "0.22"
 engine-config = { path = "../engine-config" }
 anyhow = "1"

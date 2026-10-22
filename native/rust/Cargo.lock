@@ -75,6 +75,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "engine-config",
+ "engine-ts",
  "gstreamer",
 ]
 
@@ -130,6 +131,10 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
 ]
+
+[[package]]
+name = "engine-ts"
+version = "0.1.0"
 
 [[package]]
 name = "equivalent"

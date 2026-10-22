@@ -1,6 +1,6 @@
 use gstreamer::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceTarget {
     Primary,
     Secondary,
@@ -122,6 +122,160 @@ impl SelectorState {
     }
 }
 
+use engine_ts::{
+    packet_payload, packet_pid, EsScanner, PendingSwitch, ProgramTracker, SwitchOutcome,
+    TsNormalizer, TS_PACKET_SIZE,
+};
+
+impl SourceTarget {
+    pub fn index(self) -> usize {
+        match self {
+            SourceTarget::Primary => 0,
+            SourceTarget::Secondary => 1,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(SourceTarget::Primary),
+            1 => Some(SourceTarget::Secondary),
+            _ => None,
+        }
+    }
+}
+
+/// What the pipeline must do after a buffer was fed to the seamless state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchSignal {
+    /// Move the selector to this source now; the caller also reports `SOURCE_SWITCHED`.
+    Switched(SourceTarget),
+    /// The requested source cannot be cut to; the caller reports the rejection and falls back.
+    Rejected(SourceTarget, &'static str),
+}
+
+/// The guarded seamless switch.
+///
+/// It keeps both sources' program identity (PAT/PMT) and elementary-stream scanners, holds a requested
+/// source change until the TARGET source carries a keyframe, and normalises the output timeline so the
+/// decoder never sees the change. Everything is returned as a [`SwitchSignal`] instead of touching
+/// GStreamer here, so the whole flow can be exercised by feeding transport packets - which is exactly
+/// how it is tested.
+pub struct SeamlessSwitch {
+    trackers: [ProgramTracker; 2],
+    scanners: [EsScanner; 2],
+    pending: PendingSwitch,
+    normalizer: TsNormalizer,
+    active: usize,
+}
+
+impl SeamlessSwitch {
+    pub fn new(active: SourceTarget) -> Self {
+        Self {
+            trackers: [ProgramTracker::new(), ProgramTracker::new()],
+            scanners: [EsScanner::new(), EsScanner::new()],
+            pending: PendingSwitch::new(),
+            normalizer: TsNormalizer::new(),
+            active: active.index(),
+        }
+    }
+
+    pub fn active(&self) -> SourceTarget {
+        SourceTarget::from_index(self.active).unwrap_or(SourceTarget::Primary)
+    }
+
+    pub fn pending(&self) -> Option<SourceTarget> {
+        self.pending.pending().and_then(SourceTarget::from_index)
+    }
+
+    /// Ask for a source change. Nothing moves yet: the selector follows only once the target source is
+    /// proven cuttable. Returns false when this is not actually a change.
+    pub fn request(&mut self, target: SourceTarget) -> bool {
+        matches!(
+            self.pending.request(target.index(), self.active),
+            SwitchOutcome::Waiting
+        ) && self.pending.pending() == Some(target.index())
+    }
+
+    /// Forget a request (a pipeline rebuild, or a stop).
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+    }
+
+    /// Feed one buffer of one source. Returns a signal when this buffer completed (or refused) a
+    /// requested change.
+    pub fn on_source_segment(&mut self, source: usize, segment: &[u8]) -> Option<SwitchSignal> {
+        if source > 1 {
+            return None;
+        }
+
+        let mut keyframe = false;
+        let mut offset = 0usize;
+
+        while offset + TS_PACKET_SIZE <= segment.len() {
+            let packet = &segment[offset..offset + TS_PACKET_SIZE];
+            offset += TS_PACKET_SIZE;
+
+            self.trackers[source].feed_packet(packet);
+
+            // Only the video elementary stream can carry a picture boundary.
+            let Some(pid) = packet_pid(packet) else {
+                continue;
+            };
+            if Some(pid) != self.trackers[source].video_pid() {
+                continue;
+            }
+
+            let Some(payload) = packet_payload(packet) else {
+                continue;
+            };
+
+            self.scanners[source].set_kind(self.trackers[source].stream_kind());
+            let scan = self.scanners[source].scan(payload);
+            if let Some(hash) = scan.config_hash {
+                self.trackers[source].set_config_hash(hash);
+            }
+            if scan.keyframe {
+                keyframe = true;
+            }
+        }
+
+        let _ = self.trackers[source].take_changed();
+
+        if !keyframe {
+            return None;
+        }
+
+        let target = self.pending.pending()?;
+        let compatible = self.trackers[0]
+            .map()
+            .compatible_with(&self.trackers[1].map());
+        let target_ready = self.trackers[target].map().is_ready();
+
+        match self.pending.on_keyframe(source, compatible, target_ready) {
+            SwitchOutcome::Switch(index) => {
+                self.active = index;
+                Some(SwitchSignal::Switched(SourceTarget::from_index(index)?))
+            }
+            SwitchOutcome::Rejected(reason) => Some(SwitchSignal::Rejected(
+                SourceTarget::from_index(source)?,
+                reason,
+            )),
+            SwitchOutcome::Waiting => None,
+        }
+    }
+
+    /// Rewrite one buffer of the currently selected source so the output timeline stays continuous.
+    pub fn normalize(&mut self, data: &mut [u8]) -> Option<engine_ts::NormalizeResult> {
+        self.normalizer.normalize(data, self.active)
+    }
+
+    /// Back to a clean slate; used when a pipeline is rebuilt.
+    pub fn reset(&mut self) {
+        self.normalizer.reset();
+        self.pending.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +377,236 @@ mod tests {
         );
 
         let _ = pipeline.set_state(gstreamer::State::Null);
+    }
+}
+
+#[cfg(test)]
+mod seamless_tests {
+    use super::*;
+
+    const TS_SYNC: u8 = 0x47;
+
+    /// A PSI packet: sync + PID + payload_unit_start + pointer_field + section.
+    fn psi_packet(pid: u16, section: &[u8]) -> Vec<u8> {
+        let mut packet = vec![0xFFu8; TS_PACKET_SIZE];
+        packet[0] = TS_SYNC;
+        packet[1] = 0x40 | (((pid >> 8) as u8) & 0x1F);
+        packet[2] = (pid & 0xFF) as u8;
+        packet[3] = 0x01 << 4;
+        packet[4] = 0x00;
+        packet[5..5 + section.len()].copy_from_slice(section);
+        packet
+    }
+
+    fn pat_section(pmt_pid: u16) -> Vec<u8> {
+        let mut section = vec![0x00u8, 0x00, 0x00, 0x00, 0x01, 0xC1, 0x00, 0x00];
+        section.push(0x00);
+        section.push(0x01); // program 1
+        section.push(0xE0 | ((pmt_pid >> 8) as u8 & 0x1F));
+        section.push((pmt_pid & 0xFF) as u8);
+        let len = section.len() - 3 + 4;
+        section[1] = 0xB0 | (((len >> 8) & 0x0F) as u8);
+        section[2] = (len & 0xFF) as u8;
+        section.extend_from_slice(&[0, 0, 0, 0]);
+        section
+    }
+
+    fn pmt_section(video_pid: u16, stream_type: u8) -> Vec<u8> {
+        let mut section = vec![
+            0x02u8, 0x00, 0x00, 0x00, 0x01, 0xC1, 0x00, 0x00, 0xE0, 0x01, 0xF0, 0x00,
+        ];
+        section.push(stream_type);
+        section.push(0xE0 | ((video_pid >> 8) as u8 & 0x1F));
+        section.push((video_pid & 0xFF) as u8);
+        section.push(0xF0);
+        section.push(0x00);
+        let len = section.len() - 3 + 4;
+        section[1] = 0xB0 | (((len >> 8) & 0x0F) as u8);
+        section[2] = (len & 0xFF) as u8;
+        section.extend_from_slice(&[0, 0, 0, 0]);
+        section
+    }
+
+    /// A video packet carrying an elementary stream starting at a PES header.
+    fn pes_packet(video_pid: u16, counter: u8, es: &[u8]) -> Vec<u8> {
+        let mut packet = vec![0xFFu8; TS_PACKET_SIZE];
+        packet[0] = TS_SYNC;
+        packet[1] = 0x40 | (((video_pid >> 8) as u8) & 0x1F);
+        packet[2] = (video_pid & 0xFF) as u8;
+        packet[3] = (0x01 << 4) | (counter & 0x0F);
+
+        let payload = 4;
+        packet[payload] = 0x00;
+        packet[payload + 1] = 0x00;
+        packet[payload + 2] = 0x01;
+        packet[payload + 3] = 0xE0; // video stream id
+        packet[payload + 4] = 0x00; // PES length
+        packet[payload + 5] = 0x00;
+        packet[payload + 6] = 0x80;
+        packet[payload + 7] = 0x00;
+        packet[payload + 8] = 0x00;
+        packet[payload + 9..payload + 9 + es.len()].copy_from_slice(es);
+        packet
+    }
+
+    fn sps_es(marker: u8) -> Vec<u8> {
+        let mut es = vec![0x00, 0x00, 0x01, 0x67];
+        es.extend(std::iter::repeat_n(marker, 24));
+        es
+    }
+
+    fn idr_es() -> Vec<u8> {
+        let mut es = vec![0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00];
+        es.extend(std::iter::repeat_n(0x33, 16));
+        es
+    }
+
+    fn slice_es() -> Vec<u8> {
+        let mut es = vec![0x00, 0x00, 0x01, 0x41, 0x9A, 0x00];
+        es.extend(std::iter::repeat_n(0x44, 16));
+        es
+    }
+
+    /// What one source's buffers look like: programme tables, then elementary-stream packets.
+    fn segment(video_pid: u16, sps_marker: u8, payloads: &[Vec<u8>]) -> Vec<u8> {
+        let pmt_pid = 0x0100;
+        let mut segment = psi_packet(0x0000, &pat_section(pmt_pid));
+        segment.extend(psi_packet(pmt_pid, &pmt_section(video_pid, 0x1B)));
+
+        let mut counter = 0u8;
+        for payload in payloads {
+            segment.extend(pes_packet(video_pid, counter, payload));
+            counter = (counter + 1) & 0x0F;
+        }
+        let _ = sps_marker;
+        segment
+    }
+
+    #[test]
+    fn a_switch_waits_for_the_target_keyframe_then_completes() {
+        let mut seamless = SeamlessSwitch::new(SourceTarget::Primary);
+
+        // Both sources report their programme and configuration, but only the primary has a keyframe.
+        seamless.on_source_segment(0, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+        seamless.on_source_segment(1, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+
+        assert!(seamless.request(SourceTarget::Secondary));
+        assert_eq!(seamless.pending(), Some(SourceTarget::Secondary));
+
+        // A keyframe on the source we are LEAVING changes nothing.
+        assert_eq!(
+            seamless.on_source_segment(0, &segment(0x0101, 0xAA, &[idr_es()])),
+            None
+        );
+        assert_eq!(seamless.active(), SourceTarget::Primary);
+
+        // The target's keyframe completes the switch.
+        assert_eq!(
+            seamless.on_source_segment(1, &segment(0x0101, 0xAA, &[idr_es()])),
+            Some(SwitchSignal::Switched(SourceTarget::Secondary))
+        );
+        assert_eq!(seamless.active(), SourceTarget::Secondary);
+        assert_eq!(seamless.pending(), None);
+    }
+
+    #[test]
+    fn a_target_that_never_shows_a_keyframe_never_completes() {
+        let mut seamless = SeamlessSwitch::new(SourceTarget::Primary);
+        seamless.on_source_segment(0, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+        seamless.on_source_segment(1, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+
+        seamless.request(SourceTarget::Secondary);
+        assert_eq!(
+            seamless.on_source_segment(1, &segment(0x0101, 0xAA, &[slice_es()])),
+            None
+        );
+        assert_eq!(
+            seamless.active(),
+            SourceTarget::Primary,
+            "the active source keeps flowing"
+        );
+    }
+
+    #[test]
+    fn an_incompatible_program_is_rejected() {
+        let mut seamless = SeamlessSwitch::new(SourceTarget::Primary);
+        seamless.on_source_segment(0, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+        // Same codec, different elementary stream: not a program that can be cut together.
+        seamless.on_source_segment(1, &segment(0x0201, 0xAA, &[sps_es(0xAA)]));
+
+        seamless.request(SourceTarget::Secondary);
+        assert_eq!(
+            seamless.on_source_segment(1, &segment(0x0201, 0xAA, &[idr_es()])),
+            Some(SwitchSignal::Rejected(
+                SourceTarget::Secondary,
+                "incompatible-mpegts-map"
+            ))
+        );
+        assert_eq!(seamless.active(), SourceTarget::Primary);
+    }
+
+    #[test]
+    fn a_different_codec_configuration_is_also_incompatible() {
+        let mut seamless = SeamlessSwitch::new(SourceTarget::Primary);
+        seamless.on_source_segment(0, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+        seamless.on_source_segment(1, &segment(0x0101, 0xBB, &[sps_es(0xBB)]));
+
+        seamless.request(SourceTarget::Secondary);
+        assert!(matches!(
+            seamless.on_source_segment(1, &segment(0x0101, 0xBB, &[idr_es()])),
+            Some(SwitchSignal::Rejected(_, "incompatible-mpegts-map"))
+        ));
+    }
+
+    #[test]
+    fn normalize_continues_the_output_timeline_across_a_switch() {
+        let mut seamless = SeamlessSwitch::new(SourceTarget::Primary);
+        seamless.on_source_segment(0, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+        seamless.on_source_segment(1, &segment(0x0101, 0xAA, &[sps_es(0xAA)]));
+
+        // While the primary is still the active source, its clock sets the output timeline.
+        let mut from_primary = pcr_segment(0x0101, 1_000);
+        let first = seamless.normalize(&mut from_primary).expect("normalised");
+        assert!(!first.source_changed, "the first buffer is not a switch");
+        let first_pcr =
+            engine_ts::packet_get_pcr_90k(&from_primary[0..TS_PACKET_SIZE]).expect("pcr");
+        assert_eq!(
+            first_pcr, 1_000,
+            "no offset while the timeline is untouched"
+        );
+
+        seamless.request(SourceTarget::Secondary);
+        assert_eq!(
+            seamless.on_source_segment(1, &segment(0x0101, 0xAA, &[idr_es()])),
+            Some(SwitchSignal::Switched(SourceTarget::Secondary))
+        );
+
+        // The secondary sits on an unrelated timeline; the output must not jump to it.
+        let mut from_secondary = pcr_segment(0x0101, 900_000);
+        let second = seamless.normalize(&mut from_secondary).expect("normalised");
+        assert!(second.source_changed);
+        assert!(second.timestamps_rewritten);
+
+        let out = engine_ts::packet_get_pcr_90k(&from_secondary[0..TS_PACKET_SIZE]).expect("pcr");
+        assert!(
+            out > first_pcr && out - first_pcr < 100_000,
+            "the output must continue just past {first_pcr}, not jump to 900000 (got {out})"
+        );
+    }
+
+    fn pcr_segment(pid: u16, pcr_base: u64) -> Vec<u8> {
+        let mut packet = vec![0xFFu8; TS_PACKET_SIZE];
+        packet[0] = TS_SYNC;
+        packet[1] = ((pid >> 8) as u8) & 0x1F;
+        packet[2] = (pid & 0xFF) as u8;
+        packet[3] = 0x02 << 4;
+        packet[4] = 7;
+        packet[5] = 0x10;
+        packet[6] = ((pcr_base >> 25) & 0xFF) as u8;
+        packet[7] = ((pcr_base >> 17) & 0xFF) as u8;
+        packet[8] = ((pcr_base >> 9) & 0xFF) as u8;
+        packet[9] = ((pcr_base >> 1) & 0xFF) as u8;
+        packet[10] = (((pcr_base & 0x01) as u8) << 7) | 0x7E;
+        packet
     }
 }
