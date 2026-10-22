@@ -65,3 +65,6 @@ docs/superpowers/skills/
 
 # Generated code-graph output (stale by construction; regenerate instead of committing).
 graphify-out/
+
+# Engine binaries copied into priv/ by mix.exs for a release — build output, never source.
+/priv/native/build/
