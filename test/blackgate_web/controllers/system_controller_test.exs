@@ -41,4 +41,18 @@ defmodule BlackgateWeb.SystemControllerTest do
 
     assert is_list(json_response(conn, 200))
   end
+
+  test "the kill endpoint refuses a pid that is not an engine", %{conn: conn} do
+    # The case that matters is the node's own pid: this button must not be able to stop the gateway, and the
+    # node is still answering when the assertion below runs.
+    conn = post(conn, "/api/system/pipelines/#{System.pid()}/kill")
+
+    assert json_response(conn, 422)["error"] =~ "not a blackgate-engine process"
+  end
+
+  test "the kill endpoint refuses a pid that is not even a number", %{conn: conn} do
+    conn = post(conn, "/api/system/pipelines/not-a-pid/kill")
+
+    assert json_response(conn, 400)["error"] =~ "Invalid PID format"
+  end
 end

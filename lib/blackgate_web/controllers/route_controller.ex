@@ -85,6 +85,12 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def delete(conn, %{"id" => id}) do
+    # Stop it before dropping the records. Db.delete_route/1 only removes rows, so a route that was still
+    # running kept its engine process alive: the engine held its SDI device and appeared in Settings > System
+    # > Pipelines as a row whose route could no longer be resolved (the operator saw exactly that after
+    # deleting a test route). stop_route/1 is a no-op for a route that is not running.
+    _ = Blackgate.stop_route(id)
+
     with [:ok, :ok] <- Db.delete_route(id) do
       send_resp(conn, :no_content, "")
     end

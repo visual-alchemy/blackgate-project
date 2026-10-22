@@ -5,6 +5,24 @@ defmodule Blackgate.ProcessMonitor do
   # the system pipeline screen shows what each live pipeline consumes now.
   @linux_cpu_sample_ms 250
 
+  @doc """
+  True when `pid` is a blackgate-engine process.
+
+  Settings > System > Pipelines lets an operator kill a listed process, and the kill itself will happily take
+  any pid it is handed - measured in review: the endpoint parsed the pid and called `kill -9` with no further
+  check, so a mistyped or stale row could take down the release node, and the node owns every route's stats
+  socket. The engine binary name is read out of /proc/<pid>/cmdline, the same string
+  `list_pipeline_processes/0` filters on.
+  """
+  def engine_pid?(pid) when is_integer(pid) and pid > 1 do
+    case File.read("/proc/#{pid}/cmdline") do
+      {:ok, cmdline} -> String.contains?(cmdline, "blackgate-engine")
+      _ -> false
+    end
+  end
+
+  def engine_pid?(_pid), do: false
+
   def list_pipeline_processes do
     case :os.type() do
       {:unix, :darwin} -> list_pipeline_processes_darwin()

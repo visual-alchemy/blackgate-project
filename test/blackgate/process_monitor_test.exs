@@ -85,4 +85,37 @@ defmodule Blackgate.ProcessMonitorTest do
       assert ProcessMonitor.pipeline_route_id("") == nil
     end
   end
+
+  describe "engine_pid?/1" do
+    test "refuses the release node itself" do
+      # Settings > System > Pipelines kills whatever pid the row names, and the release node owns every
+      # route's stats socket: the node's command line is beam.smp, not the engine binary.
+      beam_pid = System.pid() |> String.to_integer()
+
+      refute ProcessMonitor.engine_pid?(beam_pid)
+    end
+
+    test "refuses pid 1 and pids that are not running" do
+      refute ProcessMonitor.engine_pid?(1)
+      refute ProcessMonitor.engine_pid?(0)
+      refute ProcessMonitor.engine_pid?(-5)
+      refute ProcessMonitor.engine_pid?(999_999_999)
+    end
+
+    test "accepts a process whose command line names the engine binary" do
+      # No real engine is needed: the predicate reads /proc/<pid>/cmdline, so a process we control that
+      # merely carries the name proves the read works.
+      port =
+        Port.open({:spawn_executable, "/bin/sh"}, [
+          :binary,
+          args: ["-c", "sleep 5", "blackgate-engine"]
+        ])
+
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+
+      assert ProcessMonitor.engine_pid?(os_pid)
+
+      Port.close(port)
+    end
+  end
 end

@@ -45,7 +45,10 @@ defmodule BlackgateWeb.SystemController do
   def add_route_names(other), do: other
 
   def kill_pipeline(conn, %{"pid" => pid_str}) do
+    # Refuse anything that is not an engine: without this the button kills whatever pid the row happens to
+    # name, and the release node owns every route's stats socket.
     with {pid, _} <- Integer.parse(pid_str),
+         :ok <- ensure_engine_pid(pid),
          {_, 0} <- Helpers.sys_kill(pid_str) do
       json(conn, %{success: true, message: "Process #{pid} killed successfully"})
     else
@@ -54,11 +57,20 @@ defmodule BlackgateWeb.SystemController do
         |> put_status(400)
         |> json(%{error: "Invalid PID format"})
 
+      {:error, :not_an_engine} ->
+        conn
+        |> put_status(422)
+        |> json(%{error: "Refusing to kill pid #{pid_str}: it is not a blackgate-engine process"})
+
       {error, _} ->
         conn
         |> put_status(500)
         |> json(%{error: "Failed to kill process: #{inspect(error)}"})
     end
+  end
+
+  defp ensure_engine_pid(pid) do
+    if Blackgate.ProcessMonitor.engine_pid?(pid), do: :ok, else: {:error, :not_an_engine}
   end
 
   # ---------------------------------------------------------------------------------------------
