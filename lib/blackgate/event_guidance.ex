@@ -58,6 +58,14 @@ defmodule Blackgate.EventGuidance do
     "failover_auto" => "none — failover is automatic; check the source that failed",
     "failover_inprocess_switch" =>
       "none — the pipeline switched source in place; check the source that failed",
+    "failover_inprocess_requested" =>
+      "none yet — the switch completes on the new source's next keyframe; a rebuild follows if none arrives",
+    "failover_inprocess_rejected" =>
+      "the two sources cannot be cut together in place: compare their video codec, resolution, framerate, " <>
+        "and programme (PID) settings",
+    "failover_inprocess_timeout" =>
+      "the new source produced no keyframe in time: check that it is really streaming, then start the route " <>
+        "if the rebuild did not recover it",
     "failover_manual_switch" => "none — the operator selected this source",
     "failover_both_invalid" =>
       "both sources are unusable: fix their configurations, then start the route",

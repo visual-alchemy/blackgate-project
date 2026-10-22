@@ -27,6 +27,11 @@ defmodule Blackgate.RouteHandler do
   # Minimum total audio buffers before we treat a silence event as a hardware desync.
   # If total_buffers < this, the source itself likely has no audio — do not restart.
   @sdi_audio_min_buffers_before_restart 5_000
+
+  # How long an in-process switch may wait for the engine's confirmation. The engine holds the switch
+  # until the TARGET source carries a keyframe (that is what makes the cut invisible); a source that is
+  # dead, stalled, or not the same programme never produces one, and silence must not look like success.
+  @switch_ack_timeout_ms 12_000
   # After an auto-restart for audio desync, wait this long before restarting again.
   # Prevents an infinite loop if the source permanently loses audio.
   # 5 minutes
@@ -64,7 +69,10 @@ defmodule Blackgate.RouteHandler do
       auto_join: Map.get(route, "auto_join", true),
       last_secondary_bytes_at: nil,
       last_secondary_bytes_received: 0,
-      both_dead_reported: false
+      both_dead_reported: false,
+      # An in-process switch that has been requested but not yet confirmed by the engine.
+      pending_switch: nil,
+      switch_ack_timer: nil
     }
 
     # Backfill active_source for routes created before failover feature
@@ -204,6 +212,23 @@ defmodule Blackgate.RouteHandler do
               if tag_src in ["primary", "secondary"], do: String.to_atom(tag_src), else: :primary
 
             put_in(acc, [:source_health, tag], :valid)
+          else
+            acc
+          end
+
+        # Confirmation of an in-process switch, and refusal of one. The engine may hold a switch until
+        # the target source carries a keyframe, so these lines can arrive seconds after the request -
+        # or never, which is what the ack timeout is for.
+        acc =
+          if String.starts_with?(line, "SOURCE_SWITCHED:") do
+            confirm_inprocess_switch(acc, line)
+          else
+            acc
+          end
+
+        acc =
+          if String.starts_with?(line, "SOURCE_SWITCH_REJECTED:") do
+            reject_inprocess_switch(acc, line)
           else
             acc
           end
@@ -634,6 +659,33 @@ defmodule Blackgate.RouteHandler do
   # target. This deliberately does NOT go through failover_restart/1, which would apply the mode's
   # policy a second time and could immediately move the source again - the target here is already the
   # decision.
+  # The engine never confirmed the switch. The usual cause is a target source that never produced a
+  # keyframe, which is exactly the case where an in-place cut would have been wrong anyway. Fall back
+  # to the rebuild: the operator's choice still takes effect, it just costs the short black gap.
+  def handle_event(:info, {:switch_ack_timeout, target}, :started, data) do
+    Blackgate.EventLog.log(
+      :warning,
+      "failover_inprocess_timeout",
+      "No keyframe from #{target} within #{div(@switch_ack_timeout_ms, 1000)}s; " <>
+        "rebuilding the pipeline on it instead of cutting in place",
+      %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+    )
+
+    send(self(), {:switch_source_restart, target})
+    {:keep_state, clear_switch_ack(data)}
+  end
+
+  def handle_event(:info, {:switch_ack_timeout, _target}, _state, _data) do
+    :keep_state_and_data
+  end
+
+  # Arming is a separate event on purpose: both the manual and the automatic path send the command
+  # from deep inside a reducer, where the only thing that can be returned is data. This keeps the
+  # "a switch was requested" bookkeeping in one place instead of duplicating it at both sites.
+  def handle_event(:info, {:arm_switch_ack, target}, _state, data) do
+    {:keep_state, arm_switch_ack(data, target)}
+  end
+
   def handle_event(:info, {:switch_source_restart, target}, :started, data)
       when target in ["primary", "secondary"] do
     Logger.warning("RouteHandler: switching source to #{target} by rebuilding the pipeline")
@@ -691,11 +743,13 @@ defmodule Blackgate.RouteHandler do
 
       Blackgate.EventLog.log(
         :info,
-        "failover_inprocess_switch",
-        "Switched active source to #{target} (in-process)",
+        "failover_inprocess_requested",
+        "Requested #{target} in place; the switch completes on its next keyframe " <>
+          "(a rebuild is used if none arrives within #{div(@switch_ack_timeout_ms, 1000)}s)",
         %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
       )
 
+      send(self(), {:arm_switch_ack, target})
       updated_route = Map.put(data.route, "active_source", target)
 
       {:keep_state,
@@ -1098,10 +1152,11 @@ defmodule Blackgate.RouteHandler do
             Blackgate.EventLog.log(
               :warning,
               "failover_auto",
-              "Auto-switched to #{target} (mode=#{mode})",
+              "Auto-switching to #{target} in place (mode=#{mode}); completes on its next keyframe",
               %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
             )
           else
+            send(self(), {:arm_switch_ack, target})
             send(self(), {:switch_source_restart, target})
 
             Blackgate.EventLog.log(
@@ -1899,5 +1954,48 @@ defmodule Blackgate.RouteHandler do
   if Mix.env() == :test do
     @doc false
     def evaluate_failover_for_test(data), do: evaluate_failover(data)
+  end
+
+  defp arm_switch_ack(data, target) do
+    if data.switch_ack_timer, do: Process.cancel_timer(data.switch_ack_timer)
+
+    timer = Process.send_after(self(), {:switch_ack_timeout, target}, @switch_ack_timeout_ms)
+    %{data | pending_switch: target, switch_ack_timer: timer}
+  end
+
+  defp clear_switch_ack(data) do
+    if data.switch_ack_timer, do: Process.cancel_timer(data.switch_ack_timer)
+    %{data | pending_switch: nil, switch_ack_timer: nil}
+  end
+
+  # SOURCE_SWITCHED:<target>
+  defp confirm_inprocess_switch(data, line) do
+    target = line |> String.split(":", parts: 2) |> List.last() |> String.trim()
+
+    Blackgate.EventLog.log(
+      :info,
+      "failover_inprocess_switch",
+      "Switched active source to #{target} in place (no rebuild, output timeline normalised)",
+      %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+    )
+
+    clear_switch_ack(data)
+  end
+
+  # SOURCE_SWITCH_REJECTED:<target>:<reason> — the two programmes cannot be cut together.
+  defp reject_inprocess_switch(data, line) do
+    parts = String.split(line, ":", parts: 3)
+    target = parts |> Enum.at(1, "secondary") |> String.trim()
+    reason = parts |> Enum.at(2, "unknown") |> String.trim()
+
+    Blackgate.EventLog.log(
+      :warning,
+      "failover_inprocess_rejected",
+      "Cannot cut to #{target} in place (#{reason}); rebuilding the pipeline instead",
+      %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+    )
+
+    send(self(), {:switch_source_restart, target})
+    clear_switch_ack(data)
   end
 end
