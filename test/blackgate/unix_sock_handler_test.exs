@@ -2,6 +2,11 @@ defmodule Blackgate.UnixSockHandlerTest do
   use ExUnit.Case
   alias Blackgate.UnixSockHandler
 
+  # Every engine record is newline-terminated (the unframed "route_id:" / "stats_source_stream_id:"
+  # writes were fixed at the source), so the handler buffers per connection and parses COMPLETE
+  # records. The tests below therefore feed whole records, and the boundary tests at the end cover
+  # the chunk shapes that used to be dropped silently.
+
   test "callback_mode returns handle_event_function" do
     assert UnixSockHandler.callback_mode() == [:handle_event_function]
   end
@@ -12,7 +17,7 @@ defmodule Blackgate.UnixSockHandlerTest do
 
   test "handle_event with route_id message" do
     route_id = "test_route"
-    message = {:tcp, nil, "route_id:" <> route_id}
+    message = {:tcp, nil, "route_id:" <> route_id <> "\n"}
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: nil, route_record: nil}
 
@@ -21,7 +26,7 @@ defmodule Blackgate.UnixSockHandlerTest do
   end
 
   test "handle_event with empty route_id message" do
-    message = {:tcp, nil, "route_id:"}
+    message = {:tcp, nil, "route_id:\n"}
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: nil, route_record: nil}
 
@@ -31,7 +36,7 @@ defmodule Blackgate.UnixSockHandlerTest do
 
   test "handle_event with stats_json message and exportStats true" do
     json = ~s({"bytes_sent": 1000, "bytes_received": 2000})
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, "stats_json:" <> json <> "\n"}
     state = :exchange
 
     data = %{
@@ -42,12 +47,12 @@ defmodule Blackgate.UnixSockHandlerTest do
       route_record: %{"exportStats" => true, "name" => "test"}
     }
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
   end
 
   test "handle_event with invalid stats_json message" do
     json = ~s({invalid_json)
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, "stats_json:" <> json <> "\n"}
     state = :exchange
 
     data = %{
@@ -58,12 +63,12 @@ defmodule Blackgate.UnixSockHandlerTest do
       route_record: %{"exportStats" => true, "name" => "test"}
     }
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
   end
 
   test "handle_event with stats_json message and exportStats false" do
     json = ~s({"bytes_sent": 1000, "bytes_received": 2000})
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, "stats_json:" <> json <> "\n"}
     state = :exchange
 
     data = %{
@@ -74,12 +79,12 @@ defmodule Blackgate.UnixSockHandlerTest do
       route_record: %{"exportStats" => false}
     }
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
   end
 
   test "handle_event with stats_json message and missing route_record" do
     json = ~s({"bytes_sent": 1000, "bytes_received": 2000})
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, "stats_json:" <> json <> "\n"}
     state = :exchange
 
     data = %{
@@ -90,12 +95,12 @@ defmodule Blackgate.UnixSockHandlerTest do
       route_record: nil
     }
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
   end
 
   test "handle_event with stats_source_stream_id message" do
     stream_id = "test_stream"
-    message = {:tcp, nil, "stats_source_stream_id:" <> stream_id}
+    message = {:tcp, nil, "stats_source_stream_id:" <> stream_id <> "\n"}
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: nil, route_record: nil}
 
@@ -104,7 +109,7 @@ defmodule Blackgate.UnixSockHandlerTest do
   end
 
   test "handle_event with empty stats_source_stream_id message" do
-    message = {:tcp, nil, "stats_source_stream_id:"}
+    message = {:tcp, nil, "stats_source_stream_id:\n"}
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: nil, route_record: nil}
 
@@ -112,26 +117,26 @@ defmodule Blackgate.UnixSockHandlerTest do
     assert new_data.source_stream_id == ""
   end
 
-  test "handle_event re-dispatches a sink payload that follows a newline" do
-    # The engine can flush the previous message's terminator in the same chunk
-    # as the next payload ("\nstats_sink:{...}"). Dropping that silently lost
-    # every sink stat whenever the chunk boundary landed there.
+  test "handle_event processes a sink payload that follows a terminator" do
+    # The engine can flush the previous record's terminator in the same chunk as the next payload
+    # ("\nstats_sink:{...}"). That is no longer a special case: the leading empty record is skipped
+    # and the sink record is parsed as a whole.
     route_id = "newline_sink_route"
     json = ~s({"sink-index":0,"bytes-sent-total":1234})
-    message = {:tcp, nil, "\nstats_sink:" <> json}
+    message = {:tcp, nil, "\nstats_sink:" <> json <> "\n"}
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: route_id, route_record: nil}
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
 
     assert %{stats: %{"bytes-sent-total" => 1234}} =
              Blackgate.RouteStatsRegistry.get_sink_stats(route_id, 0)
   end
 
-  test "handle_event re-dispatches a source payload that follows a newline" do
+  test "handle_event processes a source payload that follows a terminator" do
     route_id = "newline_source_route"
     json = ~s({"total-bytes-received":4321})
-    message = {:tcp, nil, "\n" <> json}
+    message = {:tcp, nil, "\n" <> json <> "\n"}
     state = :exchange
 
     data = %{
@@ -142,26 +147,34 @@ defmodule Blackgate.UnixSockHandlerTest do
       route_record: %{"exportStats" => false, "name" => "newline source"}
     }
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
 
     assert %{stats: %{"total-bytes-received" => 4321}} =
              Blackgate.RouteStatsRegistry.get_stats(route_id)
   end
 
-  test "handle_event routes a sink payload whose prefix was split into another chunk" do
-    # Chunk boundaries can land between "stats_sink:" and its JSON. The orphaned
-    # JSON used to be parsed as SOURCE stats, overwriting the source slot.
+  test "handle_event routes a sink record whose bytes were split across chunks" do
+    # The bug this replaces: a chunk that began inside a JSON payload matched no clause, fell into
+    # the catch-all and its stats were dropped without a trace.
     route_id = "split_sink_route"
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: route_id, route_record: nil}
 
     assert {:keep_state, data} =
-             UnixSockHandler.handle_event(:info, {:tcp, nil, "stats_sink:"}, state, data)
+             UnixSockHandler.handle_event(
+               :info,
+               {:tcp, nil, "stats_sink:{\"sink-index\":0,"},
+               state,
+               data
+             )
+
+    # Nothing is parsed until the record is complete.
+    assert Blackgate.RouteStatsRegistry.get_sink_stats(route_id, 0) == nil
 
     assert {:keep_state, _data} =
              UnixSockHandler.handle_event(
                :info,
-               {:tcp, nil, ~s({"sink-index":0,"bytes-sent-total":77})},
+               {:tcp, nil, "\"bytes-sent-total\":77}\n"},
                state,
                data
              )
@@ -174,16 +187,16 @@ defmodule Blackgate.UnixSockHandlerTest do
   end
 
   test "handle_event ignores a bare newline" do
-    assert :keep_state_and_data =
+    assert {:keep_state, _} =
              UnixSockHandler.handle_event(:info, {:tcp, nil, "\n"}, :exchange, %{})
   end
 
   test "handle_event with undefined message" do
-    message = {:tcp, nil, "undefined_message"}
+    message = {:tcp, nil, "undefined_message\n"}
     state = :exchange
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: nil, route_record: nil}
 
-    assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+    assert {:keep_state, _} = UnixSockHandler.handle_event(:info, message, state, data)
   end
 
   test "handle_event with non-tcp message" do
@@ -192,6 +205,48 @@ defmodule Blackgate.UnixSockHandlerTest do
     data = %{sock: nil, trans: nil, source_stream_id: nil, route_id: nil, route_record: nil}
 
     assert :keep_state_and_data = UnixSockHandler.handle_event(:info, message, state, data)
+  end
+
+  test "an engine transport exit stops the handler instead of logging an undefined message" do
+    # trap_exit is on, so this arrives as a plain message; without a clause each engine that went
+    # away logged an "Undefined msg" error as it left.
+    assert {:stop, :normal} =
+             UnixSockHandler.handle_event(:info, {:EXIT, nil, :normal}, :exchange, %{})
+  end
+
+  test "a closed socket stops the handler" do
+    assert {:stop, :normal} =
+             UnixSockHandler.handle_event(:info, {:tcp_closed, nil}, :exchange, %{})
+  end
+
+  ## Boundary cases: TCP gives no record boundaries, the handler must supply them
+
+  test "split_lines reassembles a record cut in the middle" do
+    {lines, rest} = UnixSockHandler.split_lines(~s({"source":"primary","rate":10.))
+    assert lines == []
+    assert rest == ~s({"source":"primary","rate":10.)
+
+    {lines, rest} = UnixSockHandler.split_lines(rest <> "34}\n")
+    assert lines == [~s({"source":"primary","rate":10.34})]
+    assert rest == ""
+  end
+
+  test "split_lines returns every record from one chunk" do
+    {lines, rest} =
+      UnixSockHandler.split_lines("stats_sink:{\"sink-index\":0}\n{\"source\":\"primary\"}\n")
+
+    assert lines == ["stats_sink:{\"sink-index\":0}", "{\"source\":\"primary\"}"]
+    assert rest == ""
+  end
+
+  test "split_lines keeps a partial trailing record" do
+    {lines, rest} = UnixSockHandler.split_lines("{\"a\":1}\nstats_sink:{\"b\":2}")
+    assert lines == ["{\"a\":1}"]
+    assert rest == ~s(stats_sink:{"b":2})
+  end
+
+  test "split_lines on an empty buffer yields nothing to parse" do
+    assert {[], ""} = UnixSockHandler.split_lines("")
   end
 
   test "terminate returns ok" do

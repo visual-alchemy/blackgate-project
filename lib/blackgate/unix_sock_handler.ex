@@ -1,5 +1,18 @@
 defmodule Blackgate.UnixSockHandler do
-  @moduledoc false
+  @moduledoc """
+  One engine connection on the node's stats socket (Unix domain socket).
+
+  The engine writes newline-terminated records: `route_id:<id>`, then source stats JSON and/or
+  `stats_sink:<json>` per output, repeatedly. TCP is a byte stream with no record boundaries, so this
+  handler buffers per connection and only ever parses COMPLETE records.
+
+  It used to match `{:tcp, port, "..."}` clause-by-clause against the raw chunk, which silently
+  required every chunk to begin exactly on a record boundary. A chunk starting inside a JSON payload
+  matched no clause, fell into the catch-all and its stats were dropped without a trace - which is
+  what made a route's `health` flap between `healthy` and `disconnected` - while that same catch-all
+  printed the entire route record as an error, flooding the log with hundreds of lines a minute and
+  burying the operator-facing events next to them.
+  """
 
   require Logger
 
@@ -51,21 +64,57 @@ defmodule Blackgate.UnixSockHandler do
       trans: trans,
       source_stream_id: nil,
       route_id: nil,
-      route_record: nil
+      route_record: nil,
+      buffer: ""
     }
 
     :gen_statem.enter_loop(__MODULE__, [hibernate_after: 5_000], :exchange, data)
   end
 
   @impl true
-  def handle_event(:info, {:tcp, _port, "route_id:" <> route_id}, _state, data) do
+  def handle_event(:info, {:tcp, _port, chunk}, _state, data) do
+    {lines, rest} = split_lines(Map.get(data, :buffer, "") <> chunk)
+
+    data =
+      lines
+      |> Enum.reduce(Map.put(data, :buffer, rest), fn line, acc -> handle_line(line, acc) end)
+
+    {:keep_state, data}
+  end
+
+  def handle_event(:info, {:tcp_closed, _port}, _state, _data) do
+    Logger.debug("UnixSockHandler: socket closed by client")
+    {:stop, :normal}
+  end
+
+  # trap_exit is on, so the transport exit arrives as a plain message; without this clause it hit
+  # the catch-all below and every engine that went away logged an "Undefined msg" error as it left.
+  def handle_event(:info, {:EXIT, _port, reason}, _state, _data) do
+    Logger.debug("UnixSockHandler: exiting with reason #{inspect(reason)}")
+    {:stop, :normal}
+  end
+
+  def handle_event(type, content, state, data) do
+    # Bounded on purpose: pretty-printing the whole route record here turned a single unexpected
+    # message into hundreds of log lines and buried the events the operator actually reads.
+    Logger.warning(
+      "SocketHandler: unexpected event type=#{inspect(type)} content=#{inspect(content, limit: 4, printable_limit: 200)}"
+    )
+
+    Logger.debug("SocketHandler: state=#{inspect(state)} data=#{inspect(data, limit: 6)}")
+
+    :keep_state_and_data
+  end
+
+  ## Records — handled one COMPLETE newline-terminated record at a time
+
+  @doc false
+  def handle_line("route_id:" <> route_id, data) do
     route_id = String.trim(route_id)
-    Logger.info("route_id: #{route_id}")
 
     route_record =
       case Db.get_route(route_id, true) do
         {:ok, record} ->
-          Logger.info("route_record: #{inspect(record, pretty: true)}")
           record
 
         other ->
@@ -73,59 +122,37 @@ defmodule Blackgate.UnixSockHandler do
           nil
       end
 
-    {:keep_state, %{data | route_id: route_id, route_record: route_record}}
+    Logger.debug("UnixSockHandler: route_id=#{route_id}")
+
+    %{data | route_id: route_id, route_record: route_record}
   end
 
-  def handle_event(:info, {:tcp, _port, "\n"}, _state, _data), do: :keep_state_and_data
-  def handle_event(:info, {:tcp, _port, ""}, _state, _data), do: :keep_state_and_data
+  def handle_line(line, data) when line in ["", "\r", "\n"], do: data
 
-  # Each sink record is written as prefix + JSON + newline (the C engine does the
-  # same), so a socket chunk can end right after the "stats_sink:" prefix.
-  # Remember it and route the next chunk to the sink slot; otherwise the orphaned
-  # JSON is parsed as SOURCE stats, which corrupted the source slot (health
-  # flapped to "disconnected" and the stall watchdog read the byte counter as 0).
-  def handle_event(:info, {:tcp, _port, "stats_sink:"}, _state, data) do
-    {:keep_state, Map.put(data, :pending_sink, true)}
-  end
-
-  def handle_event(:info, {:tcp, _port, "{" <> _ = message}, _state, data)
-      when is_map_key(data, :pending_sink) do
+  # Prefix and payload are written as ONE record by the engine, so per-line buffering can no longer
+  # orphan the "stats_sink:" prefix from its JSON at a chunk boundary.
+  def handle_line("stats_sink:" <> json, data) do
     if is_binary(data.route_id) do
-      case Jason.decode(message) do
+      case Jason.decode(String.trim(json)) do
         {:ok, stats} ->
-          Blackgate.RouteStatsRegistry.put_sink_stats(
-            data.route_id,
-            stats["sink-index"] || 0,
-            stats
-          )
+          RouteStatsRegistry.put_sink_stats(data.route_id, stats["sink-index"] || 0, stats)
 
         _ ->
           :ok
       end
     end
 
-    {:keep_state, Map.delete(data, :pending_sink)}
+    data
   end
 
-  # The engine writes each message newline-terminated, but its writer can flush
-  # the previous message's terminator in the same TCP chunk as the next payload,
-  # so a chunk arrives as "\nstats_sink:{...}" or "\n{...}". Without this the
-  # leading newline matches no clause and the payload falls into the catch-all
-  # below, silently dropping the stats (observed: 54 dropped sink-stat messages).
-  def handle_event(:info, {:tcp, port, "\n" <> rest}, state, data) when rest != "" do
-    handle_event(:info, {:tcp, port, rest}, state, data)
+  def handle_line("stats_source_stream_id:" <> stream_id, data) do
+    %{data | source_stream_id: String.trim(stream_id)}
   end
 
-  def handle_event(
-        :info,
-        {:tcp, _port, "{" <> _ = message},
-        _,
-        data
-      ) do
-    # Handle potentially concatenated source + sink stats messages
-    {source_json, sink_json} = split_stats_message(message)
+  def handle_line("{" <> _ = line, data) do
+    # A record may still carry both parts when the engine flushes source and sink together.
+    {source_json, sink_json} = split_stats_message(String.trim(line))
 
-    # Process source stats
     if source_json do
       case Jason.decode(source_json) do
         {:ok, %{"type" => "warning"} = warning} ->
@@ -156,66 +183,35 @@ defmodule Blackgate.UnixSockHandler do
       end
     end
 
-    # Process sink stats if present
     if sink_json do
       case Jason.decode(sink_json) do
         {:ok, stats} ->
-          sink_index = stats["sink-index"] || 0
-          RouteStatsRegistry.put_sink_stats(data.route_id, sink_index, stats)
+          RouteStatsRegistry.put_sink_stats(data.route_id, stats["sink-index"] || 0, stats)
 
         _ ->
           :ok
       end
     end
 
-    :keep_state_and_data
+    data
   end
 
-  def handle_event(
-        :info,
-        {:tcp, _port, "stats_sink:" <> json},
-        _state,
-        %{route_id: route_id} = _data
-      )
-      when is_binary(route_id) do
-    case Jason.decode(json) do
-      {:ok, stats} ->
-        sink_index = stats["sink-index"] || 0
-        RouteStatsRegistry.put_sink_stats(route_id, sink_index, stats)
+  def handle_line(line, data) do
+    Logger.warning("UnixSockHandler: unrecognised record #{inspect(line, printable_limit: 200)}")
+    data
+  end
 
-      _ ->
-        :ok
+  @doc """
+  Split a byte buffer into complete records plus the trailing partial one.
+
+  Public because its boundary cases ARE the bug that used to drop stats: a JSON payload cut in the
+  middle, a terminator arriving in the same chunk as the next payload, several records in one chunk.
+  """
+  def split_lines(buffer) do
+    case String.split(buffer, "\n") do
+      [partial] -> {[], partial}
+      parts -> {Enum.drop(parts, -1), List.last(parts)}
     end
-
-    :keep_state_and_data
-  end
-
-  def handle_event(:info, {:tcp, _port, "stats_sink:" <> _}, _, _) do
-    # ignore sink stats when no route_id
-    :keep_state_and_data
-  end
-
-  def handle_event(:info, {:tcp, _port, "stats_source_stream_id:" <> stream_id}, _state, data) do
-    Logger.info("stats_source_stream_id: #{stream_id}")
-    {:keep_state, %{data | source_stream_id: stream_id}}
-  end
-
-  def handle_event(:info, {:tcp_closed, _port}, _state, _data) do
-    Logger.debug("UnixSockHandler: socket closed by client")
-    {:stop, :normal}
-  end
-
-  def handle_event(type, content, state, data) do
-    msg = [
-      {"type", type},
-      {"content", content},
-      {"state", state},
-      {"data", data}
-    ]
-
-    Logger.error("SocketHandler: Undefined msg: #{inspect(msg, pretty: true)}")
-
-    :keep_state_and_data
   end
 
   @impl true

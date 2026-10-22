@@ -76,9 +76,12 @@ fn connect_unix_socket(route_id: &str, shadow: bool) -> SharedSocket {
     match UnixStream::connect(&socket_path) {
         Ok(mut stream) => {
             println!("Connected to the socket.");
-            // C: two raw sends — "route_id:" + argv[1], no newline
+            // C left this record unframed ("route_id:" + argv[1], no newline), so the node's
+            // socket handler had to guess where the id ended and could not buffer the stream
+            // safely. Every other record on this socket is newline-terminated; so is this one now.
             let _ = stream.write_all(b"route_id:");
             let _ = stream.write_all(route_id.as_bytes());
+            let _ = stream.write_all(b"\n");
             let _ = stream.flush();
             Arc::new(Mutex::new(stream))
         }

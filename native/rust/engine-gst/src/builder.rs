@@ -482,8 +482,11 @@ unsafe extern "C" fn on_caller_connecting_cb(
 
     if !stream_id.is_null() {
         use std::ffi::CStr;
+        // Same framing rule as the route_id record: terminated, so the node's handler can
+        // buffer on newlines instead of guessing boundaries inside a TCP chunk.
         engine_stats::send_raw(&data.socket, b"stats_source_stream_id:");
         engine_stats::send_raw(&data.socket, CStr::from_ptr(stream_id).to_bytes());
+        engine_stats::send_raw(&data.socket, b"\n");
     }
 }
 
