@@ -86,7 +86,6 @@ dependencies = [
  "anyhow",
  "engine-config",
  "engine-metadata",
- "engine-sdi",
  "engine-stats",
  "engine-thumbnail",
  "gio",
@@ -99,15 +98,6 @@ name = "engine-metadata"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "gstreamer",
-]
-
-[[package]]
-name = "engine-sdi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "engine-config",
  "gstreamer",
 ]
 

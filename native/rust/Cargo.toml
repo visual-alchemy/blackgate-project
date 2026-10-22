@@ -1,5 +1,5 @@
 [workspace]
-members = ["blackgate-engine", "engine-config", "engine-gst", "engine-failover", "engine-sdi", "engine-metadata", "engine-stats", "engine-thumbnail", "engine-ts"]
+members = ["blackgate-engine", "engine-config", "engine-gst", "engine-failover", "engine-metadata", "engine-stats", "engine-thumbnail", "engine-ts"]
 default-members = ["blackgate-engine"]
 resolver = "2"
 # Migration-era binaries (spikes and the stats-socket shadow client) live under tools/ and
