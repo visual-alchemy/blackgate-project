@@ -1258,19 +1258,43 @@ const Settings = () => {
                 shape worked in every browser tested here and still refused to open the client's file
                 dialog on a real deployment, with the click chain instrumented and error-free - so the
                 upload no longer depends on the browser honouring a synthetic click at all. */}
-            <Upload.Dragger
-              accept=".bgupdate"
-              multiple={false}
-              disabled={uploadingPackage}
-              showUploadList={false}
-              customRequest={({ file }) => handlePackageUpload(file)}
-              style={{ marginBottom: 16, maxWidth: 560 }}
-            >
-              <p className="ant-upload-drag-icon">
-                <UploadOutlined />
-              </p>
-              <p className="ant-upload-text">Upload package (.bgupdate)</p>
-            </Upload.Dragger>
+            {/* Two independent paths on purpose. AntD's Dragger hides its input and clicks it from
+                JavaScript, exactly like the button it replaced, and a synthetic click is what failed to
+                open a client's file dialog. A <label htmlFor> forwarding to its input is a browser
+                primitive instead: no JavaScript is involved, so a click on it opens the dialog wherever
+                click-to-upload works at all. Dragging a file onto the zone below needs no dialog at all. */}
+            <Space direction="vertical" size="small" style={{ width: '100%', maxWidth: 560, marginBottom: 16 }}>
+              <div>
+                <label
+                  htmlFor="bgupdate-file-input"
+                  className="ant-btn ant-btn-default"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                >
+                  <UploadOutlined />
+                  Choose .bgupdate file
+                </label>
+                <input
+                  id="bgupdate-file-input"
+                  type="file"
+                  accept=".bgupdate"
+                  disabled={uploadingPackage}
+                  onChange={(event) => handlePackageUpload(event.target.files?.[0])}
+                  style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+                />
+              </div>
+              <Upload.Dragger
+                accept=".bgupdate"
+                multiple={false}
+                disabled={uploadingPackage}
+                showUploadList={false}
+                customRequest={({ file }) => handlePackageUpload(file)}
+              >
+                <p className="ant-upload-drag-icon">
+                  <UploadOutlined />
+                </p>
+                <p className="ant-upload-text">or drop the .bgupdate package here</p>
+              </Upload.Dragger>
+            </Space>
             {uploadingPackage && (
               <Progress percent={uploadProgress} size="small" style={{ width: '200px', marginBottom: 16 }} />
             )}
