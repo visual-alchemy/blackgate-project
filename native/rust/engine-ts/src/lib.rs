@@ -406,6 +406,254 @@ fn find_first_timestamp(data: &[u8]) -> Option<(u64, bool)> {
     first_pts.map(|pts| (pts, false))
 }
 
+// ── Elementary-stream scan: is this payload a cut point, and what codec config is it? ────────────
+
+/// Which elementary-stream codec the scan looks for, from the PMT's stream_type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamKind {
+    H264,
+    Hevc,
+    Mpeg2,
+    Unknown,
+}
+
+impl StreamKind {
+    /// The MPEG-TS `stream_type` mapping (the C engine's STREAM_TYPE_* set).
+    pub fn from_stream_type(stream_type: u8) -> Self {
+        match stream_type {
+            0x1B => StreamKind::H264,
+            0x24 => StreamKind::Hevc,
+            0x02 => StreamKind::Mpeg2,
+            _ => StreamKind::Unknown,
+        }
+    }
+}
+
+/// Trailing payload bytes carried into the next scan: an elementary-stream start code can straddle
+/// two buffers, and a scan that forgets them misses the keyframe at exactly the moment a switch is
+/// waiting for it.
+const ES_TAIL_LEN: usize = TS_PACKET_SIZE + 4;
+
+/// FNV-1a over a codec configuration block. Only ever compared against another value produced here,
+/// so the width is ours to choose: what matters is that two sources hash equal exactly when they
+/// carry the same configuration.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    hash
+}
+
+/// What one payload scan found.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct EsScan {
+    pub keyframe: bool,
+    /// Set when this payload carried the codec configuration (SPS / sequence header).
+    pub config_hash: Option<u64>,
+}
+
+/// Per-source elementary-stream scanner.
+#[derive(Debug, Clone, Default)]
+pub struct EsScanner {
+    tail: Vec<u8>,
+    kind: Option<StreamKind>,
+    config_hash: Option<u64>,
+}
+
+impl EsScanner {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_kind(&mut self, kind: StreamKind) {
+        self.kind = Some(kind);
+    }
+
+    pub fn config_hash(&self) -> Option<u64> {
+        self.config_hash
+    }
+
+    /// Scan one payload for a cut point (a random-access picture) and for the codec configuration.
+    pub fn scan(&mut self, payload: &[u8]) -> EsScan {
+        let mut scan = Vec::with_capacity(self.tail.len() + payload.len());
+        scan.extend_from_slice(&self.tail);
+        scan.extend_from_slice(payload);
+
+        let mut found = EsScan::default();
+
+        let mut i = 0usize;
+        while i + 5 < scan.len() {
+            if scan[i] != 0 || scan[i + 1] != 0 || scan[i + 2] != 1 {
+                i += 1;
+                continue;
+            }
+
+            let code = scan[i + 3];
+            let available = scan.len() - (i + 3);
+
+            match self.kind {
+                Some(StreamKind::H264) => match code & 0x1F {
+                    7 if available >= 12 => {
+                        self.config_hash = Some(fnv1a(&scan[i + 3..i + 15]));
+                        found.config_hash = self.config_hash;
+                    }
+                    5 => found.keyframe = true,
+                    _ => {}
+                },
+                Some(StreamKind::Hevc) => match (code >> 1) & 0x3F {
+                    33 if available >= 16 => {
+                        self.config_hash = Some(fnv1a(&scan[i + 3..i + 19]));
+                        found.config_hash = self.config_hash;
+                    }
+                    16..=21 => found.keyframe = true,
+                    _ => {}
+                },
+                Some(StreamKind::Mpeg2) => {
+                    if code == 0xB3 && available >= 8 {
+                        self.config_hash = Some(fnv1a(&scan[i + 3..i + 11]));
+                        found.config_hash = self.config_hash;
+                    } else if code == 0x00 && ((scan[i + 5] >> 3) & 0x07) == 1 {
+                        // Picture header: picture_coding_type 1 is an I picture.
+                        found.keyframe = true;
+                    }
+                }
+                // An unknown codec cannot be cut safely, so nothing is ever reported as a cut point.
+                Some(StreamKind::Unknown) | None => {}
+            }
+
+            i += 1;
+        }
+
+        let keep = scan.len().min(ES_TAIL_LEN);
+        self.tail = scan[scan.len() - keep..].to_vec();
+
+        found
+    }
+}
+
+// ── Program map: what has to match for two sources to be cut together ───────────────────────────
+
+/// One source's MPEG-TS program identity, as far as a switch cares: the video elementary stream, its
+/// codec, the audio set, and the codec configuration itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProgramMap {
+    pub video_pid: u16,
+    pub video_stream_type: u8,
+    pub audio_pids: Vec<u16>,
+    pub codec_config_hash: Option<u64>,
+}
+
+impl ProgramMap {
+    /// Ready once the video stream and its codec configuration have both been seen. Until then there
+    /// is nothing to compare, and a switch must wait rather than guess.
+    pub fn is_ready(&self) -> bool {
+        self.video_pid != 0 && self.codec_config_hash.is_some()
+    }
+
+    /// Two sources can be cut together only when the decoder would see the same program shape and the
+    /// same codec configuration across the change: same video PID and stream type, same audio set,
+    /// same SPS/sequence-header hash. Anything else is what the reference calls an incompatible
+    /// MPEG-TS map, and it must fall back to rebuilding the pipeline.
+    pub fn compatible_with(&self, other: &Self) -> bool {
+        if !self.is_ready() || !other.is_ready() {
+            return false;
+        }
+
+        let mut ours = self.audio_pids.clone();
+        let mut theirs = other.audio_pids.clone();
+        ours.sort_unstable();
+        theirs.sort_unstable();
+
+        self.video_pid == other.video_pid
+            && self.video_stream_type == other.video_stream_type
+            && ours == theirs
+            && self.codec_config_hash == other.codec_config_hash
+    }
+}
+
+// ── The guarded switch: hold the selector until the target source proves it is cuttable ─────────
+
+/// What the caller should do after the pending state was fed an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchOutcome {
+    /// Still waiting, or nothing was requested.
+    Waiting,
+    /// Move the selector to this source now and report `SOURCE_SWITCHED`.
+    Switch(usize),
+    /// The requested source cannot be cut to; report the rejection and fall back to a rebuild.
+    Rejected(&'static str),
+}
+
+/// A requested source change that has not been acted on yet.
+///
+/// The switch is deliberately NOT performed when it is requested. It completes only once the TARGET
+/// source has been observed to carry a keyframe, so the decoder starts on a clean picture, and only
+/// when the two programs are compatible. Until then the active source keeps flowing - which is why
+/// this costs neither a black gap nor macroblocks, the two failure modes measured on the operator's
+/// box. The caller applies its own timeout: a request that never completes falls back to a rebuild.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PendingSwitch {
+    pending: Option<usize>,
+}
+
+impl PendingSwitch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pending(&self) -> Option<usize> {
+        self.pending
+    }
+
+    /// Ask to move to `target` (0 = primary, 1 = secondary). Requesting the active source is not a
+    /// switch, and anything outside 0..=1 cannot be honoured.
+    pub fn request(&mut self, target: usize, active: usize) -> SwitchOutcome {
+        if target > 1 {
+            return SwitchOutcome::Rejected("invalid target");
+        }
+        if target == active {
+            self.pending = None;
+            return SwitchOutcome::Waiting;
+        }
+
+        self.pending = Some(target);
+        SwitchOutcome::Waiting
+    }
+
+    /// A keyframe was seen on `source`. Complete the switch when that source is the requested one and
+    /// the programs are compatible; reject when it is the requested one but they are not; keep
+    /// waiting while the target's program is not proven ready.
+    pub fn on_keyframe(
+        &mut self,
+        source: usize,
+        maps_compatible: bool,
+        target_ready: bool,
+    ) -> SwitchOutcome {
+        if self.pending != Some(source) {
+            return SwitchOutcome::Waiting;
+        }
+
+        if !target_ready {
+            return SwitchOutcome::Waiting;
+        }
+
+        if !maps_compatible {
+            self.pending = None;
+            return SwitchOutcome::Rejected("incompatible-mpegts-map");
+        }
+
+        self.pending = None;
+        SwitchOutcome::Switch(source)
+    }
+
+    /// Drop any request (a pipeline rebuild, or a stop).
+    pub fn clear(&mut self) {
+        self.pending = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,6 +889,233 @@ mod tests {
             packet_get_pcr_90k(&fresh),
             Some(10_000),
             "no offset on the first run"
+        );
+    }
+
+    // ── Elementary-stream scan ────────────────────────────────────────────────────────────────
+
+    /// An H.264 payload with a NAL of the given type, padded enough to hash when it is an SPS.
+    fn h264_nal(nal_type: u8, extra: usize) -> Vec<u8> {
+        let mut payload = vec![0x00, 0x00, 0x01, nal_type & 0x1F];
+        payload.extend(std::iter::repeat_n(0xAB, extra));
+        payload
+    }
+
+    #[test]
+    fn h264_idr_is_a_cut_point_and_an_sps_is_the_config_fingerprint() {
+        let mut scanner = EsScanner::new();
+        scanner.set_kind(StreamKind::H264);
+
+        assert!(
+            !scanner.scan(&h264_nal(1, 20)).keyframe,
+            "a plain slice is not a cut point"
+        );
+        assert!(scanner.config_hash().is_none());
+
+        let scan = scanner.scan(&h264_nal(7, 32));
+        assert!(
+            scan.config_hash.is_some(),
+            "an SPS is the configuration fingerprint"
+        );
+        let sps_hash = scanner.config_hash();
+
+        let scan = scanner.scan(&h264_nal(5, 8));
+        assert!(scan.keyframe, "NAL type 5 (IDR) is the cut point");
+        assert_eq!(
+            scanner.config_hash(),
+            sps_hash,
+            "an IDR does not change the configuration"
+        );
+
+        let mut same = EsScanner::new();
+        same.set_kind(StreamKind::H264);
+        same.scan(&h264_nal(7, 32));
+        assert_eq!(same.config_hash(), sps_hash, "the same SPS hashes the same");
+
+        let mut different = EsScanner::new();
+        different.set_kind(StreamKind::H264);
+        let mut other_sps = vec![0x00, 0x00, 0x01, 0x67];
+        other_sps.extend(std::iter::repeat_n(0x11, 32));
+        different.scan(&other_sps);
+        assert_ne!(
+            different.config_hash(),
+            sps_hash,
+            "a different SPS does not"
+        );
+    }
+
+    /// A start code split across two buffers must still be found: that is the buffer boundary a
+    /// switch is most likely to land on.
+    #[test]
+    fn a_start_code_split_across_buffers_is_still_seen() {
+        let mut scanner = EsScanner::new();
+        scanner.set_kind(StreamKind::H264);
+
+        assert!(!scanner.scan(&[0x00, 0x00]).keyframe);
+        // The scan needs a little room past the start code (the loop stops at `i + 5 < len`), which
+        // real payloads always have.
+        assert!(
+            scanner.scan(&[0x01, 0x05, 0xAA, 0xBB, 0xCC, 0xDD]).keyframe,
+            "the IDR spans two buffers"
+        );
+    }
+
+    #[test]
+    fn hevc_irap_and_mpeg2_i_picture_are_cut_points() {
+        let mut hevc = EsScanner::new();
+        hevc.set_kind(StreamKind::Hevc);
+        assert!(
+            hevc.scan(&[0x00, 0x00, 0x01, 0x28, 0x01, 0x02, 0x03])
+                .keyframe,
+            "hevc IRAP"
+        );
+
+        // A fresh scanner: the tail from the previous payload is deliberately re-scanned (the C does
+        // the same), so reusing this one would re-find the IRAP above.
+        let mut plain = EsScanner::new();
+        plain.set_kind(StreamKind::Hevc);
+        assert!(
+            !plain
+                .scan(&[0x00, 0x00, 0x01, 0x52, 0x01, 0x02, 0x03])
+                .keyframe,
+            "hevc non-IRAP"
+        );
+
+        let mut mpeg2 = EsScanner::new();
+        mpeg2.set_kind(StreamKind::Mpeg2);
+        assert!(
+            mpeg2
+                .scan(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x08, 0x00])
+                .keyframe,
+            "picture_coding_type 1 is an I picture"
+        );
+
+        // Fresh again for the same reason, and it is worth knowing why: the carried tail is
+        // re-scanned, exactly as the C does, so a keyframe in the previous buffer is reported again
+        // on the next one. Harmless in a live stream (a keyframe that recent means the decoder is
+        // already at a clean point), but it is why these cases each need their own scanner.
+        let mut mpeg2_plain = EsScanner::new();
+        mpeg2_plain.set_kind(StreamKind::Mpeg2);
+        assert!(
+            !mpeg2_plain
+                .scan(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x18, 0x00])
+                .keyframe,
+            "picture_coding_type 3 is a B picture"
+        );
+    }
+
+    #[test]
+    fn an_unknown_codec_never_reports_a_cut_point() {
+        let mut scanner = EsScanner::new();
+        scanner.set_kind(StreamKind::Unknown);
+        assert!(!scanner.scan(&h264_nal(5, 8)).keyframe);
+    }
+
+    // ── Program map compatibility ─────────────────────────────────────────────────────────────
+
+    fn program_map(video_pid: u16, stream_type: u8, audio: &[u16], hash: u64) -> ProgramMap {
+        ProgramMap {
+            video_pid,
+            video_stream_type: stream_type,
+            audio_pids: audio.to_vec(),
+            codec_config_hash: Some(hash),
+        }
+    }
+
+    #[test]
+    fn identical_programs_are_compatible_and_every_difference_is_not() {
+        let base = program_map(0x101, 0x1B, &[0x201, 0x202], 42);
+
+        assert!(
+            base.compatible_with(&program_map(0x101, 0x1B, &[0x202, 0x201], 42)),
+            "audio order is irrelevant"
+        );
+        assert!(
+            !base.compatible_with(&program_map(0x102, 0x1B, &[0x201, 0x202], 42)),
+            "video PID"
+        );
+        assert!(
+            !base.compatible_with(&program_map(0x101, 0x24, &[0x201, 0x202], 42)),
+            "codec"
+        );
+        assert!(
+            !base.compatible_with(&program_map(0x101, 0x1B, &[0x201], 42)),
+            "audio set"
+        );
+        assert!(
+            !base.compatible_with(&program_map(0x101, 0x1B, &[0x201, 0x202], 43)),
+            "configuration"
+        );
+    }
+
+    #[test]
+    fn an_unready_program_map_is_never_compatible() {
+        let base = program_map(0x101, 0x1B, &[0x201], 42);
+        let no_hash = ProgramMap {
+            video_pid: 0x101,
+            video_stream_type: 0x1B,
+            audio_pids: vec![0x201],
+            codec_config_hash: None,
+        };
+        let no_video = ProgramMap {
+            video_pid: 0,
+            ..no_hash.clone()
+        };
+
+        assert!(!base.compatible_with(&no_hash));
+        assert!(!no_hash.compatible_with(&base));
+        assert!(!base.compatible_with(&no_video));
+        assert!(!ProgramMap::default().compatible_with(&ProgramMap::default()));
+    }
+
+    // ── The guarded switch ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_switch_completes_only_on_the_targets_keyframe() {
+        let mut pending = PendingSwitch::new();
+
+        assert_eq!(pending.request(1, 0), SwitchOutcome::Waiting);
+        assert_eq!(pending.pending(), Some(1));
+
+        assert_eq!(
+            pending.on_keyframe(0, true, true),
+            SwitchOutcome::Waiting,
+            "a keyframe on the source we are leaving changes nothing"
+        );
+        assert_eq!(pending.pending(), Some(1));
+
+        assert_eq!(pending.on_keyframe(1, true, true), SwitchOutcome::Switch(1));
+        assert_eq!(pending.pending(), None);
+    }
+
+    #[test]
+    fn an_incompatible_target_is_rejected_and_an_unproven_one_waits() {
+        let mut pending = PendingSwitch::new();
+        pending.request(1, 0);
+        assert_eq!(
+            pending.on_keyframe(1, false, true),
+            SwitchOutcome::Rejected("incompatible-mpegts-map")
+        );
+        assert_eq!(pending.pending(), None, "a rejection ends the request");
+
+        let mut pending = PendingSwitch::new();
+        pending.request(1, 0);
+        assert_eq!(
+            pending.on_keyframe(1, false, false),
+            SwitchOutcome::Waiting,
+            "nothing proven yet: the caller's timeout decides"
+        );
+        assert_eq!(pending.pending(), Some(1));
+    }
+
+    #[test]
+    fn asking_for_the_active_source_is_not_a_switch() {
+        let mut pending = PendingSwitch::new();
+        assert_eq!(pending.request(0, 0), SwitchOutcome::Waiting);
+        assert_eq!(pending.pending(), None);
+        assert_eq!(
+            pending.request(2, 0),
+            SwitchOutcome::Rejected("invalid target")
         );
     }
 }
