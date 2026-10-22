@@ -679,7 +679,7 @@ defmodule Blackgate.RouteHandler do
       when target in ["primary", "secondary"] do
     Logger.info("RouteHandler: source switch -> #{target} for route #{data.id}")
 
-    if in_process_switch_allowed?(data.route) and is_port(data.port) do
+    if in_place_cut_allowed?(data) and is_port(data.port) do
       maybe_join_or_leave_for_auto_join(data, target)
 
       Port.command(
@@ -772,11 +772,59 @@ defmodule Blackgate.RouteHandler do
   @doc false
   def route_has_sdi_destination?(_), do: false
 
-  # In-process switching needs a live port as well; that part is checked at the call site because it
-  # depends on runtime state, not on the route's configuration.
+  # Fields that describe the SHAPE of a source's bitstream, taken from the stats the engine reports
+  # for it. Two sources whose fingerprints match carry the same codec configuration, video format and
+  # elementary-stream layout, which is what makes an in-place cut possible. This is the set the
+  # reference branch's seamless guard names: codec configuration, video/audio format, program layout
+  # and PIDs.
+  @source_fingerprint_keys ~w(video-codec video-width video-height video-framerate-num
+                              video-framerate-den video-interlace-mode video-profile video-level-idc
+                              video-chroma-format video-bit-depth video-pid audio-pids)
+
   @doc false
-  def in_process_switch_allowed?(route) do
-    dual_ingest_eligible?(route) and not route_has_sdi_destination?(route)
+  def source_fingerprint(stats) when is_map(stats) do
+    values = Enum.map(@source_fingerprint_keys, &{&1, Map.get(stats, &1)})
+
+    if Enum.all?(values, fn {_key, value} -> not is_nil(value) end),
+      do: Map.new(values),
+      else: nil
+  end
+
+  def source_fingerprint(_), do: nil
+
+  @doc false
+  # Unknown on either side is NOT a match: without a fingerprint there is nothing proving the cut is
+  # safe, and the rebuild path is the deterministic answer. `sources_differ_in/2` names the first
+  # field that disagreed so the refusal can be honest about why.
+  def sources_structurally_match?(primary_stats, secondary_stats) do
+    primary = source_fingerprint(primary_stats)
+    secondary = source_fingerprint(secondary_stats)
+
+    is_map(primary) and is_map(secondary) and primary == secondary
+  end
+
+  @doc false
+  def sources_differ_in(primary_stats, secondary_stats) do
+    primary = source_fingerprint(primary_stats) || %{}
+    secondary = source_fingerprint(secondary_stats) || %{}
+
+    case Enum.find(@source_fingerprint_keys, fn key ->
+           Map.get(primary, key, :missing) != Map.get(secondary, key, :missing)
+         end) do
+      nil -> "indistinguishable"
+      key -> "#{key} #{inspect(Map.get(primary, key))} vs #{inspect(Map.get(secondary, key))}"
+    end
+  end
+
+  @doc false
+  # May this route cut between its sources INSIDE the running pipeline? A route without an SDI
+  # destination always may; an SDI route may only when the two sources are structurally
+  # indistinguishable, because a cut between different bitstream shapes is what produced macroblocks
+  # and a starved demuxer. A live port is still required and is checked at the call site.
+  def in_process_switch_allowed?(route, primary_stats, secondary_stats) do
+    dual_ingest_eligible?(route) and
+      (not route_has_sdi_destination?(route) or
+         sources_structurally_match?(primary_stats, secondary_stats))
   end
 
   @doc false
@@ -892,6 +940,20 @@ defmodule Blackgate.RouteHandler do
   # with a dead port, no reconnect timer was ever armed, and the route kept reporting "started" while
   # nothing was running and the SDI output stayed black. An exited engine cannot switch sources
   # in-process either, so the switch decision belongs to the source-health paths, not here.
+  # Runtime form of in_process_switch_allowed?/3: pulls both sources' stats out of the registry.
+  defp in_place_cut_allowed?(data) do
+    in_process_switch_allowed?(data.route, primary_stats_of(data.id), secondary_stats_of(data.id))
+  end
+
+  defp primary_stats_of(id) do
+    case Blackgate.RouteStatsRegistry.get_stats(id) do
+      %{stats: stats} when is_map(stats) -> stats
+      _ -> nil
+    end
+  end
+
+  defp secondary_stats_of(id), do: Blackgate.RouteStatsRegistry.get_secondary_stats(id)
+
   defp trigger_restart(data) do
     if data.port && is_port(data.port), do: close_port(data.port)
     if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
@@ -1025,7 +1087,7 @@ defmodule Blackgate.RouteHandler do
           # engine-stdout reducer, which can only return data - a state transition needs a callback.
           _ = Db.update_route(data.id, %{"active_source" => target})
 
-          if in_process_switch_allowed?(data.route) and is_port(data.port) do
+          if in_place_cut_allowed?(data) and is_port(data.port) do
             maybe_join_or_leave_for_auto_join(data, target)
 
             Port.command(
@@ -1045,7 +1107,8 @@ defmodule Blackgate.RouteHandler do
             Blackgate.EventLog.log(
               :warning,
               "failover_auto",
-              "Auto-switched to #{target} (mode=#{mode}, pipeline restart)",
+              "Auto-switched to #{target} (mode=#{mode}, pipeline restart: sources differ in " <>
+                "#{sources_differ_in(primary_stats_of(data.id), secondary_stats_of(data.id))})",
               %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
             )
           end

@@ -45,52 +45,139 @@ defmodule Blackgate.RouteHandlerSdiSwitchTest do
     end
   end
 
-  describe "in_process_switch_allowed?/1" do
-    test "allowed for a dual-ingest SRT route without an SDI destination" do
-      assert RouteHandler.in_process_switch_allowed?(dual_srt_route([%{"schema" => "SRT"}]))
-      assert RouteHandler.in_process_switch_allowed?(dual_srt_route([%{"schema" => "UDP"}]))
+  # Fingerprint fields: codec configuration, video format, and elementary-stream layout - the set
+  # that decides whether an in-place cut between two sources is possible at all.
+  defp srt_stats(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "video-codec" => "AVC/H.264",
+        "video-width" => 1920,
+        "video-height" => 1080,
+        "video-framerate-num" => 50,
+        "video-framerate-den" => 2,
+        "video-interlace-mode" => "interleaved",
+        "video-profile" => "High",
+        "video-level-idc" => 40,
+        "video-chroma-format" => "4:2:0",
+        "video-bit-depth" => 8,
+        "video-pid" => 101,
+        "audio-pids" => [201, 202]
+      },
+      overrides
+    )
+  end
+
+  describe "source_fingerprint/1" do
+    test "returns the structural fields when the source reported all of them" do
+      fp = RouteHandler.source_fingerprint(srt_stats())
+      assert is_map(fp)
+      assert map_size(fp) == 12
+      assert fp["video-interlace-mode"] == "interleaved"
+      assert fp["video-pid"] == 101
+      assert fp["audio-pids"] == [201, 202]
     end
 
-    test "refused for the same route once a destination is SDI" do
-      refute RouteHandler.in_process_switch_allowed?(dual_srt_route([%{"schema" => "SDI"}]))
+    test "returns nil when any field is missing - an unknown shape is not a match" do
+      assert RouteHandler.source_fingerprint(Map.delete(srt_stats(), "video-pid")) == nil
+      assert RouteHandler.source_fingerprint(%{}) == nil
+      assert RouteHandler.source_fingerprint(nil) == nil
+    end
+  end
 
-      refute RouteHandler.in_process_switch_allowed?(
-               dual_srt_route([
-                 %{"schema" => "SRT"},
-                 %{"schema" => "SDI"}
-               ])
+  describe "sources_structurally_match?/2 and sources_differ_in/2" do
+    test "two sources with the same shape match" do
+      assert RouteHandler.sources_structurally_match?(srt_stats(), srt_stats())
+    end
+
+    # The operator's example: 1080i50 against 1080p50 is the same resolution and framerate, and still
+    # not the same bitstream - the decoder cannot continue across that cut.
+    test "same resolution but a different scan type does NOT match" do
+      other = srt_stats(%{"video-interlace-mode" => "progressive", "video-framerate-den" => 1})
+
+      refute RouteHandler.sources_structurally_match?(srt_stats(), other)
+      # It names the first field that disagreed, so a refusal can say why.
+      assert RouteHandler.sources_differ_in(srt_stats(), other) =~ "video-framerate-den"
+
+      # Same resolution and framerate, only the scan type differs.
+      interlace_only = srt_stats(%{"video-interlace-mode" => "progressive"})
+      refute RouteHandler.sources_structurally_match?(srt_stats(), interlace_only)
+      assert RouteHandler.sources_differ_in(srt_stats(), interlace_only) =~ "video-interlace-mode"
+    end
+
+    test "a different elementary-stream layout does NOT match" do
+      refute RouteHandler.sources_structurally_match?(
+               srt_stats(),
+               srt_stats(%{"video-pid" => 102})
+             )
+
+      refute RouteHandler.sources_structurally_match?(
+               srt_stats(),
+               srt_stats(%{"audio-pids" => [301]})
              )
     end
 
+    test "one unknown side never matches" do
+      refute RouteHandler.sources_structurally_match?(srt_stats(), %{})
+      refute RouteHandler.sources_structurally_match?(nil, srt_stats())
+    end
+  end
+
+  describe "in_process_switch_allowed?/3" do
+    test "a route without an SDI destination always cuts in place" do
+      route = dual_srt_route([%{"schema" => "SRT"}])
+      assert RouteHandler.in_process_switch_allowed?(route, srt_stats(), srt_stats())
+      assert RouteHandler.in_process_switch_allowed?(route, nil, nil)
+      assert RouteHandler.in_process_switch_allowed?(route, srt_stats(%{"video-pid" => 999}), nil)
+    end
+
+    test "an SDI route cuts in place when the two sources are structurally the same" do
+      route = dual_srt_route([%{"schema" => "SDI"}])
+      assert RouteHandler.in_process_switch_allowed?(route, srt_stats(), srt_stats())
+    end
+
+    test "an SDI route rebuilds when the sources differ or the shape is unknown" do
+      route = dual_srt_route([%{"schema" => "SDI"}])
+
+      refute RouteHandler.in_process_switch_allowed?(
+               route,
+               srt_stats(),
+               srt_stats(%{"video-pid" => 7})
+             )
+
+      refute RouteHandler.in_process_switch_allowed?(route, nil, srt_stats())
+      refute RouteHandler.in_process_switch_allowed?(route, srt_stats(), nil)
+    end
+
     test "refused without failover, a secondary source, or an SRT primary" do
-      sdi = [%{"schema" => "SRT"}]
+      sdi = [%{"schema" => "SDI"}]
 
-      refute RouteHandler.in_process_switch_allowed?(%{
-               "schema" => "SRT",
-               "failover_enabled" => false,
-               "secondary_source" => %{"schema" => "SRT"},
-               "destinations" => sdi
-             })
+      refute RouteHandler.in_process_switch_allowed?(
+               %{
+                 "schema" => "SRT",
+                 "failover_enabled" => false,
+                 "secondary_source" => %{"schema" => "SRT"},
+                 "destinations" => sdi
+               },
+               srt_stats(),
+               srt_stats()
+             )
 
-      refute RouteHandler.in_process_switch_allowed?(%{
-               "schema" => "SRT",
-               "failover_enabled" => true,
-               "destinations" => sdi
-             })
+      refute RouteHandler.in_process_switch_allowed?(
+               %{"schema" => "SRT", "failover_enabled" => true, "destinations" => sdi},
+               srt_stats(),
+               srt_stats()
+             )
 
-      refute RouteHandler.in_process_switch_allowed?(%{
-               "schema" => "SRT",
-               "failover_enabled" => true,
-               "secondary_source" => %{},
-               "destinations" => sdi
-             })
-
-      refute RouteHandler.in_process_switch_allowed?(%{
-               "schema" => "RTMP",
-               "failover_enabled" => true,
-               "secondary_source" => %{"schema" => "SRT"},
-               "destinations" => sdi
-             })
+      refute RouteHandler.in_process_switch_allowed?(
+               %{
+                 "schema" => "RTMP",
+                 "failover_enabled" => true,
+                 "secondary_source" => %{"schema" => "SRT"},
+                 "destinations" => sdi
+               },
+               srt_stats(),
+               srt_stats()
+             )
     end
   end
 
