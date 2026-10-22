@@ -110,6 +110,34 @@ defmodule BlackgateWeb.RouteController do
             |> put_status(:ok)
             |> data(%{status: "started", route_id: route_id})
 
+          # Its SDI output is already playing somewhere else. Refusing here - and naming the holder - is what
+          # keeps this from becoming a route that starts with a silently missing picture: a second engine cannot
+          # enable that connector, and it drops the SDI branch without failing the route.
+          {:error, {:sdi_in_use, conflict}} ->
+            name = route_name(route_id)
+
+            Blackgate.EventLog.log(
+              :warning,
+              "sdi_output_in_use",
+              "Cannot start #{name}: #{conflict.label} is in use by #{conflict.held_by.route_name}",
+              %{
+                route_id: route_id,
+                route_name: name,
+                sdi: conflict.label,
+                device: conflict.device,
+                held_by_route_id: conflict.held_by.route_id,
+                held_by_route_name: conflict.held_by.route_name
+              }
+            )
+
+            conn
+            |> put_status(:conflict)
+            |> json(%{
+              error: "SDI being used by #{conflict.held_by.route_name}",
+              sdi: conflict.label,
+              held_by: %{id: conflict.held_by.route_id, name: conflict.held_by.route_name}
+            })
+
           {:error, reason} ->
             conn
             |> put_status(:unprocessable_entity)
@@ -282,4 +310,11 @@ defmodule BlackgateWeb.RouteController do
   end
 
   defp data(conn, data), do: json(conn, %{data: data})
+
+  defp route_name(route_id) do
+    case Db.get_route(route_id) do
+      {:ok, route} -> route["name"] || route_id
+      _ -> route_id
+    end
+  end
 end

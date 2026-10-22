@@ -365,7 +365,11 @@ const RouteItem = () => {
       }
     } catch (error) {
       // Handle specific error cases
-      if (error.message && error.message.includes('already_started')) {
+      if (error.message && error.message.startsWith('SDI being used by')) {
+        // The server refuses to start a route whose SDI output is already playing elsewhere, and names
+        // the route holding it. Show that sentence as-is: it is the whole instruction.
+        messageApi.error(error.message);
+      } else if (error.message && error.message.includes('already_started')) {
         messageApi.info('Route is already started');
 
         // Update the UI to reflect that the route is started

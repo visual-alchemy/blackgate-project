@@ -206,6 +206,14 @@ export const routesApi = {
   // Start a route
   start: async (id) => {
     const response = await authFetch(`/api/routes/${id}/start`);
+
+    // A refusal carries a reason the operator must see verbatim - "SDI being used by <route>" - so read
+    // the body and throw THAT, instead of letting a generic failure reach the toast.
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `Start failed (${response.status})`);
+    }
+
     return response.json();
   },
 

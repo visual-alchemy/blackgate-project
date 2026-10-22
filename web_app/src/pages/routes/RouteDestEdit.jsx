@@ -111,10 +111,11 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
             .then(result => {
                 const usage = {};
                 (result.data || []).forEach(route => {
+                    // Same rule as the start gate: only a RUNNING route holds an output. This is a label here;
+                    // the refusal, and the holder's name, come from the server when the route is started.
+                    if (route.id === routeId || (route.connected !== true && route.status !== 'started')) return;
                     (route.destinations || []).forEach(dest => {
                         if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
-                            // Skip if this is the current destination being edited
-                            if (dest.id === destId) return;
                             usage[dest.schema_options.device_number] = route.name;
                         }
                     });
@@ -124,7 +125,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
             .catch(error => {
                 console.error('Error fetching SDI port usage:', error);
             });
-    }, [destId]);
+    }, [destId, routeId]);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -523,13 +524,25 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                     >
                                                         <Select
                                                             placeholder="Select SDI port"
-                                                            options={SDI_PORT_OPTIONS.map(opt => ({
-                                                                ...opt,
-                                                                label: sdiPortUsage[opt.value]
-                                                                    ? `${opt.label} (used by ${sdiPortUsage[opt.value]})`
-                                                                    : opt.label,
-                                                                disabled: !!sdiPortUsage[opt.value],
-                                                            }))}
+                                                                options={SDI_PORT_OPTIONS.map(opt => {
+                                                                    // A route cannot use one connector twice: that is not a conflict with another route but an
+                                                                    // impossible destination, so it stays out of its own list.
+                                                                    const ownDevice = (routeData?.destinations || []).some(
+                                                                        d => d.id !== destId &&
+                                                                            d.schema === 'SDI' &&
+                                                                            d.schema_options?.device_number === opt.value
+                                                                    );
+
+                                                                    return {
+                                                                        ...opt,
+                                                                        label: ownDevice
+                                                                            ? `${opt.label} (already used by this route)`
+                                                                            : sdiPortUsage[opt.value]
+                                                                              ? `${opt.label} (in use by ${sdiPortUsage[opt.value]})`
+                                                                              : opt.label,
+                                                                        disabled: ownDevice,
+                                                                    };
+                                                                })}
                                                             style={{ width: '280px' }}
                                                         />
                                                     </Form.Item>

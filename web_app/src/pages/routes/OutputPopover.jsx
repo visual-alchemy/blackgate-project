@@ -24,9 +24,12 @@ const OutputPopover = ({ route, allRoutes, onUpdate }) => {
   const destinations = route.destinations || [];
 
   // Build SDI port usage map (excluding current route's destinations)
+  // Which SDI outputs OTHER routes are holding right now. Only a RUNNING route holds one - holding means
+  // running, so a stopped route leaves its output free - and this is a label, not a block: the gate is
+  // applied when a route is started, and it names the holder there.
   const sdiPortUsage = {};
   (allRoutes || []).forEach(r => {
-    if (r.id === route.id) return;
+    if (r.id === route.id || (r.connected !== true && r.status !== 'started')) return;
     (r.destinations || []).forEach(dest => {
       if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
         sdiPortUsage[dest.schema_options.device_number] = r.name;
@@ -100,9 +103,8 @@ const OutputPopover = ({ route, allRoutes, onUpdate }) => {
               options={SDI_PORT_OPTIONS.map(opt => ({
                 ...opt,
                 label: sdiPortUsage[opt.value]
-                  ? `${opt.label} (${sdiPortUsage[opt.value]})`
+                  ? `${opt.label} (in use by ${sdiPortUsage[opt.value]})`
                   : opt.label,
-                disabled: !!sdiPortUsage[opt.value],
               }))}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>{mode}</Text>

@@ -5,10 +5,42 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    DynamicSupervisor.start_child(
-      {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
-      {Blackgate.RoutesSupervisor, %{id: id}}
-    )
+    with :ok <- check_sdi_claims(id) do
+      DynamicSupervisor.start_child(
+        {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
+        {Blackgate.RoutesSupervisor, %{id: id}}
+      )
+    end
+  end
+
+  @doc """
+  Routes that are actually running, with their destinations.
+
+  Liveness comes from the route registry rather than the stored `status`: the status can read `started` for a
+  route whose engine has died, and a route that is running but momentarily mislabelled must still hold its SDI
+  output. This is the list the SDI gate judges against.
+  """
+  @spec running_routes() :: [map()]
+  def running_routes do
+    case Db.get_all_routes(true) do
+      {:ok, routes} -> Enum.filter(routes, &match?({:ok, _}, get_route(&1["id"])))
+      _ -> []
+    end
+  end
+
+  # A shared SDI connector is judged at START time, not at configuration time: the operator may point a route at
+  # an output another route uses, and the route that is already running keeps it.
+  defp check_sdi_claims(id) do
+    case Db.get_route(id) do
+      {:ok, route} ->
+        case Blackgate.SdiClaims.conflict(route, running_routes()) do
+          nil -> :ok
+          conflict -> {:error, {:sdi_in_use, conflict}}
+        end
+
+      other ->
+        other
+    end
   end
 
   @spec get_route(String.t()) :: {:ok, pid()} | {:error, term()}
