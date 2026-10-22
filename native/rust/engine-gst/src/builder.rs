@@ -2,13 +2,10 @@
 //
 // Single source  : source → tee → {per-sink branches} + thumbnail branch
 // Dual-ingest    : source + secondary_source → input-selector → tee → ...
-// SDI sinks      : full decode → convert/rate/scale → caps → identity(sync) → decklink
 // Metadata probe : tee sink pad (engine-metadata) → meta_* stdout + shared VideoInfo
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-
-use std::str::FromStr;
 
 use gio;
 use gst::glib;
@@ -17,7 +14,7 @@ use gstreamer as gst;
 
 use engine_config::{PropValue, RouteConfig, SinkConfig, SinkProtocol, SourceConfig};
 use engine_metadata::TsProbeState;
-use engine_stats::{SdiState, SharedSocket, SharedVideoInfo};
+use engine_stats::{SharedSocket, SharedVideoInfo};
 use engine_thumbnail::ThumbnailBranch;
 
 pub struct BuiltPipeline {
@@ -29,54 +26,18 @@ pub struct BuiltPipeline {
     pub srt_sinks: Vec<gst::Element>,
     pub thumbnail: Option<ThumbnailBranch>,
     pub video_info: SharedVideoInfo,
-    pub sdi_state: Arc<SdiState>,
-    pub vrate_elements: Arc<Mutex<[Option<gst::Element>; 8]>>,
-    /// One handle per SDI sink, so the bus handler can drop a broken SDI branch without killing the
-    /// route (its SRT output and the source must survive a DeckLink failure).
-    pub sdi_branches: Vec<SdiBranchHandle>,
-}
-
-/// Everything the bus handler needs to detach one SDI output after its sink errors.
-///
-/// A DeckLink sink that fails at runtime ("Failed to enable video output", "Failed to schedule
-/// frame") posts a stream error on the pipeline bus. Letting that error end the run took the whole
-/// route down — the SRT output died with the SDI sink and RouteHandler reconnected every ~40 s
-/// (seen on PLTV SDI 1 and on an experimental 50p HDR route). The documented contract
-/// (lib/blackgate/route_handler.ex) is the opposite: the engine warns
-/// "WARNING: SDI sink N failed — continuing without SDI output" and keeps running.
-pub struct SdiBranchHandle {
-    pub sink_index: usize,
-    pub device_number: i32,
-    /// Every element of this branch (sinks and chain). A bus error whose source — or whose parent,
-    /// for elements inside the SDI decodebin — is one of these came from SDI output, not from the
-    /// source or an SRT/UDP sink. Pointer identity, so no element renaming is needed.
-    pub elements: Vec<gst::Element>,
-    /// Tee request pad that feeds the branch. Releasing it removes SDI from the stream while the
-    /// tee keeps feeding the remaining outputs (`allow-not-linked` is already set).
-    pub tee_pad: gst::Pad,
-    /// The branch's entry queue — its sink pad must be unlinked before the tee pad is released.
-    pub queue: gst::Element,
-    /// DeckLink sinks; set to NULL so the driver releases the device instead of holding the last
-    /// frame forever.
-    pub sinks: Vec<gst::Element>,
-    /// True once the bus handler has dropped this branch (only the first error acts).
-    pub failed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct Ctx {
     socket: SharedSocket,
-    sdi_state: Arc<SdiState>,
     video_info: SharedVideoInfo,
 }
 
 pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<BuiltPipeline, String> {
     let ctx = Ctx {
         socket,
-        sdi_state: SdiState::new_shared(),
         video_info: Arc::new(Mutex::new(None)),
     };
-
-    let has_sdi = config.has_sdi_sink();
 
     let pipeline = gst::Pipeline::with_name("test-pipeline");
     let tee = gst::ElementFactory::make("tee")
@@ -86,7 +47,7 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
         .map_err(|e| format!("Failed to create tee element: {}", e))?;
     println!("Set allow-not-linked=TRUE for tee element");
 
-    let source = make_source(&config.source, "source", has_sdi, &ctx)?;
+    let source = make_source(&config.source, "source", &ctx)?;
 
     let (selector, secondary) = match &config.secondary {
         Some(sec) => {
@@ -94,7 +55,7 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
                 .name("input-selector")
                 .build()
                 .map_err(|e| format!("Failed to create input-selector: {}", e))?;
-            let secondary = make_source(&sec.source, "secondary_source", has_sdi, &ctx)?;
+            let secondary = make_source(&sec.source, "secondary_source", &ctx)?;
 
             // sync-mode=active-segment (0). The C oracle carries stale sync-mode=1
             // ("clock"), which blocks the primary pad waiting on an idle secondary and
@@ -167,20 +128,9 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
     install_ts_probe(&tee, &ctx);
 
     let mut srt_sinks = Vec::new();
-    let mut sdi_branches: Vec<SdiBranchHandle> = Vec::new();
-    let vrate_elements: Arc<Mutex<[Option<gst::Element>; 8]>> =
-        Arc::new(Mutex::new(Default::default()));
 
     for (idx, sink_cfg) in config.sinks.iter().enumerate() {
-        match add_sink(
-            &pipeline,
-            &tee,
-            sink_cfg,
-            idx,
-            &ctx,
-            &vrate_elements,
-            &mut sdi_branches,
-        ) {
+        match add_sink(&pipeline, &tee, sink_cfg) {
             Ok(Some(srt_sink)) => {
                 println!(
                     "Stored SRT sink element at index {} for stats collection",
@@ -189,16 +139,7 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
                 srt_sinks.push(srt_sink);
             }
             Ok(None) => {}
-            Err(err) => {
-                if sink_cfg.protocol == SinkProtocol::Sdi {
-                    eprintln!(
-                        "WARNING: SDI sink {} failed — continuing without SDI output",
-                        idx
-                    );
-                } else {
-                    return Err(err);
-                }
-            }
+            Err(err) => return Err(err),
         }
     }
 
@@ -243,20 +184,12 @@ pub fn build_pipeline(config: &RouteConfig, socket: SharedSocket) -> Result<Buil
         srt_sinks,
         thumbnail,
         video_info: ctx.video_info,
-        sdi_state: ctx.sdi_state,
-        vrate_elements,
-        sdi_branches,
     })
 }
 
 // ── Sources ──────────────────────────────────────────────────────────────
 
-fn make_source(
-    cfg: &SourceConfig,
-    name: &str,
-    has_sdi_sink: bool,
-    ctx: &Ctx,
-) -> Result<gst::Element, String> {
+fn make_source(cfg: &SourceConfig, name: &str, ctx: &Ctx) -> Result<gst::Element, String> {
     let src = gst::ElementFactory::make(&cfg.element_type)
         .name(name)
         .build()
@@ -274,19 +207,13 @@ fn make_source(
 
     apply_uri_and_props(&src, cfg)?;
 
-    if has_sdi_sink {
-        src.set_property("do-timestamp", true);
-        println!(
-            "Set do-timestamp=TRUE for {} source element (SDI playout detected)",
-            name
-        );
-    } else {
-        src.set_property("do-timestamp", false);
-        println!(
-            "Set do-timestamp=FALSE for {} source element (pure passthrough)",
-            name
-        );
-    }
+    // Pure passthrough: no sink in this build carries its own clock, so the source
+    // must not stamp buffers itself.
+    src.set_property("do-timestamp", false);
+    println!(
+        "Set do-timestamp=FALSE for {} source element (pure passthrough)",
+        name
+    );
 
     if cfg.element_type == "srtsrc" {
         if std::env::var("BLACKGATE_DUMP_PROPS").is_ok() {
@@ -577,24 +504,8 @@ fn add_sink(
     pipeline: &gst::Pipeline,
     tee: &gst::Element,
     cfg: &SinkConfig,
-    sink_index: usize,
-    ctx: &Ctx,
-    vrate_elements: &Arc<Mutex<[Option<gst::Element>; 8]>>,
-    sdi_branches: &mut Vec<SdiBranchHandle>,
 ) -> Result<Option<gst::Element>, String> {
     match cfg.protocol {
-        SinkProtocol::Sdi => {
-            add_sdi_sink(
-                pipeline,
-                tee,
-                cfg,
-                sink_index,
-                ctx,
-                vrate_elements,
-                sdi_branches,
-            )?;
-            Ok(None)
-        }
         SinkProtocol::Srt => add_srt_sink(pipeline, tee, cfg).map(Some),
         SinkProtocol::Udp => {
             add_udp_sink(pipeline, tee, cfg)?;
@@ -620,14 +531,10 @@ fn add_srt_sink(
 
     sink.set_property("async", false);
     // sync=FALSE, like the UDP sink below. A network sink must not pace itself on the pipeline clock: with
-    // sync=TRUE the sink waits for the pipeline clock before handing each buffer to SRT, and in a route that
-    // also has an SDI sink (a live sink carrying its own DeckLink clock) that wait never resolves - the sink
-    // stops draining, its 2 MB branch queue fills, the tee blocks and the SDI branch starves with it. Measured
-    // on the operator's own route: engine at 2% of one core while its SDI-only siblings ran 60-70%, SDI sink
-    // duplicating 1085 frames against 1238 received, egress loss 15% against a link that pings clean, and
-    // GStreamer warning "Pipeline construction is invalid, please add queues" from srtsink0. Single-destination
-    // routes never showed it because nothing competes for the clock. SRT schedules delivery itself from the
-    // timestamps and the negotiated latency, so the sink does not need to.
+    // sync=TRUE the sink waits on the clock before handing each buffer to SRT, so a busy multi-destination
+    // route drains late - measured at 15% egress loss on a link that pings clean, with GStreamer warning
+    // "Pipeline construction is invalid, please add queues" from srtsink0. SRT schedules delivery itself
+    // from the timestamps and the negotiated latency, so the sink does not need to.
     sink.set_property("sync", false);
     sink.set_property("wait-for-connection", false);
     println!("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE");
@@ -739,556 +646,6 @@ const SINK_QUEUE_TIME_NS: u64 = 500_000_000;
 // The old 50 MB / 3 s ring buffer cost ~47 MB of peak RSS on the udp-to-srt workload.
 const _: () = assert!(SINK_QUEUE_BYTES <= 4 * 1024 * 1024);
 
-// ── SDI sink branch (C add_sink_to_pipeline sdisink path) ───────────────
-
-#[allow(clippy::too_many_arguments)]
-fn add_sdi_sink(
-    pipeline: &gst::Pipeline,
-    tee: &gst::Element,
-    cfg: &SinkConfig,
-    sink_index: usize,
-    ctx: &Ctx,
-    vrate_elements: &Arc<Mutex<[Option<gst::Element>; 8]>>,
-    sdi_branches: &mut Vec<SdiBranchHandle>,
-) -> Result<(), String> {
-    let sdi = cfg.sdi.as_ref().cloned().unwrap_or_default();
-
-    // Validate DeckLink availability first (C: factory probe)
-    let probe = gst::ElementFactory::make("decklinkvideosink")
-        .property("device-number", sdi.device_number)
-        .build()
-        .map_err(|_| {
-            format!(
-                "SDI sink {}: DeckLink plugin not available - install BlackMagic drivers",
-                sink_index
-            )
-        })?;
-    drop(probe);
-
-    let is_auto = sdi.video_mode == "auto";
-
-    let queue = gst::ElementFactory::make("queue2")
-        .property("use-buffering", false)
-        .property("max-size-buffers", 0u32)
-        .property("max-size-bytes", 0u32)
-        .property("max-size-time", 5_000_000_000u64)
-        .build()
-        .map_err(|e| format!("SDI sink {}: queue2: {}", sink_index, e))?;
-    let tsdemux = gst::ElementFactory::make("tsdemux")
-        .build()
-        .map_err(|e| format!("SDI sink {}: tsdemux: {}", sink_index, e))?;
-    let vdecodebin = gst::ElementFactory::make("decodebin")
-        .build()
-        .map_err(|e| format!("SDI sink {}: vdecodebin: {}", sink_index, e))?;
-    let vqueue = make_sdi_queue("max-size-time", 5_000_000_000u64);
-    let vconvert = gst::ElementFactory::make("videoconvert")
-        .build()
-        .map_err(|e| format!("SDI sink {}: videoconvert: {}", sink_index, e))?;
-    let vrate = gst::ElementFactory::make("videorate")
-        .property("skip-to-first", true)
-        .build()
-        .map_err(|e| format!("SDI sink {}: videorate: {}", sink_index, e))?;
-    let vscale = gst::ElementFactory::make("videoscale")
-        .build()
-        .map_err(|e| format!("SDI sink {}: videoscale: {}", sink_index, e))?;
-    let vcaps = gst::ElementFactory::make("capsfilter")
-        .build()
-        .map_err(|e| format!("SDI sink {}: capsfilter: {}", sink_index, e))?;
-    // Pinned, not configurable: half-duplex is what makes all four Duo 2 connectors usable as
-    // outputs (in the driver's default full-duplex profile only device numbers 0 and 1 accept
-    // playback). The profile is card-wide and has to be set before the sink opens the device.
-    let videosink = gst::ElementFactory::make("decklinkvideosink")
-        .property("device-number", sdi.device_number)
-        .property("sync", false)
-        .property_from_str("profile", engine_config::SDI_PROFILE)
-        .build()
-        .map_err(|e| format!("SDI sink {}: decklinkvideosink: {}", sink_index, e))?;
-
-    let adecodebin = gst::ElementFactory::make("decodebin")
-        .build()
-        .map_err(|e| format!("SDI sink {}: adecodebin: {}", sink_index, e))?;
-    let aqueue = make_sdi_queue("max-size-time", 5_000_000_000u64);
-    let aconvert = gst::ElementFactory::make("audioconvert")
-        .build()
-        .map_err(|e| format!("SDI sink {}: audioconvert: {}", sink_index, e))?;
-    let aresample = gst::ElementFactory::make("audioresample")
-        .build()
-        .map_err(|e| format!("SDI sink {}: audioresample: {}", sink_index, e))?;
-    let arate = gst::ElementFactory::make("audiorate")
-        .build()
-        .map_err(|e| format!("SDI sink {}: audiorate: {}", sink_index, e))?;
-    let acaps = gst::ElementFactory::make("capsfilter")
-        .property("caps", engine_sdi::sdi_audio_caps())
-        .build()
-        .map_err(|e| format!("SDI sink {}: audio capsfilter: {}", sink_index, e))?;
-    let audiosink = gst::ElementFactory::make("decklinkaudiosink")
-        .property("device-number", sdi.device_number)
-        .property("sync", true)
-        .property("max-lateness", 200_000_000i64)
-        .build()
-        .map_err(|e| format!("SDI sink {}: decklinkaudiosink: {}", sink_index, e))?;
-
-    let vid_identity = gst::ElementFactory::make("identity")
-        .property("sync", true)
-        .build()
-        .map_err(|e| format!("SDI sink {}: identity: {}", sink_index, e))?;
-
-    let elements: Vec<&gst::Element> = vec![
-        &queue,
-        &tsdemux,
-        &vdecodebin,
-        &vqueue,
-        &vconvert,
-        &vrate,
-        &vscale,
-        &vcaps,
-        &vid_identity,
-        &videosink,
-        &adecodebin,
-        &aqueue,
-        &aconvert,
-        &aresample,
-        &arate,
-        &acaps,
-        &audiosink,
-    ];
-    pipeline
-        .add_many(&elements)
-        .map_err(|e| format!("SDI sink {}: add: {}", sink_index, e))?;
-
-    // Register videorate for stats collection
-    if (0..8).contains(&sdi.device_number) {
-        if let Ok(mut v) = vrate_elements.lock() {
-            v[sdi.device_number as usize] = Some(vrate.clone());
-        }
-    }
-
-    // Static audio chain: aqueue → aconvert → aresample → arate → acaps → audiosink
-    // (stereo all the way: see engine_sdi::SDI_AUDIO_CAPS for why the 2→8 upmix is gone)
-    gst::Element::link_many([&aqueue, &aconvert, &aresample, &arate, &acaps, &audiosink])
-        .map_err(|_| format!("SDI sink {}: Failed to link audio output chain", sink_index))?;
-
-    // Static tee → queue → tsdemux
-    gst::Element::link_many([tee, &queue, &tsdemux]).map_err(|_| {
-        format!(
-            "SDI sink {}: Failed to link tee → queue → tsdemux",
-            sink_index
-        )
-    })?;
-
-    // tsdemux pad-added → route video/audio to decodebins
-    {
-        let vdb = vdecodebin.clone();
-        let adb = adecodebin.clone();
-        tsdemux.connect_pad_added(move |_src, new_pad| {
-            let Some(caps) = new_pad
-                .current_caps()
-                .or_else(|| Some(new_pad.query_caps(None)))
-            else {
-                return;
-            };
-            let Some(s) = caps.structure(0) else { return };
-            let name = s.name();
-            let target = if name.starts_with("video/") {
-                Some(vdb.clone())
-            } else if name.starts_with("audio/") {
-                Some(adb.clone())
-            } else {
-                None
-            };
-            if let Some(t) = target {
-                if let Some(sink_pad) = t.static_pad("sink") {
-                    if !sink_pad.is_linked() {
-                        match new_pad.link(&sink_pad) {
-                            Ok(_) => println!("SDI tsdemux: linked {} → decodebin", name),
-                            Err(e) => {
-                                eprintln!("SDI tsdemux: pad link failed for '{}': {:?}", name, e)
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    // Health probes (audio: silence detection + recovery; video: frame counts)
-    install_sdi_health_probes(&audiosink, &videosink, sdi.device_number, ctx)?;
-
-    if is_auto {
-        println!(
-            "SDI sink {}: AUTO-DETECT mode — video chain deferred until first frame",
-            sink_index
-        );
-        videosink.set_property_from_str("mode", "1080p25");
-
-        let fallback = engine_sdi::FallbackConfig {
-            mode: "1080p25".to_string(),
-            width: sdi.width,
-            height: sdi.height,
-            framerate: sdi.framerate.clone(),
-        };
-
-        connect_autodetect_pad_added(
-            pipeline,
-            &vdecodebin,
-            &vqueue,
-            &vconvert,
-            &vrate,
-            &vscale,
-            &vcaps,
-            &vid_identity,
-            &videosink,
-            sdi.device_number,
-            fallback,
-            ctx,
-        );
-
-        println!(
-            "SDI sink {}: pipeline created (AUTO-DETECT) → DeckLink device {}",
-            sink_index, sdi.device_number
-        );
-    } else {
-        let caps_str = if sdi.interlaced {
-            format!(
-                "video/x-raw, format=UYVY, width={}, height={}, framerate={}, interlace-mode=interleaved",
-                sdi.width, sdi.height, sdi.framerate
-            )
-        } else {
-            format!(
-                "video/x-raw, format=UYVY, width={}, height={}, framerate={}",
-                sdi.width, sdi.height, sdi.framerate
-            )
-        };
-        println!(
-            "SDI sink {}: mode={} -> caps: {}",
-            sink_index, sdi.video_mode, caps_str
-        );
-
-        let caps = gst::Caps::from_str(&caps_str)
-            .map_err(|_| format!("SDI sink {}: bad caps string", sink_index))?;
-        vcaps.set_property("caps", caps);
-        videosink.set_property_from_str("mode", &sdi.video_mode);
-
-        // Static video chain (+ optional interlace element for interlaced modes)
-        let interlace_needed = sdi.interlaced;
-        let link_result = if interlace_needed {
-            let vinterlace = gst::ElementFactory::make("interlace")
-                .property_from_str("field-pattern", "2:2")
-                .property("top-field-first", true)
-                .build()
-                .map_err(|e| format!("SDI sink {}: interlace: {}", sink_index, e))?;
-            pipeline
-                .add(&vinterlace)
-                .map_err(|e| format!("SDI sink {}: add interlace: {}", sink_index, e))?;
-            gst::Element::link_many([
-                &vqueue,
-                &vconvert,
-                &vrate,
-                &vscale,
-                &vinterlace,
-                &vcaps,
-                &vid_identity,
-                &videosink,
-            ])
-        } else {
-            gst::Element::link_many([
-                &vqueue,
-                &vconvert,
-                &vrate,
-                &vscale,
-                &vcaps,
-                &vid_identity,
-                &videosink,
-            ])
-        };
-        link_result
-            .map_err(|_| format!("SDI sink {}: Failed to link video output chain", sink_index))?;
-
-        // decodebin video pad → vqueue
-        connect_raw_pad_added(
-            &vdecodebin,
-            &vqueue,
-            "SDI: decodebin video → output chain linked",
-        );
-
-        println!(
-            "SDI sink {}: pipeline created (decodebin) → DeckLink device {} (mode {})",
-            sink_index, sdi.device_number, sdi.video_mode
-        );
-    }
-
-    // decodebin audio pads → aqueue (both modes)
-    connect_raw_pad_added(
-        &adecodebin,
-        &aqueue,
-        "SDI: decodebin audio → output chain linked",
-    );
-
-    println!("SDI sink {}: Audio health monitor installed", sink_index);
-    println!("SDI sink {}: Video health monitor installed", sink_index);
-
-    // Register how to detach this branch. See SdiBranchHandle: a runtime DeckLink failure has to cost
-    // the SDI output only, never the route's other outputs.
-    let tee_pad = queue
-        .static_pad("sink")
-        .and_then(|p| p.peer())
-        .ok_or_else(|| format!("SDI sink {}: branch is not attached to the tee", sink_index))?;
-
-    sdi_branches.push(SdiBranchHandle {
-        sink_index,
-        device_number: sdi.device_number,
-        elements: elements.iter().map(|el| (*el).clone()).collect(),
-        tee_pad,
-        queue: queue.clone(),
-        sinks: vec![videosink.clone(), audiosink.clone()],
-        failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    });
-
-    Ok(())
-}
-
-fn make_sdi_queue(prop: &str, value: u64) -> gst::Element {
-    let b = gst::ElementFactory::make("queue")
-        .property("max-size-buffers", 0u32)
-        .property("max-size-bytes", 0u32);
-    // max-size-time via generic set to avoid builder type ambiguity
-    let q = b.build().expect("queue factory must exist");
-    let _ = prop;
-    q.set_property("max-size-time", value);
-    q
-}
-
-fn connect_raw_pad_added(decodebin: &gst::Element, target: &gst::Element, ok_msg: &str) {
-    let target = target.clone();
-    let ok_msg = ok_msg.to_string();
-    decodebin.connect_pad_added(move |_db, pad| {
-        let Some(caps) = pad.current_caps().or_else(|| Some(pad.query_caps(None))) else {
-            return;
-        };
-        let Some(s) = caps.structure(0) else { return };
-        let raw_prefix =
-            if s.name().starts_with("video/x-raw") || s.name().starts_with("audio/x-raw") {
-                true
-            } else {
-                s.name().starts_with("video/x-raw")
-            };
-        if !raw_prefix && !s.name().starts_with("audio/x-raw") {
-            return;
-        }
-        if let Some(sink_pad) = target.static_pad("sink") {
-            if !sink_pad.is_linked() {
-                match pad.link(&sink_pad) {
-                    Ok(_) => println!("{}", ok_msg),
-                    Err(e) => eprintln!("SDI: decodebin pad link failed: {:?}", e),
-                }
-            }
-        }
-    });
-}
-
-#[allow(clippy::too_many_arguments)]
-fn connect_autodetect_pad_added(
-    pipeline: &gst::Pipeline,
-    vdecodebin: &gst::Element,
-    vqueue: &gst::Element,
-    vconvert: &gst::Element,
-    vrate: &gst::Element,
-    vscale: &gst::Element,
-    vcaps: &gst::Element,
-    vid_identity: &gst::Element,
-    videosink: &gst::Element,
-    device_number: i32,
-    fallback: engine_sdi::FallbackConfig,
-    ctx: &Ctx,
-) {
-    let pipeline = pipeline.clone();
-    let vqueue = vqueue.clone();
-    let vconvert = vconvert.clone();
-    let vrate = vrate.clone();
-    let vscale = vscale.clone();
-    let vcaps = vcaps.clone();
-    let vid_identity = vid_identity.clone();
-    let videosink = videosink.clone();
-    let detected_mode = ctx.sdi_state.clone();
-
-    vdecodebin.connect_pad_added(move |_db, pad| {
-        let Some(caps) = pad.current_caps().or_else(|| Some(pad.query_caps(None))) else {
-            return;
-        };
-        let Some(decision) = engine_sdi::decide_from_caps(&caps, &fallback) else {
-            return;
-        };
-
-        println!(
-            "SDI AUTO-DETECT: decoded video caps → {}",
-            caps.structure(0).map(|s| s.to_string()).unwrap_or_default()
-        );
-        if decision.matched {
-            println!(
-                "SDI AUTO-DETECT: MATCHED → mode={} (interlace={})",
-                decision.mode_str,
-                if decision.need_interlace_element { "yes" } else { "no" }
-            );
-        } else {
-            eprintln!(
-                "SDI AUTO-DETECT: NO MATCH — fallback to {}",
-                decision.mode_str
-            );
-        }
-        println!(
-            "SDI AUTO-DETECT: set decklinkvideosink mode={}",
-            decision.mode_str
-        );
-        println!(
-            "SDI AUTO-DETECT: capsfilter → video/x-raw, format=UYVY, width={}, height={}, framerate={}{}",
-            decision.width,
-            decision.height,
-            decision.framerate,
-            decision
-                .interlace_mode
-                .map(|m| format!(", interlace-mode={}", m))
-                .unwrap_or_default()
-        );
-
-        if (0..8).contains(&device_number) {
-            if let Ok(mut modes) = detected_mode.detected_mode.lock() {
-                modes[device_number as usize] = Some(decision.mode_str.clone());
-            }
-        }
-
-        videosink.set_property_from_str("mode", &decision.mode_str);
-
-        let caps_str = if let Some(m) = decision.interlace_mode {
-            format!(
-                "video/x-raw, format=UYVY, width={}, height={}, framerate={}, interlace-mode={}",
-                decision.width, decision.height, decision.framerate, m
-            )
-        } else {
-            format!(
-                "video/x-raw, format=UYVY, width={}, height={}, framerate={}",
-                decision.width, decision.height, decision.framerate
-            )
-        };
-        if let Ok(c) = gst::Caps::from_str(&caps_str) {
-            vcaps.set_property("caps", c);
-        }
-
-        let mut interlace_el: Option<gst::Element> = None;
-        if decision.need_interlace_element {
-            match gst::ElementFactory::make("interlace")
-                .property_from_str("field-pattern", "2:2")
-                .property("top-field-first", true)
-                .build()
-            {
-                Ok(vi) => {
-                    if pipeline.add(&vi).is_ok() {
-                        println!("SDI AUTO-DETECT: added interlace element (field-pattern=2:2, tff=TRUE)");
-                        interlace_el = Some(vi);
-                    }
-                }
-                Err(_) => {
-                    eprintln!("SDI AUTO-DETECT: WARNING — failed to create interlace element, proceeding without");
-                }
-            }
-        }
-
-        let linked = match &interlace_el {
-            Some(vi) => gst::Element::link_many([
-                &vqueue, &vconvert, &vrate, &vscale, vi, &vcaps, &vid_identity, &videosink,
-            ]),
-            None => gst::Element::link_many([&vqueue, &vconvert, &vrate, &vscale, &vcaps, &vid_identity, &videosink]),
-        };
-
-        if linked.is_err() {
-            eprintln!(
-                "SDI AUTO-DETECT: FAILED to link video output chain for mode={}",
-                decision.mode_str
-            );
-            if let Some(vi) = &interlace_el {
-                let _ = vi.set_state(gst::State::Null);
-                let _ = pipeline.remove(vi);
-                let retry_caps = gst::Caps::from_str(&format!(
-                    "video/x-raw, format=UYVY, width={}, height={}, framerate={}",
-                    decision.width, decision.height, decision.framerate
-                ));
-                if let Ok(c) = retry_caps {
-                    vcaps.set_property("caps", c);
-                }
-                if gst::Element::link_many([&vqueue, &vconvert, &vrate, &vscale, &vcaps, &vid_identity, &videosink]).is_err() {
-                    eprintln!("SDI AUTO-DETECT: FATAL — video chain link failed even without interlace");
-                    return;
-                }
-            } else {
-                return;
-            }
-        } else {
-            println!("SDI AUTO-DETECT: video chain linked successfully");
-        }
-
-        if let Some(vi) = &interlace_el {
-            let _ = vi.sync_state_with_parent();
-        }
-
-        if let Some(sink_pad) = vqueue.static_pad("sink") {
-            if !sink_pad.is_linked() {
-                match pad.link(&sink_pad) {
-                    Ok(_) => println!("SDI AUTO-DETECT: decodebin video → vqueue linked, flow started"),
-                    Err(e) => eprintln!("SDI AUTO-DETECT: decodebin video → vqueue link FAILED: {:?}", e),
-                }
-            }
-        }
-    });
-}
-
-fn install_sdi_health_probes(
-    audiosink: &gst::Element,
-    videosink: &gst::Element,
-    device: i32,
-    ctx: &Ctx,
-) -> Result<(), String> {
-    if !(0..8).contains(&device) {
-        return Ok(());
-    }
-    let idx = device as usize;
-    let sdi = ctx.sdi_state.clone();
-
-    if let Some(pad) = audiosink.static_pad("sink") {
-        let sdi = sdi.clone();
-        pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
-            // A branch the bus handler dropped is unlinked from the tee: reporting silence (or
-            // "recovered") for it would talk about a chain that no longer exists.
-            if sdi.branch_failed[idx].load(Ordering::Relaxed) {
-                return gst::PadProbeReturn::Ok;
-            }
-            let now = now_monotonic_us();
-            sdi.audio_last_buffer_us[idx].store(now, Ordering::Relaxed);
-            sdi.audio_buffer_count[idx].fetch_add(1, Ordering::Relaxed);
-            if sdi.audio_silence_reported[idx].swap(false, Ordering::Relaxed) {
-                println!(
-                    "SDI_AUDIO_RECOVERED: device={} audio_buffers_flowing_again",
-                    idx
-                );
-            }
-            gst::PadProbeReturn::Ok
-        });
-    }
-
-    if let Some(pad) = videosink.static_pad("sink") {
-        pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
-            sdi.video_buffer_count[idx].fetch_add(1, Ordering::Relaxed);
-            gst::PadProbeReturn::Ok
-        });
-    }
-    Ok(())
-}
-
-fn now_monotonic_us() -> i64 {
-    use std::time::Instant;
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    start.elapsed().as_micros() as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1336,12 +693,10 @@ mod tests {
     // UDP or SRT destination that cannot keep up must not be able to grow tens of MB.
     #[test]
     fn srt_sink_does_not_pace_on_the_pipeline_clock() {
-        // sync=TRUE made the sink wait for the pipeline clock before handing each buffer to SRT. In a route
-        // that also has an SDI sink - a live sink carrying the DeckLink card's own clock - that wait never
-        // resolved: the sink stopped draining, its branch queue filled, the tee blocked and the SDI branch
-        // starved with it. Measured with scripts/multi_sink_probe.py against the pre-fix binary: SDI sink
-        // received 0 of 625 nominal frames, engine at 0.0% of one core, and the feeding ffmpeg failed with
-        // "Error muxing a packet: Input/output error" because the engine had stopped reading its source.
+        // sync=TRUE made the sink wait for the pipeline clock before handing each buffer to SRT. On a
+        // multi-destination route that wait never resolved: the sink stopped draining, its branch queue
+        // filled, the tee blocked and the source stalled - the feeding ffmpeg failed with
+        // "Error muxing a packet: Input/output error" because the engine had stopped reading it.
         gst::init().unwrap();
         let pipeline = gst::Pipeline::new();
         let tee = gst::ElementFactory::make("tee").build().expect("tee");
@@ -1356,7 +711,6 @@ mod tests {
             mode: None,
             passphrase: None,
             streamid: None,
-            sdi: None,
             extra_props: std::collections::BTreeMap::new(),
         };
         let sink = add_srt_sink(&pipeline, &tee, &cfg).expect("srt sink");

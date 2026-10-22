@@ -12,7 +12,7 @@ use gstreamer as gst;
 use serde::Serialize;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicI8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Counts `apply_source_stats_structure` calls so `BLACKGATE_DUMP_STATS` prints once.
@@ -22,46 +22,9 @@ use std::time::Duration;
 
 use engine_metadata::VideoInfo;
 
-/// C: #define SDI_AUDIO_HEALTH_INTERVAL_SEC 10 (pipeline_state.h)
-pub const SDI_AUDIO_HEALTH_INTERVAL_SEC: f64 = 10.0;
-
 pub static IO_BYTES: AtomicU64 = AtomicU64::new(0);
 
 // ── Shared pipeline state (C globals parity) ─────────────────────────────
-
-/// Per-device SDI health/counter state — mirrors the C global arrays.
-#[derive(Default)]
-pub struct SdiState {
-    pub audio_last_buffer_us: [AtomicI64; 8],
-    pub audio_buffer_count: [AtomicI64; 8],
-    pub audio_silence_reported: [AtomicBool; 8],
-    pub video_buffer_count: [AtomicI64; 8],
-    pub detected_mode: Mutex<[Option<String>; 8]>,
-    /// Set when the bus handler gave up on this device's SDI branch (it detaches the branch and
-    /// keeps the route running). Health monitors must stay quiet for a branch nobody feeds, and the
-    /// stats must say "failed" instead of reporting zero frames as if the card were merely idle.
-    pub branch_failed: [AtomicBool; 8],
-}
-
-impl SdiState {
-    pub fn new_shared() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-
-    /// Reset all devices — C cleanup_pipeline loop.
-    pub fn reset(&self) {
-        for i in 0..8 {
-            self.audio_last_buffer_us[i].store(0, Ordering::Relaxed);
-            self.audio_buffer_count[i].store(0, Ordering::Relaxed);
-            self.audio_silence_reported[i].store(false, Ordering::Relaxed);
-            self.video_buffer_count[i].store(0, Ordering::Relaxed);
-            self.branch_failed[i].store(false, Ordering::Relaxed);
-        }
-        if let Ok(mut modes) = self.detected_mode.lock() {
-            *modes = Default::default();
-        }
-    }
-}
 
 /// Shared decoded-video metadata (C `video_info` + mutex).
 pub type SharedVideoInfo = Arc<Mutex<Option<VideoInfo>>>;
@@ -127,18 +90,6 @@ pub struct SinkStats {
     #[serde(rename = "connected-callers")]
     pub connected_callers: i32,
     pub callers: Vec<serde_json::Map<String, serde_json::Value>>,
-}
-
-/// SDI per-device stats array — C collectSinkStats sdi_video_stats item.
-#[derive(Debug, Serialize, Clone)]
-pub struct SdiVideoStatsItem {
-    pub device_number: i32,
-    pub dropped_frames: u64,
-    pub duplicated_frames: u64,
-    pub video_frames: i64,
-    pub audio_buffers: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detected_mode: Option<String>,
 }
 
 // ── gst stats extraction ─────────────────────────────────────────────────
@@ -566,64 +517,6 @@ pub fn attach_video_info(value: &mut serde_json::Value, info: &VideoInfo) {
     );
 }
 
-/// C print_stats sdi_video_stats array (primary only).
-pub fn build_sdi_video_stats(
-    sdi: &SdiState,
-    vrate_elements: &[Option<gst::Element>; 8],
-) -> Vec<SdiVideoStatsItem> {
-    let modes = sdi
-        .detected_mode
-        .lock()
-        .map(|m| m.clone())
-        .unwrap_or_default();
-    let mut out = Vec::new();
-    for i in 0..8 {
-        if let Some(vrate) = &vrate_elements[i] {
-            let dropped = vrate.property::<u64>("drop");
-            let duplicated = vrate.property::<u64>("duplicate");
-            out.push(SdiVideoStatsItem {
-                device_number: i as i32,
-                dropped_frames: dropped,
-                duplicated_frames: duplicated,
-                video_frames: sdi.video_buffer_count[i].load(Ordering::Relaxed),
-                audio_buffers: sdi.audio_buffer_count[i].load(Ordering::Relaxed),
-                detected_mode: modes[i].clone(),
-            });
-        }
-    }
-    out
-}
-
-/// C SDI audio silence check — prints SDI_AUDIO_SILENT once per device until
-/// recovery. Returns the devices that went silent (printed by caller for
-/// testability).
-pub fn check_sdi_audio_silence(sdi: &SdiState, now_us: i64) -> Vec<(i32, f64, i64)> {
-    let mut silent = Vec::new();
-    for i in 0..8usize {
-        // A branch the bus handler already dropped must not report silence: nobody feeds it, and the
-        // operator got the sdi_failed event instead — repeating "audio silent" only adds noise.
-        if sdi.branch_failed[i].load(Ordering::Relaxed) {
-            continue;
-        }
-        let last = sdi.audio_last_buffer_us[i].load(Ordering::Relaxed);
-        if last == 0 {
-            continue; // never received audio on this device
-        }
-        let silence_us = now_us - last;
-        if silence_us > (SDI_AUDIO_HEALTH_INTERVAL_SEC * 1_000_000.0) as i64
-            && !sdi.audio_silence_reported[i].load(Ordering::Relaxed)
-        {
-            sdi.audio_silence_reported[i].store(true, Ordering::Relaxed);
-            silent.push((
-                i as i32,
-                silence_us as f64 / 1_000_000.0,
-                sdi.audio_buffer_count[i].load(Ordering::Relaxed),
-            ));
-        }
-    }
-    silent
-}
-
 /// Socket handle shared across stats thread / bus watch / caller-connecting.
 pub type SharedSocket = Arc<Mutex<UnixStream>>;
 
@@ -646,50 +539,31 @@ pub fn send_raw(socket: &SharedSocket, bytes: &[u8]) {
     }
 }
 
-/// C print_stats thread: 1s loop → silence check → primary (+video fields,
-/// +sdi_video_stats) → secondary (+video fields) → per-sink stats_sink: lines.
-#[allow(clippy::too_many_arguments)]
+/// C print_stats thread: 1s loop → primary (+video fields) → secondary
+/// (+video fields) → per-sink stats_sink: lines.
 pub fn start_stats_thread(
     socket: SharedSocket,
     source: gst::Element,
     sinks: Vec<gst::Element>,
     secondary: Option<gst::Element>,
     video_info: SharedVideoInfo,
-    sdi: Arc<SdiState>,
-    vrate_elements: Arc<Mutex<[Option<gst::Element>; 8]>>,
     running: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while running.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_secs(1));
 
-            // SDI audio silence (stdout, C format)
-            let now_us = monotonic_us();
-            for (device, secs, buffers) in check_sdi_audio_silence(&sdi, now_us) {
-                println!(
-                    "SDI_AUDIO_SILENT: device={} no_audio_for={:.1}s total_buffers={}",
-                    device, secs, buffers
-                );
-            }
-
-            // Primary stats (+ metadata + sdi_video_stats)
+            // Primary stats (+ metadata)
             let primary = build_source_stats(&source, "primary");
             let mut value = serde_json::to_value(&primary).unwrap_or_default();
             if let Some(info) = video_info.lock().ok().and_then(|g| g.clone()) {
                 attach_video_info(&mut value, &info);
             }
-            let vrates = vrate_elements.lock().map(|g| g.clone()).unwrap_or_default();
-            if let serde_json::Value::Object(ref mut obj) = value {
-                let sdi_arr = build_sdi_video_stats(&sdi, &vrates);
-                if let Ok(arr) = serde_json::to_value(&sdi_arr) {
-                    obj.insert("sdi_video_stats".into(), arr);
-                }
-            }
             if let Ok(json) = serde_json::to_string(&value) {
                 send_json_line(&socket, &json);
             }
 
-            // Secondary stats (dual-ingest only; no sdi_video_stats)
+            // Secondary stats (dual-ingest only)
             if let Some(sec) = &secondary {
                 let sec_stats = build_source_stats(sec, "secondary");
                 let mut sec_value = serde_json::to_value(&sec_stats).unwrap_or_default();
@@ -719,13 +593,6 @@ pub fn start_stats_thread(
             }
         }
     })
-}
-
-fn monotonic_us() -> i64 {
-    use std::time::Instant;
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    start.elapsed().as_micros() as i64
 }
 
 #[cfg(test)]
@@ -973,23 +840,5 @@ mod tests {
         assert_eq!(hevc_profile_name(1, 2, 8), "Main 4:2:2");
         assert_eq!(hevc_profile_name(1, 1, 10), "Main 10");
         assert_eq!(hevc_profile_name(1, 1, 8), "Main");
-    }
-
-    #[test]
-    fn silence_check_reports_once_then_latches() {
-        let sdi = SdiState::new_shared();
-        let now = 20_000_000i64; // 20s monotonic
-                                 // device 0 saw audio at t=0 → silent after 10s
-        sdi.audio_last_buffer_us[0].store(1, Ordering::Relaxed);
-        sdi.audio_buffer_count[0].store(500, Ordering::Relaxed);
-
-        let first = check_sdi_audio_silence(&sdi, now);
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].0, 0);
-        assert!(first[0].1 >= 10.0);
-
-        // Second check → latched, no repeat
-        let second = check_sdi_audio_silence(&sdi, now + 1_000_000);
-        assert!(second.is_empty());
     }
 }

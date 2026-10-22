@@ -215,8 +215,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         built.srt_sinks.clone(),
         built.secondary.clone(),
         built.video_info.clone(),
-        built.sdi_state.clone(),
-        built.vrate_elements.clone(),
         running.clone(),
     );
 
@@ -323,13 +321,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         socket.clone(),
         &config.route_id,
         stop.clone(),
-        &built.sdi_branches,
-        &built.sdi_state,
     );
 
     // C cleanup_pipeline
     running.store(false, Ordering::Relaxed);
-    built.sdi_state.reset();
     let _ = pipeline.set_state(gstreamer::State::Null);
     if let Some(mut thumb) = built.thumbnail {
         thumb.stop();
