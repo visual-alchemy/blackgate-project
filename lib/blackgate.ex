@@ -76,9 +76,16 @@ defmodule Blackgate do
   defp check_sdi_claims(id) do
     case Db.get_route(id) do
       {:ok, route} ->
-        case Blackgate.SdiClaims.conflict(route, running_routes()) do
-          nil -> :ok
-          conflict -> {:error, {:sdi_in_use, conflict}}
+        # A route with no SDI destination cannot conflict with anybody's output, so it is not even asked: the
+        # check reads a process listing, and starting an SRT/UDP/RTMP-only route has to stay exactly as cheap
+        # and as unguarded as it was before any of this existed.
+        if Blackgate.SdiClaims.devices_of(route) == [] do
+          :ok
+        else
+          case Blackgate.SdiClaims.conflict(route, running_routes()) do
+            nil -> :ok
+            conflict -> {:error, {:sdi_in_use, conflict}}
+          end
         end
 
       other ->

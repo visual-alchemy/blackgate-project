@@ -46,6 +46,37 @@ defmodule Blackgate.SdiClaimsTest do
       assert SdiClaims.devices_of(route) == [3]
     end
 
+    test "a route with no SDI destination is never refused, however busy the card is" do
+      # SRT, UDP and RTMP outputs are not the card's business, so a route that has only those must start
+      # regardless of who holds every SDI connector.
+      busy = [route("a", "A", [0, 1, 2, 3])]
+
+      srt_only = %{
+        "id" => "b",
+        "name" => "B",
+        "destinations" => [
+          %{"schema" => "SRT", "schema_options" => %{"device_number" => 0}},
+          %{"schema" => "UDP"},
+          %{"schema" => "RTMP"}
+        ]
+      }
+
+      assert SdiClaims.devices_of(srt_only) == []
+      assert SdiClaims.conflict(srt_only, busy) == nil
+    end
+
+    test "a mixed route is judged only on its SDI destination" do
+      # SDI + SRT in one route: the SRT output must never be what refuses the start.
+      mixed = with_srt(route("b", "B", [0]))
+
+      conflict = SdiClaims.conflict(mixed, [route("a", "A", [0])])
+
+      assert conflict.label == "SDI 1"
+
+      # ...and with the card free, the same route is fine even though its SRT destination is unchanged.
+      assert SdiClaims.conflict(mixed, []) == nil
+    end
+
     test "a route with no destinations asks for nothing" do
       assert SdiClaims.devices_of(%{"id" => "a", "name" => "A"}) == []
     end
