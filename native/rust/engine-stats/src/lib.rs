@@ -12,7 +12,7 @@ use gstreamer as gst;
 use serde::Serialize;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicI8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Counts `apply_source_stats_structure` calls so `BLACKGATE_DUMP_STATS` prints once.
@@ -152,6 +152,61 @@ fn source_slot(tag: &str) -> usize {
         1
     } else {
         0
+    }
+}
+
+/// Seconds without a single received byte before a source is called invalid.
+///
+/// A live SRT feed delivers bytes every sample, so this only ever trips on a genuinely dead path.
+/// 5 s is deliberately looser than the 3 s that would already look abnormal, so a momentary hiccup
+/// does not flap a route's failover.
+const SOURCE_STALL_SECS: u32 = 5;
+
+/// -1 = no verdict yet, 0 = invalid, 1 = valid. Slot 0 = primary, 1 = secondary.
+static SOURCE_HEALTH: [AtomicI8; 2] = [AtomicI8::new(-1), AtomicI8::new(-1)];
+static SOURCE_STALL_TICKS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+
+/// The verdict for one sample: (valid?, stall ticks so far).
+fn liveness_after(bytes_this_second: i64, stall_ticks: u32) -> (i8, u32) {
+    if bytes_this_second > 0 {
+        (1, 0)
+    } else if stall_ticks + 1 >= SOURCE_STALL_SECS {
+        (0, stall_ticks + 1)
+    } else {
+        (1, stall_ticks + 1)
+    }
+}
+
+/// Report one source's liveness as a TRANSITION on stdout.
+///
+/// RouteHandler listens for `SOURCE_VALID:<tag>` / `SOURCE_INVALID:<tag>` and its "Automatic -
+/// Maintain Primary" mode must switch BACK to the primary once the primary is valid again - which
+/// cannot happen unless the engine reports the source that is NOT currently active. The bus-level
+/// markers (engine-gst/src/bus.rs) only fire on a GStreamer warning or an SRT `connection-removed`
+/// event, so a primary that recovered quietly was never reported, the health stayed `invalid`
+/// forever and the documented switch-back never ran. This drives that same contract from measured
+/// bytes, so a recovery is visible without waiting for an error to be raised.
+///
+/// Transition-only by design: RouteHandler runs on these lines (and a per-second marker would flood
+/// the log it shares with the operator-facing events).
+fn report_source_liveness(tag: &str, bytes_this_second: i64) {
+    let slot = source_slot(tag);
+    let (verdict, ticks) = liveness_after(
+        bytes_this_second,
+        SOURCE_STALL_TICKS[slot].load(Ordering::Relaxed),
+    );
+    SOURCE_STALL_TICKS[slot].store(ticks, Ordering::Relaxed);
+
+    let previous = SOURCE_HEALTH[slot].swap(verdict, Ordering::Relaxed);
+    if previous != verdict {
+        if verdict == 1 {
+            println!("SOURCE_VALID:{}", tag);
+        } else {
+            println!(
+                "SOURCE_INVALID:{} no data received for {}s",
+                tag, SOURCE_STALL_SECS
+            );
+        }
     }
 }
 
@@ -318,6 +373,9 @@ fn apply_source_stats_structure(s: &gst::Structure, tag: &str, stats: &mut Sourc
     let slot = source_slot(tag);
     let prev = LAST_SOURCE_BYTES[slot].swap(stats.total_bytes_received, Ordering::Relaxed);
     let delta = stats.total_bytes_received.saturating_sub(prev) as i64;
+    // Failover needs a per-source verdict even when nothing raises an error: see
+    // report_source_liveness. `delta` is the measured bytes for THIS second on THIS source.
+    report_source_liveness(tag, delta);
     // lite build_source_stats_json emits the element's own per-report counter;
     // fall back to the total delta when the element does not expose it.
     let per_report = struct_get_i64(s, "bytes-received");
@@ -673,6 +731,34 @@ fn monotonic_us() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Liveness must report a RECOVERY, not only a failure: "Automatic - Maintain Primary" switches
+    /// back when the primary becomes valid, and that is unreachable if the engine can only ever say
+    /// SOURCE_INVALID. The threshold guards the other direction - a hiccup must not flap failover.
+    #[test]
+    fn liveness_reports_recovery_and_waits_for_the_stall_threshold() {
+        assert_eq!(liveness_after(4096, 0), (1, 0), "bytes flowing = valid");
+        assert_eq!(
+            liveness_after(0, 0),
+            (1, 1),
+            "one quiet second is not a verdict yet"
+        );
+        assert_eq!(
+            liveness_after(0, SOURCE_STALL_SECS - 2).0,
+            1,
+            "one second short of the threshold is still valid"
+        );
+        assert_eq!(
+            liveness_after(0, SOURCE_STALL_SECS - 1).0,
+            0,
+            "the 5th quiet second is the verdict: invalid"
+        );
+        assert_eq!(
+            liveness_after(4096, 4),
+            (1, 0),
+            "recovery clears the stall counter"
+        );
+    }
 
     #[test]
     fn source_without_stats_property_returns_zero_stats() {
