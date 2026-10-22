@@ -11,8 +11,7 @@
 //
 // Element objects: {"type":"srtsrc","uri":"srt://...?mode=..&latency=..", ...extra numeric props}
 //                  {"type":"udpsink","host":"..","port":..}
-//                  {"type":"sdisink","device-number":..,"video-mode":"..","width":..,"height":..,
-//                   "framerate":"25/1","interlaced":bool,"profile":"two-sub-devices-half"}
+// IP-delivery only: an "sdisink" element is rejected at parse time.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -101,42 +100,11 @@ pub enum SinkProtocol {
     #[default]
     Srt,
     Udp,
-    Sdi,
-}
-
-/// DeckLink profile the engine pins every SDI sink to. Half-duplex exposes all four connectors of a
-/// Duo 2 as independent outputs (device numbers 0-3), where the driver's default full-duplex profile
-/// offers only two; measured on the lab card. Deliberately not configurable: a per-route knob only
-/// created a way to pick a profile the card cannot run, which fails the SDI sink.
-pub const SDI_PROFILE: &str = "two-sub-devices-half";
-
-/// SDI sink config — mirrors the C JSON keys in add_sink_to_pipeline(sdisink).
-#[derive(Debug, Clone)]
-pub struct SdiConfig {
-    pub device_number: i32, // "device-number", default 0
-    pub video_mode: String, // "video-mode", default "1080p25"
-    pub interlaced: bool,   // "interlaced", default false
-    pub width: i32,         // default 1920
-    pub height: i32,        // default 1080
-    pub framerate: String,  // default "25/1"
-}
-
-impl Default for SdiConfig {
-    fn default() -> Self {
-        Self {
-            device_number: 0,
-            video_mode: "1080p25".to_string(),
-            interlaced: false,
-            width: 1920,
-            height: 1080,
-            framerate: "25/1".to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct SinkConfig {
-    pub element_type: String, // "srtsink" | "udpsink" | "sdisink"
+    pub element_type: String, // "srtsink" | "udpsink"
     pub protocol: SinkProtocol,
     pub uri: Option<String>,
     pub host: Option<String>,
@@ -145,7 +113,6 @@ pub struct SinkConfig {
     pub mode: Option<SrtMode>,
     pub passphrase: Option<String>,
     pub streamid: Option<String>,
-    pub sdi: Option<SdiConfig>,
     /// Remaining JSON props applied verbatim onto the element (C parity).
     pub extra_props: BTreeMap<String, PropValue>,
 }
@@ -174,12 +141,6 @@ pub struct RouteConfig {
     /// decoder frame pool (measured: 51.9 MB vs 19.3 MB RSS on the udp-to-srt config)
     /// that the C engine never allocates.
     pub preview: bool,
-}
-
-impl RouteConfig {
-    pub fn has_sdi_sink(&self) -> bool {
-        self.sinks.iter().any(|s| s.protocol == SinkProtocol::Sdi)
-    }
 }
 
 // ── Elixir wire-format structs ───────────────────────────────────────────
@@ -293,13 +254,6 @@ const SINK_SKIP_KEYS: &[&str] = &[
     "host",
     "port",
     "address",
-    "device-number",
-    "video-mode",
-    "interlaced",
-    "width",
-    "height",
-    "framerate",
-    "profile",
 ];
 
 fn extra_props(obj: &serde_json::Value, skip: &[&str]) -> BTreeMap<String, PropValue> {
@@ -404,9 +358,14 @@ fn parse_elixir_sink(el: &serde_json::Value) -> Result<SinkConfig, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let protocol = if element_type.contains("sdi") {
-        SinkProtocol::Sdi
-    } else if element_type.contains("udp") {
+    if element_type.contains("sdi") {
+        return Err(format!(
+            "SDI sink '{}' rejected: this build is IP-delivery only (srt/udp)",
+            element_type
+        ));
+    }
+
+    let protocol = if element_type.contains("udp") {
         SinkProtocol::Udp
     } else {
         SinkProtocol::Srt
@@ -445,42 +404,6 @@ fn parse_elixir_sink(el: &serde_json::Value) -> Result<SinkConfig, String> {
                 .and_then(|v| v.parse::<u32>().ok())
         });
 
-    let sdi = if protocol == SinkProtocol::Sdi {
-        Some(SdiConfig {
-            device_number: obj
-                .get("device-number")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
-                .unwrap_or(0),
-            video_mode: obj
-                .get("video-mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("1080p25")
-                .to_string(),
-            interlaced: obj
-                .get("interlaced")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-            width: obj
-                .get("width")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
-                .unwrap_or(1920),
-            height: obj
-                .get("height")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
-                .unwrap_or(1080),
-            framerate: obj
-                .get("framerate")
-                .and_then(|v| v.as_str())
-                .unwrap_or("25/1")
-                .to_string(),
-        })
-    } else {
-        None
-    };
-
     let passphrase = obj
         .get("passphrase")
         .and_then(|v| v.as_str())
@@ -508,7 +431,6 @@ fn parse_elixir_sink(el: &serde_json::Value) -> Result<SinkConfig, String> {
         mode,
         passphrase,
         streamid,
-        sdi,
         extra_props: extra_props(el, SINK_SKIP_KEYS),
     })
 }
@@ -649,35 +571,27 @@ mod tests {
         "auto_join": true,
         "sinks": [
             {"type": "srtsink", "uri": "srt://10.0.0.5:7005?mode=caller&latency=3000", "rcvbuf": 16000000},
-            {"type": "udpsink", "host": "239.1.1.1", "port": 5000, "ttl-multicast": 3},
-            {"type": "sdisink", "device-number": 1, "video-mode": "1080i50", "width": 1920, "height": 1080, "framerate": "25/1", "interlaced": true}
+            {"type": "udpsink", "host": "239.1.1.1", "port": 5000, "ttl-multicast": 3}
         ]
     }"#;
 
     #[test]
     fn parses_all_sinks_not_just_first() {
         let cfg = RouteConfig::from_json(ELIXIR_MULTI).unwrap();
-        assert_eq!(cfg.sinks.len(), 3);
+        assert_eq!(cfg.sinks.len(), 2);
         assert_eq!(cfg.sinks[0].protocol, SinkProtocol::Srt);
         assert_eq!(cfg.sinks[1].protocol, SinkProtocol::Udp);
         assert_eq!(cfg.sinks[1].host.as_deref(), Some("239.1.1.1"));
         assert_eq!(cfg.sinks[1].port, Some(5000));
-        assert_eq!(cfg.sinks[2].protocol, SinkProtocol::Sdi);
-        let sdi = cfg.sinks[2].sdi.as_ref().unwrap();
-        assert_eq!(sdi.device_number, 1);
-        assert_eq!(sdi.video_mode, "1080i50");
-        assert!(sdi.interlaced);
     }
 
     #[test]
-    fn sdi_detection_drives_do_timestamp() {
-        let cfg = RouteConfig::from_json(ELIXIR_MULTI).unwrap();
-        assert!(cfg.has_sdi_sink());
-        let no_sdi = RouteConfig::from_json(
-            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"sinks":[{"type":"srtsink","uri":"srt://10.0.0.5:7005"}]}"#,
+    fn sdi_sink_is_rejected() {
+        let err = RouteConfig::from_json(
+            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"sinks":[{"type":"sdisink"}]}"#,
         )
-        .unwrap();
-        assert!(!no_sdi.has_sdi_sink());
+        .unwrap_err();
+        assert!(err.contains("IP-delivery only"), "{}", err);
     }
 
     #[test]
@@ -696,36 +610,6 @@ mod tests {
         )
         .unwrap();
         assert!(!off.auto_join);
-    }
-
-    #[test]
-    fn sdi_defaults_match_c() {
-        let cfg = RouteConfig::from_json(
-            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"sinks":[{"type":"sdisink"}]}"#,
-        )
-        .unwrap();
-        let sdi = cfg.sinks[0].sdi.as_ref().unwrap();
-        assert_eq!(sdi.device_number, 0);
-        assert_eq!(sdi.video_mode, "1080p25");
-        assert_eq!(sdi.width, 1920);
-        assert_eq!(sdi.height, 1080);
-        assert_eq!(sdi.framerate, "25/1");
-        assert!(!sdi.interlaced);
-    }
-
-    /// The card's duplex profile is pinned in the engine, not configured per route. A `"profile"`
-    /// key left behind in a stored destination config must be ignored, not turned into an unknown
-    /// property on the sink.
-    #[test]
-    fn legacy_profile_key_is_ignored() {
-        let cfg = RouteConfig::from_json(
-            r#"{"route_id":"r","source":{"type":"srtsrc","uri":"srt://0.0.0.0:7001"},"sinks":[{"type":"sdisink","profile":"two-sub-devices-half"}]}"#,
-        )
-        .unwrap();
-
-        let sdi = cfg.sinks[0].sdi.as_ref().unwrap();
-        assert_eq!(sdi.device_number, 0);
-        assert_eq!(sdi.video_mode, "1080p25");
     }
 
     /// C lite 2061-2068: persisted selection survives restart so later
