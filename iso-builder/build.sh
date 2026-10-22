@@ -74,15 +74,6 @@ MIX_ENV=prod mix deps.get
 npm --prefix web_app ci
 MIX_ENV=prod mix release --overwrite
 
-# The release knows its own version and changes through priv/release-notes.json, which Settings > System shows.
-# The update packager has always written it; the image did not, so an appliance installed from the ISO reported no
-# release notes at all. One shared script, so the two paths cannot drift.
-APP_DIR="$(find "$RELEASE_DIR/lib" -maxdepth 1 -type d -name 'blackgate-*' | head -1)"
-if [ -n "$APP_DIR" ]; then
-    "$PROJECT_ROOT/scripts/write-release-notes.sh" "$APP_DIR" "$(tr -d '\r\n' < "$SCRIPT_DIR/release-version")" \
-        "$SCRIPT_DIR/release-notes.txt" "Baked into the appliance image by iso-builder/build.sh"
-fi
-
 RELEASE_DIR="$PROJECT_ROOT/_build/prod/rel/blackgate"
 if [ ! -d "$RELEASE_DIR" ]; then
     echo "❌ Release directory not found: $RELEASE_DIR"
@@ -97,6 +88,15 @@ fi
 if ! compgen -G "$RELEASE_DIR/lib/blackgate-*/priv/native/build/blackgate-engine" >/dev/null; then
     echo "❌ Rust engine missing from release"
     exit 1
+fi
+
+# The release knows its own version and changes through priv/release-notes.json, which Settings > System shows.
+# The update packager has always written it; the image did not, so an appliance installed from the ISO reported no
+# release notes at all. One shared script, so the two paths cannot drift.
+APP_DIR="$(find "$RELEASE_DIR/lib" -maxdepth 1 -type d -name 'blackgate-*' | head -1)"
+if [ -n "$APP_DIR" ]; then
+    "$PROJECT_ROOT/scripts/write-release-notes.sh" "$APP_DIR" "$(tr -d '\r\n' < "$SCRIPT_DIR/release-version")" \
+        "$SCRIPT_DIR/release-notes.txt" "Baked into the appliance image by iso-builder/build.sh"
 fi
 
 echo "   Packaging release tarball..."
