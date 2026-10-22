@@ -1,8 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input, Descriptions, Alert, Tooltip, Upload, Progress } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, EditOutlined, UserOutlined, SaveOutlined, DesktopOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, EditOutlined, UserOutlined, SaveOutlined, DesktopOutlined } from '@ant-design/icons';
 import { backupApi, networkApi, authApi, systemApi } from '../utils/api';
-import { DEVICE_TO_SDI } from '../utils/sdiPorts';
 import { logout } from '../utils/auth';
 
 const { Title } = Typography;
@@ -836,78 +835,6 @@ const Settings = () => {
   const SystemTabContent = () => {
     const status = systemStatus;
 
-    const sdiColumns = [
-      {
-        title: 'Route',
-        dataIndex: 'route',
-        key: 'route',
-      },
-      {
-        title: 'SDI Port',
-        dataIndex: 'port',
-        key: 'port',
-        render: (port) => <Tag color="blue">{port}</Tag>,
-      },
-      {
-        title: 'Device',
-        dataIndex: 'device',
-        key: 'device',
-        render: (device) => <code>{device}</code>,
-      },
-      {
-        title: 'Mode',
-        dataIndex: 'mode',
-        key: 'mode',
-        render: (mode) => mode || '-',
-      },
-      {
-        title: 'Video Frames',
-        dataIndex: 'frames',
-        key: 'frames',
-        render: (frames) => (typeof frames === 'number' ? frames.toLocaleString() : '-'),
-      },
-      {
-        title: 'Dropped',
-        dataIndex: 'dropped',
-        key: 'dropped',
-        render: (dropped) => (
-          <Tag color={dropped ? 'orange' : 'green'}>{dropped || 0}</Tag>
-        ),
-      },
-      {
-        title: 'Duplicated',
-        dataIndex: 'duplicated',
-        key: 'duplicated',
-        render: (duplicated) => (
-          <Tag color={duplicated ? 'orange' : 'green'}>{duplicated || 0}</Tag>
-        ),
-      },
-      {
-        title: 'Audio Buffers',
-        dataIndex: 'audio',
-        key: 'audio',
-        render: (audio) => (typeof audio === 'number' ? audio.toLocaleString() : '-'),
-      },
-    ];
-
-    const sdiRows = status
-      ? (status.routes?.items || []).flatMap((route) =>
-          (route.sdi || []).map((sdi) => ({
-            key: `${route.id}-${sdi.device_number}`,
-            route: route.name,
-            port: DEVICE_TO_SDI[sdi.device_number]
-              ? `SDI ${DEVICE_TO_SDI[sdi.device_number]}`
-              : `device ${sdi.device_number}`,
-            device: sdi.device_number,
-            mode: sdi.detected_mode,
-            frames: sdi.video_frames,
-            dropped: sdi.dropped_frames,
-            duplicated: sdi.duplicated_frames,
-            audio: sdi.audio_buffers,
-          }))
-        )
-      : [];
-
     if (!status) {
       return (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
@@ -920,7 +847,6 @@ const Settings = () => {
     const memory = status.memory || {};
     const disk = status.disk || {};
     const decklink = status.decklink || { device_count: 0, devices: [] };
-    const routes = status.routes || { total: 0, started: 0, items: [] };
     const engine = status.engine;
     const service = status.service || {};
     const updates = status.updates || {};
@@ -1077,26 +1003,6 @@ const Settings = () => {
                 )}
               </Descriptions.Item>
             </Descriptions>
-          </Card>
-
-          <Card
-            title={
-              <Space>
-                <VideoCameraOutlined />
-                <span>SDI Output</span>
-              </Space>
-            }
-            extra={
-              <span style={{ fontSize: '12px' }}>
-                {`${routes.started} of ${routes.total} routes started`}
-              </span>
-            }
-          >
-            {sdiRows.length === 0 ? (
-              <span style={{ color: '#8c8c8c' }}>No route is currently sending to an SDI output.</span>
-            ) : (
-              <Table columns={sdiColumns} dataSource={sdiRows} pagination={false} size="small" />
-            )}
           </Card>
 
           <Card

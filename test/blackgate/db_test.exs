@@ -89,4 +89,32 @@ defmodule Blackgate.DbTest do
       assert aliases == %{}
     end
   end
+
+  describe "destination schema boundary" do
+    test "an SDI destination is refused at the boundary, with a reason", %{route_id: route_id} do
+      assert {:error, {:unsupported_destination, "SDI"}} =
+               Db.create_destination(route_id, %{"schema" => "SDI", "schema_options" => %{}})
+
+      assert {:error, _} = Db.get_destination(route_id, "does-not-exist")
+    end
+
+    test "a schema-less destination is refused too", %{route_id: route_id} do
+      assert {:error, {:unsupported_destination, nil}} =
+               Db.create_destination(route_id, %{"schema_options" => %{}})
+    end
+
+    test "SRT and UDP destinations are accepted", %{route_id: route_id} do
+      assert {:ok, _} =
+               Db.create_destination(route_id, %{
+                 "schema" => "SRT",
+                 "schema_options" => %{"mode" => "listener", "localport" => 17_501}
+               })
+
+      assert {:ok, _} =
+               Db.create_destination(route_id, %{
+                 "schema" => "UDP",
+                 "schema_options" => %{"address" => "239.0.0.1", "port" => 5000}
+               })
+    end
+  end
 end

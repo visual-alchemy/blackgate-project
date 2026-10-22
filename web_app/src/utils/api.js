@@ -207,8 +207,8 @@ export const routesApi = {
   start: async (id) => {
     const response = await authFetch(`/api/routes/${id}/start`);
 
-    // A refusal carries a reason the operator must see verbatim - "SDI 1 is in use by <route>" - and it can name
-    // more than one resource, so `message` wins over `error` when both are present.
+    // A refusal carries a reason the operator must see verbatim - "port 17001 is in use by <route>" - and it can
+    // name more than one resource, so `message` wins over `error` when both are present.
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.message || body.error || `Start failed (${response.status})`);

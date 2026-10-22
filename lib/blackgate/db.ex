@@ -73,6 +73,36 @@ defmodule Blackgate.Db do
     [:khepri.delete(["routes", id]), :khepri.delete_many("routes/#{id}/destinations/*")]
   end
 
+  # This build delivers over the network only. A stored `"SDI"` destination is accepted by neither the engine
+  # (it refuses an sdisink at parse time) nor the UI, so refusing it here - at the boundary, where the operator
+  # can still see why - keeps it out of the database instead of failing later at start time.
+  @destination_schemas ~w(SRT UDP)
+
+  @doc false
+  def validate_destination_schema(data, opts \\ [])
+
+  def validate_destination_schema(data, opts) when is_map(data) do
+    required? = Keyword.get(opts, :required, true)
+
+    case Map.fetch(data, "schema") do
+      {:ok, schema} when is_binary(schema) ->
+        if String.upcase(schema) in @destination_schemas do
+          :ok
+        else
+          {:error, {:unsupported_destination, schema}}
+        end
+
+      # A partial update inherits the stored schema, which was validated when it was created.
+      :error when required? == false ->
+        :ok
+
+      _ ->
+        {:error, {:unsupported_destination, nil}}
+    end
+  end
+
+  def validate_destination_schema(_data, _opts), do: {:error, {:invalid_destination, nil}}
+
   @spec create_destination(String.t(), map, binary | nil) :: {:ok, map} | {:error, any}
   def create_destination(route_id, data, id \\ nil) do
     id = if id, do: id, else: UUID.uuid1()
@@ -85,10 +115,16 @@ defmodule Blackgate.Db do
         "updated_at" => now()
       })
 
-    with :ok <- :khepri.put(["routes", route_id, "destinations", id], data),
+    with :ok <- validate_destination_schema(data),
+         :ok <- :khepri.put(["routes", route_id, "destinations", id], data),
          {:ok, result} <- get_destination(route_id, id) do
       {:ok, result}
     else
+      # A refused schema is the operator's input, not a storage fault: return it as it is, without a log line
+      # that reads like a bug.
+      {:error, {:unsupported_destination, _} = reason} ->
+        {:error, reason}
+
       other ->
         Logger.error("Failed to create route: #{inspect(other)}")
         {:error, other}
@@ -107,14 +143,16 @@ defmodule Blackgate.Db do
     path = ["routes", route_id, "destinations", id]
     now = now()
 
-    case :khepri.get(path) do
-      {:ok, destination} ->
-        new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
-        :ok = :khepri.put(path, new_destination)
-        :khepri.get(path)
+    with :ok <- validate_destination_schema(data, required: false) do
+      case :khepri.get(path) do
+        {:ok, destination} ->
+          new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+          :ok = :khepri.put(path, new_destination)
+          :khepri.get(path)
 
-      _ ->
-        {:error, :destination_not_found}
+        _ ->
+          {:error, :destination_not_found}
+      end
     end
   end
 

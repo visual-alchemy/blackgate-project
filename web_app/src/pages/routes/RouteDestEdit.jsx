@@ -5,12 +5,11 @@ import {
     Switch, Select, Button,
     Row, Col, message, Typography
 } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, routesApi, networkApi } from '../../utils/api';
-import { SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
 import React from 'react';
 
 const { Title } = Typography;
@@ -31,7 +30,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     const [destData, setDestData] = useState(null);
     const [routeLoading, setRouteLoading] = useState(true);
     const [interfaces, setInterfaces] = useState([]);
-    const [sdiPortUsage, setSdiPortUsage] = useState({});
 
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
@@ -104,28 +102,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 console.error('Error fetching network interfaces:', error);
             });
     }, []);
-
-    // Fetch SDI port usage across all routes
-    useEffect(() => {
-        routesApi.getAll()
-            .then(result => {
-                const usage = {};
-                (result.data || []).forEach(route => {
-                    // Same rule as the start gate: only a RUNNING route holds an output. This is a label here;
-                    // the refusal, and the holder's name, come from the server when the route is started.
-                    if (route.id === routeId || (route.connected !== true && route.status !== 'started')) return;
-                    (route.destinations || []).forEach(dest => {
-                        if (dest.schema === 'SDI' && dest.schema_options?.device_number !== undefined) {
-                            usage[dest.schema_options.device_number] = route.name;
-                        }
-                    });
-                });
-                setSdiPortUsage(usage);
-            })
-            .catch(error => {
-                console.error('Error fetching SDI port usage:', error);
-            });
-    }, [destId, routeId]);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -240,7 +216,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
-                                            <Radio.Button value="SDI">SDI</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -511,77 +486,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         }
                                     </Form.Item>
 
-                                    {/* SDI specific options (DeckLink Duo 2) */}
-                                    <Form.Item noStyle dependencies={['schema']}>
-                                        {({ getFieldValue }) =>
-                                            getFieldValue('schema') === 'SDI' && (
-                                                <>
-                                                    <Form.Item
-                                                        label="SDI Output Port"
-                                                        name={['schema_options', 'device_number']}
-                                                        required
-                                                        extra="DeckLink Duo 2 port number. This card provides 4 SDI channels (0-3)."
-                                                    >
-                                                        <Select
-                                                            placeholder="Select SDI port"
-                                                                options={SDI_PORT_OPTIONS.map(opt => {
-                                                                    // A route cannot use one connector twice: that is not a conflict with another route but an
-                                                                    // impossible destination, so it stays out of its own list.
-                                                                    const ownDevice = (routeData?.destinations || []).some(
-                                                                        d => d.id !== destId &&
-                                                                            d.schema === 'SDI' &&
-                                                                            d.schema_options?.device_number === opt.value
-                                                                    );
-
-                                                                    return {
-                                                                        ...opt,
-                                                                        label: ownDevice
-                                                                            ? `${opt.label} (already used by this route)`
-                                                                            : sdiPortUsage[opt.value]
-                                                                              ? `${opt.label} (in use by ${sdiPortUsage[opt.value]})`
-                                                                              : opt.label,
-                                                                        disabled: ownDevice,
-                                                                    };
-                                                                })}
-                                                            style={{ width: '280px' }}
-                                                        />
-                                                    </Form.Item>
-
-                                                    <Form.Item
-                                                        label="Video Mode"
-                                                        name={['schema_options', 'video_mode']}
-                                                        required
-                                                        extra="Progressive modes use frame rate. Interlaced modes show complete frames per second and fields per second."
-                                                    >
-                                                        <Select
-                                                            placeholder="Select video mode"
-                                                            options={[
-                                                                { label: 'Auto — detect source format (fallback: 1080p25)', value: 0 },
-                                                                { label: '1080p23.98 — 23.98 fps', value: 1 },
-                                                                { label: '1080p24 — 24 fps', value: 2 },
-                                                                { label: '1080p25 — 25 fps', value: 9 },
-                                                                { label: '1080p29.97 — 29.97 fps', value: 3 },
-                                                                { label: '1080p30 — 30 fps', value: 11 },
-                                                                { label: '1080p50 — 50 fps', value: 12 },
-                                                                { label: '1080p59.94 — 59.94 fps', value: 4 },
-                                                                { label: '1080p60 — 60 fps', value: 13 },
-                                                                { label: '1080i50 — 25 fps / 50 fields', value: 7 },
-                                                                { label: '1080i59.94 — 29.97 fps / 59.94 fields', value: 5 },
-                                                                { label: '1080i60 — 30 fps / 60 fields', value: 8 },
-                                                                { label: '720p50 — 50 fps', value: 14 },
-                                                                { label: '720p59.94 — 59.94 fps', value: 6 },
-                                                                { label: '720p60 — 60 fps', value: 15 },
-                                                                { label: '576i50 (PAL) — 25 fps / 50 fields', value: 17 },
-                                                                { label: '480i59.94 (NTSC) — 29.97 fps / 59.94 fields', value: 18 },
-                                                            ]}
-                                                            style={{ width: '250px' }}
-                                                        />
-                                                    </Form.Item>
-
-                                                </>
-                                            )
-                                        }
-                                    </Form.Item>
                                 </Card>
                             </Space>
 

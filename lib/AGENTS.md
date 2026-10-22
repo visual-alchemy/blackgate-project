@@ -36,10 +36,8 @@ Welcome! This folder contains the Elixir OTP core, Phoenix REST API, and WebSock
 - The license checker heartbeats to Vercel every 6 hours.
 - If the validation times out or fails due to network issues, the license cache **remains valid** to prevent production outages.
 
-### 4. SDI Audio Desync Auto-Recovery (`route_handler.ex`)
-- RTMP/HTTP/HLS sources go through the `ffmpeg` sidecar, which can cause brief audio gaps. When this happens, the DeckLink SDI audio embedder loses hardware sync and stays silent even after GStreamer recovers.
-- `RouteHandler` automatically restarts the pipeline when `SDI_AUDIO_SILENT` is detected from Rust engine stdout, subject to three guards:
-  1. **Schema guard:** `schema == "SRT"` routes are **never** auto-restarted (SRT is self-healing).
-  2. **Source-silence guard:** if `total_buffers < 5000`, the source has no audio — restart would loop indefinitely, so it is skipped.
-  3. **Cooldown guard:** after an auto-restart, a 5-minute cooldown prevents a restart loop if audio remains intermittent.
-- The `data` struct in `RouteHandler` carries `sdi_audio_last_restart_at` (monotonic timestamp). This field is reset to `nil` on every successful start/reconnect so that user-triggered restarts clear the cooldown.
+### 4. Listening-Port Gate (`output_claims.ex`)
+- Two routes cannot listen on one local port: the engine that loses dies at start with nothing explaining why. `RouteHandler` is gated by `Blackgate.OutputClaims` **at start time**, not at configuration time.
+- Only a listener claims a port; a caller dials out and binds nothing.
+- Holding a port means running it, first come first served: the caller passes the RUNNING routes in (judged from live engines, not from the stored `status`), so a stale `started` label never blocks a free port.
+- Destination schemas are SRT and UDP only; `Db.create_destination/2` refuses anything else at the boundary.

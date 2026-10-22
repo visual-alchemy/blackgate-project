@@ -29,7 +29,6 @@ import {
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
-import { DEVICE_TO_SDI } from '../../utils/sdiPorts';
 import RouteStats from '../../components/RouteStats';
 import DestinationStats from '../../components/DestinationStats';
 
@@ -176,12 +175,6 @@ const RouteItem = () => {
             return `${record.schema_options?.localaddress || 'N/A'}:${record.schema_options?.localport || 'N/A'}:${record.schema_options?.mode || 'N/A'}`;
           case 'UDP':
             return `${record.schema_options?.host || record.schema_options?.address || 'N/A'}:${record.schema_options?.port || 'N/A'}`;
-          case 'SDI': {
-            const port = DEVICE_TO_SDI[record.schema_options?.device_number] ?? '?';
-            const modeMap = { 0: 'Auto', 1: '1080p23.98', 2: '1080p24', 3: '1080p29.97', 4: '1080p59.94', 5: '1080i59.94', 6: '720p59.94', 9: '1080p25', 11: '1080p30', 12: '1080p50', 13: '1080p60', 7: '1080i50', 8: '1080i60', 14: '720p50', 15: '720p60', 17: 'PAL', 18: 'NTSC' };
-            const mode = modeMap[record.schema_options?.video_mode] || '1080p25';
-            return `SDI ${port} · ${mode}`;
-          }
           default:
             return '—';
         }
@@ -196,7 +189,6 @@ const RouteItem = () => {
       title: 'Latency',
       key: 'latency',
       render: (_, record) => {
-        if (record?.schema === 'SDI') return '—';
         const latency = record?.schema_options?.latency || record?.latency;
         return latency ? `${latency}ms` : '—';
       },
@@ -368,7 +360,7 @@ const RouteItem = () => {
       }
     } catch (error) {
       // Handle specific error cases
-      if (error.message && /(SDI \d+|port \d+) is in use by/.test(error.message)) {
+      if (error.message && /(port \d+) is in use by/.test(error.message)) {
         // The server refuses to start a route whose output or listening port is already taken, and names the
         // route holding it. Show that sentence as-is: it is the whole instruction. When more than one resource
         // conflicts, the server joins them so the operator fixes them all at once.
@@ -455,7 +447,7 @@ const RouteItem = () => {
       {routeData && routeData.status && routeData.status.toLowerCase() === 'error' && (
         <Alert
           message="Hardware / Driver Error"
-          description={routeData.error_message || "The DeckLink hardware or kernel driver has stopped responding. Please verify PCIe installation and ensure DesktopVideoHelper is running."}
+          description={routeData.error_message || "The engine could not start: check the source URL and that the route's ports are free."}
           type="error"
           showIcon
           style={{ marginBottom: 16 }}

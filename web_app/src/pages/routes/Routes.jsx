@@ -27,7 +27,7 @@ const RouteNameCell = ({ record }) => {
     tooltipTitle = (
       <div style={{ padding: '4px' }}>
         <div style={{ fontWeight: 600, color: '#ff4d4f', marginBottom: '4px' }}>Hardware / Driver Error</div>
-        <div>{record.error_message || 'DeckLink driver unresponsive or PCIe card missing.'}</div>
+        <div>{record.error_message || 'The engine could not start: check the source URL and the route\'s ports.'}</div>
       </div>
     );
   } else if (isRunning) {
