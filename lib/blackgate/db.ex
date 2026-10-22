@@ -17,6 +17,12 @@ defmodule Blackgate.Db do
          :ok <- create_destinations(id, destinations) do
       get_route(id, true)
     else
+      # A refused destination schema is the operator's input, not a storage fault: no error log
+      # that reads like a bug (same rule as create_destination/3).
+      {:error, {:unsupported_destination, _} = reason} ->
+        delete_route(id)
+        {:error, reason}
+
       other ->
         delete_route(id)
         Logger.error("Failed to create route: #{inspect(other)}")

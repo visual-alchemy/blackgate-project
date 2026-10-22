@@ -13,4 +13,17 @@ defmodule BlackgateWeb.FallbackController do
     |> put_view(html: BlackgateWeb.ErrorHTML, json: BlackgateWeb.ErrorJSON)
     |> render(:"404")
   end
+
+  # A refused destination schema is the operator's input, not a server fault: answer 400 with the
+  # reason the boundary rejected it instead of letting the unmatched tuple surface as a 500.
+  def call(conn, {:error, {:unsupported_destination, schema}}) do
+    label = if is_binary(schema), do: schema, else: "missing"
+
+    conn
+    |> put_status(:bad_request)
+    |> json(%{
+      message:
+        "Destination schema #{label} is not supported: this build delivers over the network only (SRT or UDP)."
+    })
+  end
 end

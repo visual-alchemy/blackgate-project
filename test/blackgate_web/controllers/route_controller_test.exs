@@ -66,6 +66,28 @@ defmodule BlackgateWeb.RouteControllerTest do
     assert {:ok, %{}} = Db.get_all_destinations(route_id)
   end
 
+  test "create with an SDI destination answers 400, names the schema, and stores nothing", %{
+    conn: conn
+  } do
+    conn =
+      post(conn, ~p"/api/routes", %{
+        route: %{
+          "name" => "sdi refused",
+          "schema" => "SRT",
+          "schema_options" => %{"mode" => "listener", "localport" => 9101},
+          "destinations" => [%{"name" => "Out", "schema" => "SDI", "schema_options" => %{}}]
+        }
+      })
+
+    assert json_response(conn, 400)["message"] =~ "SDI"
+    assert json_response(conn, 400)["message"] =~ "SRT or UDP"
+
+    refute Enum.any?(
+             json_response(get(conn, ~p"/api/routes"), 200)["data"],
+             &(&1["name"] == "sdi refused")
+           )
+  end
+
   defp cleanup_route(route_id) do
     on_exit(fn -> Db.delete_route(route_id) end)
   end
