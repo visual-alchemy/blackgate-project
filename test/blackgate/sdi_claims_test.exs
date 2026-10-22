@@ -297,4 +297,39 @@ defmodule Blackgate.SdiClaimsTest do
       refute SdiClaims.port_conflict?(srt("caller", 17001), [holder])
     end
   end
+
+  describe "a registered-but-dead route" do
+    # Measured on the box after the operator stopped a route: its supervisor stayed registered while the
+    # RouteHandler child was :undefined, so the next Start answered `{:already_started, pid}` for a route that was
+    # not running at all. Both the stop and the start must judge the TREE, not the registration.
+    test "a tree with no live handler is not usable" do
+      {:ok, sup} =
+        Supervisor.start_link(
+          [%{id: :idle, start: {Agent, :start_link, [fn -> :ok end]}}],
+          strategy: :one_for_one
+        )
+
+      refute Blackgate.route_tree_usable?(sup)
+      Supervisor.stop(sup)
+    end
+
+    test "a tree with a live handler is usable" do
+      {:ok, sup} =
+        Supervisor.start_link(
+          [%{id: {:route_handler, "x"}, start: {Agent, :start_link, [fn -> :ok end]}}],
+          strategy: :one_for_one
+        )
+
+      assert Blackgate.route_tree_usable?(sup)
+      Supervisor.stop(sup)
+    end
+
+    test "a dead pid is not usable rather than raising" do
+      pid = spawn(fn -> :ok end)
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}
+
+      refute Blackgate.route_tree_usable?(pid)
+    end
+  end
 end

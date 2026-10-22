@@ -6,11 +6,28 @@ defmodule Blackgate do
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
     with :ok <- check_sdi_claims(id) do
-      DynamicSupervisor.start_child(
-        {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
-        {Blackgate.RoutesSupervisor, %{id: id}}
-      )
+      # A registered-but-dead tree makes the supervisor answer `{:already_started, pid}` for a route that is not
+      # running at all. Clear it before starting, so Start always means start.
+      case get_route(id) do
+        {:ok, pid} ->
+          if route_tree_usable?(pid) do
+            {:error, {:already_started, pid}}
+          else
+            _ = clear_stale_route_entry(id)
+            do_start_route(id)
+          end
+
+        _ ->
+          do_start_route(id)
+      end
     end
+  end
+
+  defp do_start_route(id) do
+    DynamicSupervisor.start_child(
+      {:via, PartitionSupervisor, {Blackgate.DynamicSupervisor, id}},
+      {Blackgate.RoutesSupervisor, %{id: id}}
+    )
   end
 
   @doc """
@@ -98,11 +115,76 @@ defmodule Blackgate do
   def stop_route(id) do
     case find_route_tree(id) do
       {:ok, pid} ->
-        Supervisor.stop(pid, :normal)
+        _ = Supervisor.stop(pid, :normal)
+
+        # Supervisor.stop/2 returns :ok even when the tree was already unusable - measured: a tree that answered
+        # `:undefined` for its own RouteHandler child, i.e. the handler was gone while the supervisor stayed
+        # registered. Trusting the return value left the route registered, so the next Start answered
+        # `{:already_started, pid}` for a route the operator had just stopped. Verify, then clear the entry.
+        if route_tree_usable?(pid) do
+          Logger.warning(
+            "RouteHandler: route #{id} still alive after stop; registry entry left in place"
+          )
+
+          :ok
+        else
+          clear_stale_route_entry(id)
+        end
 
       other ->
         Blackgate.set_route_status(id, "stopped")
         other
+    end
+  end
+
+  @doc """
+  True when this supervisor can still run its route, i.e. it has a live `RouteHandler` child.
+
+  A tree whose handler is `:undefined` cannot run anything, and must neither keep the id registered nor answer
+  `already_started` for a route that is not running. Public because the start/stop paths and their tests both judge
+  it.
+  """
+  def route_tree_usable?(pid) when is_pid(pid) do
+    if Process.alive?(pid) do
+      route_tree_has_live_handler?(pid)
+    else
+      false
+    end
+  end
+
+  def route_tree_usable?(_pid), do: false
+
+  defp route_tree_has_live_handler?(pid) do
+    case Supervisor.which_children(pid) do
+      children when is_list(children) ->
+        Enum.any?(children, fn
+          {{:route_handler, _}, child, _, _} when is_pid(child) -> Process.alive?(child)
+          _ -> false
+        end)
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  # Only safe when the tree is genuinely unusable: otherwise the id could be removed from under a live route.
+  defp clear_stale_route_entry(id) do
+    case :syn.lookup(:routes, id) do
+      {pid, _} when is_pid(pid) ->
+        if route_tree_usable?(pid) do
+          :ok
+        else
+          _ = :syn.unregister(:routes, id)
+
+          case Supervisor.stop(pid, :normal) do
+            _ -> :ok
+          end
+        end
+
+      _ ->
+        :ok
     end
   end
 

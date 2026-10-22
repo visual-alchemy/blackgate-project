@@ -374,13 +374,10 @@ const RouteItem = () => {
         // conflicts, the server joins them so the operator fixes them all at once.
         messageApi.error(error.message);
       } else if (error.message && error.message.includes('already_started')) {
+        // Do not assume: ask the server what the route is doing. A registered-but-dead process answers
+        // `already_started` for a route that is not running, and painting it green here would hide that.
         messageApi.info('Route is already started');
-
-        // Update the UI to reflect that the route is started
-        setRouteData(prev => ({
-          ...prev,
-          status: 'started'
-        }));
+        await fetchRouteData();
       } else if (error.message && error.message.includes('not_found')) {
         messageApi.info('Route process not found. It may have already been stopped.');
 
