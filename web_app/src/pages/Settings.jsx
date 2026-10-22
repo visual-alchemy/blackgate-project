@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input, Descriptions, Alert, Tooltip, Progress } from 'antd';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Table, Tag, Spin, Form, Input, Descriptions, Alert, Tooltip, Upload, Progress } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, WifiOutlined, ReloadOutlined, EditOutlined, UserOutlined, SaveOutlined, DesktopOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { backupApi, networkApi, authApi, systemApi } from '../utils/api';
 import { DEVICE_TO_SDI } from '../utils/sdiPorts';
@@ -30,7 +30,6 @@ const Settings = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [systemConfirm, setSystemConfirm] = useState(null);
   const [typedConfirmation, setTypedConfirmation] = useState('');
-  const packageInputRef = useRef(null);
 
   // Fetch host status when the System tab is active
   useEffect(() => {
@@ -188,9 +187,6 @@ const Settings = () => {
     } finally {
       setUploadingPackage(false);
       setUploadProgress(0);
-      if (packageInputRef.current) {
-        packageInputRef.current.value = '';
-      }
     }
   };
 
@@ -1258,33 +1254,26 @@ const Settings = () => {
               </div>
             )}
 
-            <Space wrap style={{ marginBottom: 16 }}>
-              <input
-                ref={packageInputRef}
-                type="file"
-                accept=".bgupdate"
-                style={{ display: 'none' }}
-                onChange={(event) => handlePackageUpload(event.target.files?.[0])}
-              />
-              <Tooltip
-                title={
-                  actionsInfo.can_schedule
-                    ? 'A signed .bgupdate built by scripts/package-signed-update.sh'
-                    : 'Needs the root helper + sudoers drop-in to deploy, but uploading is still possible'
-                }
-              >
-                <Button
-                  icon={<UploadOutlined />}
-                  loading={uploadingPackage}
-                  onClick={() => packageInputRef.current?.click()}
-                >
-                  Upload package (.bgupdate)
-                </Button>
-              </Tooltip>
-              {uploadingPackage && (
-                <Progress percent={uploadProgress} size="small" style={{ width: '200px' }} />
-              )}
-            </Space>
+            {/* A visible drop zone instead of a hidden input a button clicks programmatically. The old
+                shape worked in every browser tested here and still refused to open the client's file
+                dialog on a real deployment, with the click chain instrumented and error-free - so the
+                upload no longer depends on the browser honouring a synthetic click at all. */}
+            <Upload.Dragger
+              accept=".bgupdate"
+              multiple={false}
+              disabled={uploadingPackage}
+              showUploadList={false}
+              customRequest={({ file }) => handlePackageUpload(file)}
+              style={{ marginBottom: 16, maxWidth: 560 }}
+            >
+              <p className="ant-upload-drag-icon">
+                <UploadOutlined />
+              </p>
+              <p className="ant-upload-text">Upload package (.bgupdate)</p>
+            </Upload.Dragger>
+            {uploadingPackage && (
+              <Progress percent={uploadProgress} size="small" style={{ width: '200px', marginBottom: 16 }} />
+            )}
 
             {packages.length === 0 ? (
               <span style={{ color: '#8c8c8c' }}>
