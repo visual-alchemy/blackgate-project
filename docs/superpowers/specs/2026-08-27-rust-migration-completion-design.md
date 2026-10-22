@@ -1,5 +1,10 @@
 # Rust Migration Completion Design
 
+> **Scope note (branch `rust-gateway`).** This document describes the SDI-capable product line
+> (`rust-decklink-duo2`). On `rust-gateway` there is no SDI path: no `engine-sdi` crate, no
+> DeckLink SDK, no Blackmagic driver in the image, and an SDI destination is refused by the API
+> and the engine. Kept as history; do not use it as a build instruction here.
+
 Date: 2026-08-27  
 Branch scope: `rust-migration` only  
 Required platform: Ubuntu 24.04 LTS amd64

@@ -1,3 +1,8 @@
+> **Scope note (branch `rust-gateway`).** This document describes the SDI-capable product line
+> (`rust-decklink-duo2`). On `rust-gateway` there is no SDI path: no `engine-sdi` crate, no
+> DeckLink SDK, no Blackmagic driver in the image, and an SDI destination is refused by the API
+> and the engine. Kept as history; do not use it as a build instruction here.
+
 > **ARCHIVED — historical document.**
 > A snapshot of SDI work from the C-engine era. The SDI path now lives in the Rust engine
 > (`native/rust/engine-sdi`) and the physical sign-off checklist is

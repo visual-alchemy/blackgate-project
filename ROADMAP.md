@@ -53,14 +53,12 @@
 - [x] Remove "Last Updated" column (low-value for live monitoring)
 - [x] Add "Output" column showing compact destination summary
   - SRT: `SRT:15000` (listener port)
-  - SDI: `SDI 1 · 1080p25` (port + mode)
   - UDP: `UDP:239.0.0.1:1234`
-  - Multiple: `SRT:15000 · SDI 1` or `SRT:15000 (+2)` if many
-- [x] SDI destinations in detail table: show `SDI 1 · 1080p25` in Destination column, `—` for Latency
+  - Multiple: `SRT:15000 · UDP:239.0.0.1:1234` or `SRT:15000 (+2)` if many
 
 ### 9. ~~Event Log~~ ✅
 - [x] `Blackgate.EventLog` GenServer — in-memory ring buffer (last 500 events) in ETS
-- [x] Events emitted from RouteHandler: route started, stopped, crashed, SDI failed
+- [x] Events emitted from RouteHandler: route started, stopped, crashed, source failed
 - [x] API endpoints: `GET /api/events`, `GET /api/events/counts`, `DELETE /api/events`
 - [x] Filter by severity (info/warning/critical), route_id, event type
 - [x] New "Events" page in sidebar with severity badges and auto-refresh
@@ -68,7 +66,7 @@
 - [x] Connection lost/established events from stats monitoring
 - [x] Health threshold events (high packet loss, high RTT, stream corruption)
 
-### 10. SDI Audio Channel Selection
+### 10. ~~SDI Audio Channel Selection~~ — not applicable to `rust-gateway` (no SDI outputs)
 - [ ] Allow selecting which audio channels to output on SDI (e.g., Ch 1+2, Ch 3+4, Ch 5+6, or custom pairs)
 - [ ] Use GStreamer `deinterleave` → pick channels → `interleave` or `audiomixmatrix` for channel mapping
 - [ ] Add `audio_channels` config to SDI destination schema (default: channels 1+2)
@@ -112,13 +110,18 @@
 ### 16. ~~RTMP Protocol Support~~ ✅
 - [x] RTMP/HTTP-FLV/HLS source via ffmpeg sidecar (normalizes to SRT MPEG-TS loopback)
 - [x] Auto-reconnect for ffmpeg sidecar on source disconnect (10s retry, 3min timeout)
-- [x] Cross-protocol routing: RTMP/HLS/FLV → SRT/UDP/SDI
+- [x] Cross-protocol routing: RTMP/HLS/FLV → SRT/UDP
 - [x] `-mpegts_copyts 0 -pcr_period 40` for clean timestamp regeneration (fixes hardware decoder macroblocks)
 - [ ] HLS preview player in dashboard for RTMP source routes (hls.js)
 - [ ] Stream key regeneration UI
 - [x] RTMP source health monitoring (GStreamer bus warnings intercept & state metrics)
 
-### 17. ~~SDI Output via Blackmagic DeckLink~~ ✅
+### 17. ~~SDI Output via Blackmagic DeckLink~~ ✅ / removed on `rust-gateway`
+
+> Shipped on `rust-decklink-duo2`. The gateway branch strips it: no `engine-sdi` crate, no vendor SDK,
+> no Blackmagic driver in the image, and an SDI destination is refused by the API and the engine.
+> Kept here as the record of what that product line contains.
+>
 > **Hardware:** DeckLink Quad 2 (8x SDI output, PCIe) — requires decode step (not passthrough)
 
 - [x] Bundle Blackmagic Desktop Video SDK headers in build (`native/decklink-sdk/`)
@@ -137,5 +140,5 @@
 - [x] SDI port conflict prevention: dropdown disables ports in use, shows which route is using them
 - [ ] Hardware decode support: NVDEC (`nvh264dec`), VA-API (`vaapih264dec`) to minimize CPU
 - [x] True auto-detect: match SDI output mode to input source resolution/framerate (deferred dynamic linking on decoded caps)
-- [ ] Test with Docker deployment (requires host DeckLink driver + device passthrough)
+- [ ] (SDI line only) Test with Docker deployment — needs host DeckLink driver + device passthrough
 - [ ] Test 4+ simultaneous SDI outputs from different routes

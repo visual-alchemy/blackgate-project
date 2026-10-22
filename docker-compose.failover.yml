@@ -16,10 +16,10 @@
 #      emitters could not resolve the `blackgate` hostname. Switching to the
 #      default user-defined bridge network gives us service-name DNS
 #      (`srt://blackgate:12100`) and explicit port publishing.
-#   2. `devices:` is RESET. The base file passes through DeckLink (/dev/blackmagic/*)
-#      and Intel GPU (/dev/dri) devices, which do not exist on dev laptops or
-#      CI hosts. A failover test does not need SDI output, so dropping the
-#      passthrough makes this harness portable.
+#   2. `devices:` is RESET. The base file can pass through the Intel GPU
+#      (/dev/dri), which does not exist on dev laptops or CI hosts. A failover
+#      test does not need it, so dropping the passthrough makes this harness
+#      portable.
 #
 # See: docs/failover-runbook.md for the full step-by-step test procedure.
 # =============================================================================
@@ -30,8 +30,8 @@ services:
     # ports can be explicitly published. `!reset null` is the supported way
     # to unset a key inherited from the base file.
     network_mode: !reset null
-    # Reset hardware device passthrough — not needed for an SRT-only failover
-    # test and absent on non-SDI hosts (macOS / CI).
+    # Reset hardware device passthrough - not needed for an SRT-only failover
+    # test and absent on laptops and CI hosts (macOS / CI).
     devices: !reset null
     ports:
       # Blackgate web UI + REST API

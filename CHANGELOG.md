@@ -6,7 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [Unreleased] — branch `rust-gateway` (IP delivery only)
+
+### Removed
+- **SDI output.** The `engine-sdi` crate, the vendored DeckLink SDK, the SDI branch of the GStreamer
+  pipeline (`sdisink`, `SdiBranchHandle`, `detach_sdi_branch`), the per-device `SdiState` counters and
+  the `sdi_video_stats` telemetry are gone. `SinkProtocol` is now `Srt | Udp`, and an `sdisink` element
+  is refused when a route config is parsed.
+- **Blackmagic Desktop Video in the appliance image.** No GStreamer DeckLink plugin build, no vendor
+  `.deb`, and no DKMS toolchain in the package pool. The Docker image no longer compiles the plugin
+  either.
+- **SDI audio desync auto-recovery** and the playout-frame half of the route watchdog: both existed to
+  detect a stalled DeckLink output. The network-stall watchdog is unchanged.
+- **SDI destinations in the API and the dashboard.** `Db.create_destination/2` returns
+  `{:error, {:unsupported_destination, schema}}` for anything outside SRT/UDP, the schema picker offers
+  SRT and UDP, and the System tab no longer reports a DeckLink card or a firmware dump.
+
+### Changed
+- **`SdiClaims` is now `OutputClaims`.** The start-time gate keeps the half that still has a failure
+  mode on a network gateway: two routes cannot listen on one local port. Holding a port means running
+  it, judged against live engines rather than the stored `status`.
+- **In-process source switching has no route-shape gate.** The engine's guarded cut (wait for the
+  target's keyframe, normalize the timeline) is what makes a switch safe; the structural-fingerprint
+  guard it replaced only ever restricted SDI routes.
 
 ---
 

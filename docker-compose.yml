@@ -8,7 +8,7 @@ services:
     # bind host device nodes). For the Debian appliance deployment, restore:
     #   network_mode: host
     #   privileged: true
-    #   devices: [/dev/blackmagic/io*, /dev/dri]
+    #   devices: [/dev/dri]   # /dev/dri keeps VA-API visible; there is no SDI device on this build
     ports:
       - "4000:4000" # Phoenix API + UI
       - "9000-9500:9000-9500/udp" # SRT listener range for route sources/sinks

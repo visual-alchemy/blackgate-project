@@ -77,7 +77,7 @@ dashboard → POST /api/system/actions/reboot
 - Reboot and shutdown require typing the action back in the confirmation dialog; deploy requires the
   version.
 - Every scheduled action is written to Events (`system_action`) with its argument, so a reboot from
-  the dashboard leaves a trace next to route and SDI events.
+  the dashboard leaves a trace next to route events.
 - Without the helper and the sudoers drop-in the dashboard disables the buttons and says why. Without
   the systemd unit, Restart is additionally unavailable: a hand-started node carries its environment
   in the shell that launched it, and there is no safe way to restart it.

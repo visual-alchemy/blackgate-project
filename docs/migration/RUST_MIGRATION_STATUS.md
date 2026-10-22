@@ -1,5 +1,10 @@
 # Rust Migration Status
 
+> **Scope note (branch `rust-gateway`).** This document describes the SDI-capable product line
+> (`rust-decklink-duo2`). On `rust-gateway` there is no SDI path: no `engine-sdi` crate, no
+> DeckLink SDK, no Blackmagic driver in the image, and an SDI destination is refused by the API
+> and the engine. Kept as history; do not use it as a build instruction here.
+
 Status: `IN_PROGRESS`
 
 Target repository endpoint: `SDI_MANUAL_PENDING`  

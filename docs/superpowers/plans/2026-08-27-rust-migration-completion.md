@@ -1,5 +1,10 @@
 # Rust Migration Completion Implementation Plan
 
+> **Scope note (branch `rust-gateway`).** This document describes the SDI-capable product line
+> (`rust-decklink-duo2`). On `rust-gateway` there is no SDI path: no `engine-sdi` crate, no
+> DeckLink SDK, no Blackmagic driver in the image, and an SDI destination is refused by the API
+> and the engine. Kept as history; do not use it as a build instruction here.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Rust the only Blackgate production streaming engine, prove functional and no-regression performance parity against a frozen C oracle on Ubuntu 24.04 LTS, and leave physical DeckLink validation as the only manual gate.

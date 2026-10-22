@@ -1,5 +1,10 @@
 # The Rust-only branch
 
+> **Scope note (branch `rust-gateway`).** This document describes the SDI-capable product line
+> (`rust-decklink-duo2`). On `rust-gateway` there is no SDI path: no `engine-sdi` crate, no
+> DeckLink SDK, no Blackmagic driver in the image, and an SDI destination is refused by the API
+> and the engine. Kept as history; do not use it as a build instruction here.
+
 This file exists because `rust-migration` is not "another Blackgate branch": it is the branch
 where the media engine is Rust and nothing else runs the stream. Read this before assuming
 behaviour, build commands or file layout from the C-era branches (`blackgate-lite`,

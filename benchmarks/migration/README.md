@@ -1,8 +1,9 @@
 # Rust migration performance suite
 
 Suite compares checksum-frozen C oracle with production Rust engine under same
-Ubuntu 24.04 image, media workload, process sampler, and decision model. It is
-non-SDI; physical DeckLink validation uses `docs/migration/SDI_MANUAL_SIGNOFF.md`.
+Ubuntu 24.04 image, media workload, process sampler, and decision model. It measures
+SRT/UDP delivery only, which is all `rust-gateway` does; the SDI product line's hardware sign-off lives
+on `rust-decklink-duo2`.
 
 ## Decision gates
 

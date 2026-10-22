@@ -4,7 +4,12 @@
 
 **High-performance video routing with secure, reliable transport**
 
-> **v1.0.1**: Real-time health diagnostics, timestamp correction, clock-pacing, tsparse packet alignment, SDI output, RTMP/ffmpeg sidecar. Actively improving based on real-world usage.
+> **v1.0.1 (branch `rust-gateway`)**: Real-time health diagnostics, timestamp correction, clock-pacing,
+> tsparse packet alignment, RTMP/ffmpeg sidecar. Actively improving based on real-world usage.
+>
+> **Delivery is SRT and UDP only on this branch.** There is no SDI output: no DeckLink crate, no vendor
+> SDK, no Blackmagic driver, and an SDI destination is rejected by both the API and the engine. The
+> SDI-capable product line lives on `rust-decklink-duo2`.
 
 > **Platform contract:** Ubuntu 24.04 LTS, Rust-only media runtime, Elixir
 > 1.18.2 / OTP 27.0.1, Node 20.19.0, and React 19. See
@@ -21,7 +26,6 @@
 | **SRT Transport** | Listener, Caller, Rendezvous modes with passphrase authentication, StreamID support |
 | **RTMP/HLS/HTTP-FLV** | Ingest RTMP push or pull HLS/FLV streams via ffmpeg sidecar with SRT loopback normalization |
 | **UDP Support** | Source and Destination for local network streaming |
-| **SDI Output** | Blackmagic DeckLink hardware output (decode + scale to SDI) |
 | **Live Source Statistics** | Real-time bitrate, RTT, packet loss, bandwidth, connected callers |
 | **Destination Statistics** | Per-destination stats with connected client details (IP, bitrate, RTT) |
 | **Connection Status** | Live green/red/yellow/grey badge showing real-time SRT connection health including "Reconnecting" state |
@@ -31,21 +35,12 @@
 | **Auto-Restart & Reconnect** | Editing a running route auto-restarts; RTMP sources auto-reconnect on disconnect |
 | **Bulk Operations** | Select and start/stop/delete multiple routes at once |
 | **Search & Filter** | Filter routes by name, status, or schema type |
-| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, SDI failures, reconnects) |
+| **Event Log** | In-app timeline of route lifecycle events (start, stop, crash, source failures, reconnects) |
 | **Credential Management** | Change admin username and password from the Settings UI |
 | **Ubuntu Appliance** | Ubuntu 24.04 LTS bare-metal OTP release managed by systemd |
 | **REST API** | Full programmatic control for automation |
 | **Docker Ready** | One-command deployment with backup/restore |
 | **High Bitrate** | Supports 50Mbps+ streams with optimized passthrough pipeline |
-
-### SDI Output (Blackmagic DeckLink)
-
-Route SRT streams directly to SDI hardware outputs:
-- **Codec-agnostic** — Supports H.264, HEVC (H.265), MPEG-2 video; AAC, MP2, Opus audio
-- **Multiple modes** — 1080p25/30/50/60, 1080i, 720p, PAL/NTSC SD, 4K (2160p)
-- **Multi-output** — DeckLink Quad 2 provides up to 8 SDI channels
-- **Graceful failure** — SDI issues don't affect SRT passthrough outputs
-- **Simultaneous** — SRT passthrough + SDI decode from the same route
 
 ### Real-time Statistics
 
@@ -80,7 +75,6 @@ The Routes table shows a live connection status badge for each route:
 - [x] ~~Bulk Route Operations~~
 - [x] ~~Route Cloning~~
 - [x] ~~Credential Management~~
-- [x] ~~SDI Output (DeckLink)~~
 - [x] ~~Event Log~~
 - [x] ~~Watchdog (Stalled Pipeline Detection)~~
 - [x] ~~RTMP/HTTP-FLV/HLS Ingestion (ffmpeg sidecar)~~
@@ -125,13 +119,11 @@ graph TB
     subgraph "External Destinations"
         G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Caller"]
         H["SRT Destination N<br/>(Player/Server)<br/>Mode: Caller"]
-        I["SDI Output<br/>(DeckLink Quad 2)<br/>Hardware"]
     end
     
     A -->|"SRT Stream<br/>(Listener Mode)"| F
     F -->|"SRT Stream<br/>(Listener Mode)"| G
     F -->|"SRT Stream<br/>(Listener Mode)"| H
-    F -->|"Decode → SDI"| I
     
     B <-->|"HTTP/REST API"| C
     C <-->|"Database Ops"| E
@@ -174,14 +166,12 @@ graph TB
         F["SRT Source<br/>(Encoder/Server)<br/>Mode: Listener"]
         G["SRT Destination 1<br/>(Player/Server)<br/>Mode: Listener"]
         H["SRT Destination N<br/>(Player/Server)<br/>Mode: Listener"]
-        I["SDI Output<br/>(DeckLink Quad 2)<br/>Hardware"]
     end
     
     E -->|"SRT Connection<br/>(Caller Mode)"| F
     F -->|"SRT Stream"| E
     E -->|"SRT Connection<br/>(Caller Mode)"| G
     E -->|"SRT Connection<br/>(Caller Mode)"| H
-    E -->|"Decode → SDI"| I
     
     A <-->|"HTTP/REST API"| B
     B <-->|"Database Ops"| D
@@ -221,7 +211,7 @@ graph TB
             S_SRC["srtsrc (Secondary Input / Auto-Join)"]
             SEL["input-selector<br/>Zero-Glitch In-Process Switch"]
             TEE["tee (Distribution)"]
-            SNK["srtsink / udpsink / sdisink<br/>Output Destinations"]
+            SNK["srtsink / udpsink<br/>Output Destinations"]
         end
     end
 
@@ -306,7 +296,6 @@ sequenceDiagram
 | **Stats** | ETS + Registry | In-memory real-time statistics |
 | **Streaming** | Rust + GStreamer 1.24 | Memory-safe, high-performance video processing |
 | **Transport** | Haivision SRT | Secure, reliable UDP-based streaming |
-| **SDI Output** | Blackmagic DeckLink + GStreamer | Hardware video output via decodebin |
 | **IPC** | Unix Socket | Low-latency backend ↔ pipeline communication |
 
 ---
@@ -377,11 +366,22 @@ rustup toolchain install 1.96.0 --component clippy,rustfmt
 make install
 ```
 
+#### Nothing SDI to install on this branch
+
+Building `rust-gateway` needs no Blackmagic packages: no Desktop Video driver, no `libgstdecklink`, no
+vendored SDK. The engine links `srtsrc` / `srtsink` / `udpsrc` / `udpsink` / `tsdemux` from the standard
+`gstreamer1.0-plugins-bad` and `-good` packages that `make install` already installs, plus `ffmpeg` for
+the RTMP/HTTP/HLS sidecar.
+
+Carrying a machine over from the SDI line: drop any stored route whose destination schema is `SDI` (both
+the API and the engine refuse it now), and remove `/dev/blackmagic/*` passthrough from
+`docker-compose.yml` if you use it.
+
 ---
 
 ## Production Deployment
 
-### Option 1: Ubuntu 24.04 LTS bare metal (required for production/SDI)
+### Option 1: Ubuntu 24.04 LTS bare metal (the supported production target)
 
 ```bash
 # 1. Install dependencies
@@ -429,8 +429,6 @@ docker compose down
 ```
 
 Access: http://localhost:4000
-
-> **Note:** For SDI output via Docker, the host must have Blackmagic Desktop Video drivers installed and device passthrough configured in `docker-compose.yml`.
 
 Docker remains development/CI support. Installed appliances run directly as an
 OTP release; Docker is not a gateway runtime dependency.
@@ -483,7 +481,7 @@ All other endpoints require `Authorization: Bearer <token>` header.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/routes/:id/destinations` | List destinations |
-| `POST` | `/api/routes/:id/destinations` | Add destination (SRT, UDP, or SDI) |
+| `POST` | `/api/routes/:id/destinations` | Add destination (SRT or UDP) |
 | `PUT` | `/api/routes/:id/destinations/:dest_id` | Update destination |
 | `DELETE` | `/api/routes/:id/destinations/:dest_id` | Remove destination |
 
@@ -533,21 +531,6 @@ All other endpoints require `Authorization: Bearer <token>` header.
 
 ---
 
-## SDI Hardware Setup
-
-For SDI output via Blackmagic DeckLink:
-
-1. **Install Blackmagic Desktop Video driver** on the host (creates `/dev/blackmagic/*`)
-2. **Install GStreamer libav**: `sudo apt install gstreamer1.0-libav`
-3. **Verify**: `gst-inspect-1.0 decklinkvideosink`
-4. **Test**: `gst-launch-1.0 videotestsrc ! videoconvert ! "video/x-raw,format=UYVY,width=1920,height=1080,framerate=25/1" ! decklinkvideosink device-number=0 mode=1080p25`
-
-See [SDI_FIXES.md](./SDI_FIXES.md) for detailed hardware setup, device mapping, and troubleshooting.
-Physical release acceptance uses the
-[SDI manual sign-off checklist](./docs/migration/SDI_MANUAL_SIGNOFF.md).
-
----
-
 ## License
 
 Blackgate is proprietary software developed by [Visual Alchemy](https://github.com/visual-alchemy). All rights reserved. A valid license key is required for production use.
@@ -558,9 +541,9 @@ Blackgate is proprietary software developed by [Visual Alchemy](https://github.c
 
 - [ROADMAP](./ROADMAP.md) — Development roadmap & feature backlog
 - [CHANGELOG](./CHANGELOG.md) — Version history
-- [SDI_FIXES](./SDI_FIXES.md) — SDI output setup, device mapping, troubleshooting
 - [Rust migration status](./docs/migration/RUST_MIGRATION_STATUS.md) — automated evidence and completion state
 - [Migration benchmark](./benchmarks/migration/README.md) — frozen-C comparison harness and thresholds
+- [Operations runbook](./docs/operations/system-actions-and-updates.md) — systemd actions, signed updates, support access
 
 ---
 

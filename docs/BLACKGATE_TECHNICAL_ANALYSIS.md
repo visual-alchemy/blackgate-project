@@ -15,7 +15,7 @@ flowchart LR
     RUST -->|telemetry JSON / Unix socket| STATS[RouteStatsRegistry / ETS]
     STATS --> API
     MEDIA[SRT / UDP / FFmpeg loopback] <--> RUST
-    RUST --> OUTPUT[SRT / UDP / DeckLink SDI]
+    RUST --> OUTPUT[SRT / UDP]
 ```
 
 Elixir/OTP owns control plane, supervision, persistence, API, and telemetry
@@ -72,7 +72,7 @@ See:
 
 - `docs/migration/RUST_MIGRATION_STATUS.md`
 - `benchmarks/migration/README.md`
-- `docs/migration/SDI_MANUAL_SIGNOFF.md`
+- `docs/migration/SDI_MANUAL_SIGNOFF.md` (SDI product line only — not reachable from this branch)
 
 ## Completion boundary
 
