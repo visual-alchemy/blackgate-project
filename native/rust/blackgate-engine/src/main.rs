@@ -222,15 +222,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let stop = Arc::new(AtomicBool::new(false));
 
+    // The persisted selection must reach the seamless state too, not just the selector's
+    // active-pad in builder.rs - otherwise the engine believes it is on primary while the
+    // pipeline is provably on secondary.
+    let active_source = match config.active_source.as_deref() {
+        Some("secondary") => SourceTarget::Secondary,
+        _ => SourceTarget::Primary,
+    };
+
     let selector_state: Arc<Mutex<Option<SelectorState>>> =
         Arc::new(Mutex::new(match (&built.selector, &built.secondary) {
             (Some(sel), Some(sec)) => Some(SelectorState::new(
                 sel.clone(),
                 sec.clone(),
                 config.auto_join,
+                active_source,
             )),
             _ => None,
         }));
+
+    // Dual-ingest only: learn each source's programme and keyframes, and keep the output timeline
+    // continuous across an in-process switch.
+    if built.selector.is_some() {
+        if let Some(secondary) = built.secondary.as_ref() {
+            SelectorState::install_probes(&selector_state, &built.source, secondary, &built.tee);
+            println!(
+                "SEAMLESS: source probes installed (keyframe-gated switch, timeline normalised)"
+            );
+        }
+    }
 
     // stdin command thread (C stdin_watch_cb + handle_command_line)
     let stop_for_stdin = stop.clone();
@@ -272,7 +292,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(_) => continue,
                     };
                     match (cmd, sel_guard.as_mut()) {
-                        (Command::SwitchSource(tgt), Some(sel)) => sel.switch_to(tgt),
+                        (Command::SwitchSource(tgt), Some(sel)) => {
+                            let pending = sel.request_switch(tgt);
+                            if !pending {
+                                println!(
+                                    "SOURCE_SWITCH_PENDING:{} (awaiting keyframe or rejected)",
+                                    tgt.as_str()
+                                );
+                            }
+                        }
                         (Command::SwitchSource(_), None) => {
                             eprintln!("switch_source: not a dual-ingest pipeline");
                         }

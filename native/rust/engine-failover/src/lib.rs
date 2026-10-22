@@ -31,6 +31,9 @@ pub struct SelectorState {
     secondary_joined: bool,
     /// Route-level auto_join; drives lite's switch-time join/leave lifecycle.
     auto_join: bool,
+    /// Holds an in-process switch until the target source proves it is cuttable, and keeps the
+    /// output timeline continuous across the change. See [`SeamlessSwitch`].
+    seamless: SeamlessSwitch,
 }
 
 impl SelectorState {
@@ -39,18 +42,146 @@ impl SelectorState {
     /// Hardcoding `true` here made `join-secondary` a silent no-op on
     /// auto_join=false routes — the switch reported success while the secondary
     /// stayed NULL.
+    /// `active` is the selection the route was started with (`active_source` from Elixir), so the
+    /// seamless state and the selector agree from the first buffer instead of assuming primary.
     pub fn new(
         selector: gstreamer::Element,
         secondary: gstreamer::Element,
         auto_join: bool,
+        active: SourceTarget,
     ) -> Self {
         Self {
             selector,
             secondary,
-            active: SourceTarget::Primary,
-            secondary_joined: auto_join,
+            active,
+            // builder.rs holds the secondary at NULL when auto_join is false, so the selector cannot
+            // already be on it in that case.
+            secondary_joined: auto_join || active == SourceTarget::Secondary,
             auto_join,
+            seamless: SeamlessSwitch::new(active),
         }
+    }
+
+    /// `switch-source`: ask for a source change. It does NOT move the selector now - the change
+    /// completes in [`Self::feed_source`] once the target source carries a keyframe, which is what
+    /// keeps the cut invisible. Manual failover still gets the keyframe wait, because a cut to a
+    /// source that has not produced a keyframe is the macroblock case.
+    pub fn request_switch(&mut self, target: SourceTarget) -> bool {
+        self.seamless.request(target)
+    }
+
+    /// The switch that is waiting for its keyframe, if any.
+    pub fn pending_switch(&self) -> Option<SourceTarget> {
+        self.seamless.pending()
+    }
+
+    /// Feed one buffer from one source (index 0 = primary, 1 = secondary). Returns the signal when
+    /// this buffer completed or refused a requested change; the caller may report it, and the
+    /// selector has already been moved when it did.
+    pub fn feed_source(&mut self, index: usize, segment: &[u8]) -> Option<SwitchSignal> {
+        let signal = self.seamless.on_source_segment(index, segment);
+
+        match signal {
+            Some(SwitchSignal::Switched(target)) => self.switch_to(target),
+            Some(SwitchSignal::Rejected(target, reason)) => {
+                println!("SOURCE_SWITCH_REJECTED:{}:{}", target.as_str(), reason);
+            }
+            None => {}
+        }
+
+        signal
+    }
+
+    /// Rewrite one buffer of the SELECTED source so the output timeline stays continuous.
+    pub fn normalize(&mut self, data: &mut [u8]) -> Option<engine_ts::NormalizeResult> {
+        self.seamless.normalize(data)
+    }
+
+    /// Probe both sources and the tee. Call after the pipeline is built; GStreamer accepts probes on
+    /// a running pad, so this does not need to happen before it goes PLAYING.
+    pub fn install_probes(
+        state: &std::sync::Arc<std::sync::Mutex<Option<SelectorState>>>,
+        primary: &gstreamer::Element,
+        secondary: &gstreamer::Element,
+        tee: &gstreamer::Element,
+    ) {
+        // A single-source pipeline has neither a selector to move nor a second timeline to
+        // normalise, so nothing is installed there.
+        match state.lock() {
+            Ok(guard) if guard.is_some() => {}
+            _ => return,
+        }
+
+        // Per source, on the source's own src pad: what the selector picks between, so programme
+        // identity and keyframes are learned BEFORE any switch decision is taken.
+        for (index, element) in [(0usize, primary), (1usize, secondary)] {
+            let Some(pad) = element.static_pad("src") else {
+                continue;
+            };
+            let state = state.clone();
+            pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_pad, info| {
+                let Some(buffer) = info.buffer() else {
+                    return gstreamer::PadProbeReturn::Ok;
+                };
+                let Ok(map) = buffer.map_readable() else {
+                    return gstreamer::PadProbeReturn::Ok;
+                };
+                let Ok(mut guard) = state.lock() else {
+                    return gstreamer::PadProbeReturn::Ok;
+                };
+                let Some(state) = guard.as_mut() else {
+                    return gstreamer::PadProbeReturn::Ok;
+                };
+                let _ = state.feed_source(index, map.as_slice());
+                gstreamer::PadProbeReturn::Ok
+            });
+        }
+
+        // The tee's sink pad is downstream of the selector, so a buffer here carries whichever source
+        // is active: exactly where the output timeline has to be made continuous.
+        let Some(pad) = tee.static_pad("sink") else {
+            return;
+        };
+        let state = state.clone();
+        // A buffer that some other element still holds cannot be rewritten in place. Say so once
+        // rather than skipping the normalisation silently, because a silent skip looks exactly like
+        // a working switch with macroblocks in it.
+        let shared = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_pad, info| {
+            let Some(buffer) = info.buffer_mut() else {
+                return gstreamer::PadProbeReturn::Ok;
+            };
+            let Some(buffer) = buffer.get_mut() else {
+                if !shared.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!(
+                        "[seamless] tee buffer is shared, so the timeline cannot be rewritten in \
+                         place; switches will not be seamless"
+                    );
+                }
+                return gstreamer::PadProbeReturn::Ok;
+            };
+            let Ok(mut map) = buffer.map_writable() else {
+                return gstreamer::PadProbeReturn::Ok;
+            };
+            let Ok(mut guard) = state.lock() else {
+                return gstreamer::PadProbeReturn::Ok;
+            };
+            let Some(state) = guard.as_mut() else {
+                return gstreamer::PadProbeReturn::Ok;
+            };
+
+            if let Some(result) = state.normalize(map.as_mut_slice()) {
+                if result.source_changed {
+                    println!(
+                        "TS_TIMELINE_NORMALIZED:{} offset-90k={} continuity-rewritten={}",
+                        state.active().as_str(),
+                        result.offset_90k,
+                        result.continuity_rewritten
+                    );
+                }
+            }
+            gstreamer::PadProbeReturn::Ok
+        });
     }
 
     /// switch-source: point input-selector active-pad at sink_0/sink_1.
@@ -59,7 +190,9 @@ impl SelectorState {
     /// C lite 2404-2431 keeps the auto_join=false lifecycle atomic in native code:
     /// the secondary must be running before the selector moves to it, and must be
     /// stopped only after the selector has moved back to primary.
-    pub fn switch_to(&mut self, target: SourceTarget) {
+    /// Move the selector for real, with the auto_join=false join/leave lifecycle. Reached only when
+    /// a switch has been decided (see [`Self::feed_source`]).
+    fn switch_to(&mut self, target: SourceTarget) {
         let pad_name = match target {
             SourceTarget::Primary => "sink_0",
             SourceTarget::Secondary => "sink_1",
@@ -338,7 +471,12 @@ mod tests {
         secondary.set_locked_state(true);
         secondary.set_state(gstreamer::State::Null).unwrap();
 
-        let mut off = SelectorState::new(selector.clone(), secondary.clone(), false);
+        let mut off = SelectorState::new(
+            selector.clone(),
+            secondary.clone(),
+            false,
+            SourceTarget::Primary,
+        );
         assert!(
             !off.secondary_joined(),
             "auto_join=false must report secondary NOT joined"
@@ -365,7 +503,7 @@ mod tests {
 
         // auto_join=true: the secondary is live from construction, and switching
         // away must NOT tear it down.
-        let mut on = SelectorState::new(selector, secondary, true);
+        let mut on = SelectorState::new(selector, secondary, true, SourceTarget::Primary);
         assert!(
             on.secondary_joined(),
             "auto_join=true starts with the secondary already live"
