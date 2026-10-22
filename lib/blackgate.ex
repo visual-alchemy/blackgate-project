@@ -22,10 +22,53 @@ defmodule Blackgate do
   """
   @spec running_routes() :: [map()]
   def running_routes do
+    merge_running_routes(registered_routes(), engine_process_route_ids())
+  end
+
+  # Routes with a live process in the registry.
+  defp registered_routes do
     case Db.get_all_routes(true) do
       {:ok, routes} -> Enum.filter(routes, &match?({:ok, _}, get_route(&1["id"])))
       _ -> []
     end
+  end
+
+  # Route ids read off the live engine processes.
+  defp engine_process_route_ids do
+    case Blackgate.ProcessMonitor.list_pipeline_processes() do
+      list when is_list(list) -> Enum.map(list, & &1[:route_id])
+      _ -> []
+    end
+    |> Enum.reject(&is_nil/1)
+  end
+
+  @doc """
+  The registry's routes, plus any route that only the engine list knows about.
+
+  Neither source is sufficient on its own. The registry is what a route's own supervisor publishes, and the
+  engine list is what the kernel says is really streaming - and they can disagree: measured on this box, two
+  routes were reconnecting with live engine processes while their registry entries were gone, so a gate that
+  trusted the registry alone would have handed their SDI output to another route, and the loser would have died
+  at its first frame.
+
+  A route that only the engine list knows is taken from the database so its destinations still count; when even
+  that is missing it is kept as a bare id, which holds no SDI output (a route with no destinations cannot).
+  """
+  def merge_running_routes(registry_routes, engine_route_ids) do
+    known = MapSet.new(registry_routes, & &1["id"])
+
+    missing =
+      engine_route_ids
+      |> Enum.uniq()
+      |> Enum.reject(&MapSet.member?(known, &1))
+
+    registry_routes ++
+      Enum.map(missing, fn id ->
+        case Db.get_route(id) do
+          {:ok, route} -> route
+          _ -> %{"id" => id, "name" => id}
+        end
+      end)
   end
 
   # A shared SDI connector is judged at START time, not at configuration time: the operator may point a route at
@@ -53,7 +96,7 @@ defmodule Blackgate do
 
   @spec stop_route(String.t()) :: :ok | {:error, term()}
   def stop_route(id) do
-    case get_route(id) do
+    case find_route_tree(id) do
       {:ok, pid} ->
         Supervisor.stop(pid, :normal)
 
@@ -61,6 +104,35 @@ defmodule Blackgate do
         Blackgate.set_route_status(id, "stopped")
         other
     end
+  end
+
+  # The registry can be missing a route whose tree is still alive - measured on this box: two routes were
+  # reconnecting with live engines and `:syn.lookup` answered `:undefined` for both. A stop that reports
+  # `not_found` while the engine keeps streaming is worse than no stop at all, and it is what makes an operator
+  # unable to get rid of such a route.
+  defp find_route_tree(id) do
+    case get_route(id) do
+      {:ok, pid} -> {:ok, pid}
+      _ -> find_route_tree_by_child(id)
+    end
+  end
+
+  # The RouteHandler child is named {:route_handler, id}, so the tree around it can be found by name even when
+  # nothing registered the route. (Same lookup switch_route_source/2 already relies on.)
+  defp find_route_tree_by_child(id) do
+    found =
+      Blackgate.DynamicSupervisor
+      |> PartitionSupervisor.which_children()
+      |> Enum.find_value(fn {_partition, tree_pid, _type, _modules} when is_pid(tree_pid) ->
+        tree_pid
+        |> Supervisor.which_children()
+        |> Enum.find_value(fn
+          {{:route_handler, ^id}, handler_pid, _, _} when is_pid(handler_pid) -> {:ok, tree_pid}
+          _ -> nil
+        end)
+      end)
+
+    found || {:error, :not_found}
   end
 
   @spec restart_route(String.t()) :: {:ok, term()} | {:error, term()}

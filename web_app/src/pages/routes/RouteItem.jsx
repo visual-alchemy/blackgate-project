@@ -298,7 +298,10 @@ const RouteItem = () => {
   const statusDetails = getStatusDetails(routeData);
 
   // Helper function to check if route is started
-  const isRouteStarted = routeData && routeData.status && routeData.status.toLowerCase() === 'started';
+  // Any status other than `stopped` means the route is running. `reconnecting` is a running route between
+  // pipeline attempts, and offering it a Start button is how an operator ends up pressing Start on something
+  // that never stopped.
+  const isRouteStarted = routeData && routeData.status && routeData.status.toLowerCase() !== 'stopped';
 
   // Failover mode human-readable labels
   const failoverModeLabels = {

@@ -126,4 +126,40 @@ defmodule Blackgate.SdiClaimsTest do
       assert SdiClaims.holders([]) == %{}
     end
   end
+
+  describe "merge_running_routes/2 (via Blackgate)" do
+    # The gate is only as good as the list of routes it judges against, and the two sources can disagree:
+    # on this box two routes were reconnecting with live engines while their registry entries were gone.
+    test "keeps everything the registry knows" do
+      a = %{"id" => "a", "name" => "A", "destinations" => []}
+
+      assert Blackgate.merge_running_routes([a], []) == [a]
+    end
+
+    test "adds a route that only the engine list knows, so its output still counts" do
+      merged = Blackgate.merge_running_routes([], ["not-in-the-db"])
+
+      assert Enum.map(merged, & &1["id"]) == ["not-in-the-db"]
+      assert SdiClaims.holders(merged) == %{}
+    end
+
+    test "does not list the same route twice" do
+      known = %{"id" => "a", "name" => "A", "destinations" => []}
+
+      merged = Blackgate.merge_running_routes([known], ["a", "a"])
+
+      assert length(merged) == 1
+    end
+
+    test "a bare engine-only route holds nothing, because it has no destinations" do
+      # When the database has no such route either, the id is kept as a bare entry: it belongs in the list of
+      # running routes but it cannot hold an output, so it never refuses anybody. The database-backed case is
+      # exercised in production (and was what the live proof checked), so it needs no Khepri fixture here.
+      merged = Blackgate.merge_running_routes([], ["only-an-engine"])
+
+      assert Enum.map(merged, & &1["id"]) == ["only-an-engine"]
+      assert SdiClaims.holders(merged) == %{}
+      assert SdiClaims.conflict(route("b", "B", [0]), merged) == nil
+    end
+  end
 end
