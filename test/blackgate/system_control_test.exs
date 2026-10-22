@@ -121,14 +121,14 @@ defmodule Blackgate.SystemControlTest do
       assert status.routes.started <= status.routes.total
     end
 
-    test "every route summary carries the SDI list the tab renders" do
+    test "every route summary carries the fields the tab renders" do
       status = SystemControl.status()
 
       for route <- status.routes.items do
         assert is_binary(route.id)
         assert is_binary(route.name)
         assert is_binary(route.status)
-        assert is_list(route.sdi)
+        refute Map.has_key?(route, :sdi)
       end
     end
   end

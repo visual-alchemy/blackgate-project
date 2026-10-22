@@ -86,7 +86,7 @@ defmodule BlackgateWeb.RouteController do
 
   def delete(conn, %{"id" => id}) do
     # Stop it before dropping the records. Db.delete_route/1 only removes rows, so a route that was still
-    # running kept its engine process alive: the engine held its SDI device and appeared in Settings > System
+    # running kept its engine process alive: the engine held its listening port and appeared in Settings > System
     # > Pipelines as a row whose route could no longer be resolved (the operator saw exactly that after
     # deleting a test route). stop_route/1 is a no-op for a route that is not running.
     _ = Blackgate.stop_route(id)
@@ -110,9 +110,8 @@ defmodule BlackgateWeb.RouteController do
             |> put_status(:ok)
             |> data(%{status: "started", route_id: route_id})
 
-          # Its SDI output is already playing somewhere else. Refusing here - and naming the holder - is what
-          # keeps this from becoming a route that starts with a silently missing picture: a second engine cannot
-          # enable that connector, and it drops the SDI branch without failing the route.
+          # Another running route is already listening on this port. Refusing here - and naming the holder - is
+          # what keeps this from becoming a route that fails to bind with nothing explaining why.
           {:error, {:resource_in_use, claims}} ->
             name = route_name(route_id)
 
@@ -139,7 +138,7 @@ defmodule BlackgateWeb.RouteController do
             conn
             |> put_status(:conflict)
             |> json(%{
-              error: "SDI being used by #{first.held_by.route_name}",
+              error: "#{first.label} is being used by #{first.held_by.route_name}",
               message:
                 Enum.map_join(claims, "; ", fn claim ->
                   "#{claim.label} is in use by #{claim.held_by.route_name}"

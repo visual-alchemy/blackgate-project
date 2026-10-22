@@ -228,7 +228,7 @@ defmodule Blackgate.UnixSockHandler do
 
       cond do
         is_list(value) ->
-          # Lists hold nested stats maps (callers, sink_stats, sdi_video_stats) but
+          # Lists hold nested stats maps (callers, sink_stats) but
           # also plain values such as audio-pids (a list of PIDs), so only recurse
           # into maps — recursing into an integer raised BadMapError once per report.
           Enum.each(value, fn item ->

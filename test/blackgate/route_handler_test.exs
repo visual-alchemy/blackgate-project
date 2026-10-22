@@ -6,7 +6,6 @@ defmodule Blackgate.RouteHandlerTest do
     # Clear registry stats for test routes if they exist
     try do
       :ets.delete(:route_stats, "test_route")
-      :ets.delete(:route_stats, "test_route_sdi")
     rescue
       _ -> :ok
     end
@@ -33,26 +32,6 @@ defmodule Blackgate.RouteHandlerTest do
                  "localport" => 4202,
                  "mode" => "listener"
                }
-             }
-           ]
-         }}
-
-      "test_route_sdi", _assoc ->
-        {:ok,
-         %{
-           "id" => "test_route_sdi",
-           "schema" => "SRT",
-           "schema_options" => %{
-             "localaddress" => "127.0.0.1",
-             "localport" => 4201,
-             "mode" => "listener"
-           },
-           "destinations" => [
-             %{
-               "schema" => "SDI",
-               "device-number" => 2,
-               "video-mode" => "1080p25",
-               "interlaced" => false
              }
            ]
          }}
@@ -326,8 +305,6 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_count: 0,
       last_bytes_received: 0,
       last_bytes_changed_at: now,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now,
       # 10 seconds ago (grace period is 30s)
       started_at: now - 10_000,
       consecutive_startup_crashes: 0
@@ -353,8 +330,6 @@ defmodule Blackgate.RouteHandlerTest do
       reconnect_count: 0,
       last_bytes_received: 100,
       last_bytes_changed_at: now - 20_000,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now - 20_000,
       # past grace period
       started_at: now - 40_000,
       consecutive_startup_crashes: 0
@@ -388,8 +363,6 @@ defmodule Blackgate.RouteHandlerTest do
       last_bytes_received: 100,
       # stalled for 70 seconds (> 60s threshold)
       last_bytes_changed_at: now - 70_000,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: now - 70_000,
       started_at: now - 80_000,
       consecutive_startup_crashes: 0
     }
@@ -397,88 +370,6 @@ defmodule Blackgate.RouteHandlerTest do
     # bytes have not changed
     stats = %{"total-bytes-received" => 100}
     Blackgate.RouteStatsRegistry.put_stats("test_route", stats)
-
-    res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
-    assert elem(res, 0) == :next_state
-    assert elem(res, 1) == :reconnecting
-  end
-
-  test "watchdog keeps state when SDI output is flowing" do
-    now = System.monotonic_time(:millisecond)
-
-    data = %{
-      id: "test_route_sdi",
-      route: %{
-        "id" => "test_route_sdi",
-        "destinations" => [
-          %{"schema" => "SDI", "device-number" => 2}
-        ]
-      },
-      port: nil,
-      ffmpeg_port: nil,
-      reconnect_timer: nil,
-      reconnect_started_at: nil,
-      reconnect_count: 0,
-      last_bytes_received: 100,
-      last_bytes_changed_at: now,
-      last_sdi_frames: %{2 => 500},
-      last_sdi_frames_changed_at: now - 20_000,
-      started_at: now - 40_000,
-      consecutive_startup_crashes: 0
-    }
-
-    # Put new frames in stats registry
-    stats = %{
-      "total-bytes-received" => 100,
-      "sdi_video_stats" => [
-        %{"device_number" => 2, "video_frames" => 510}
-      ]
-    }
-
-    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
-
-    assert {:keep_state, updated_data, _} =
-             RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
-
-    assert updated_data.last_sdi_frames[2] == 510
-    assert updated_data.last_sdi_frames_changed_at > now - 5000
-  end
-
-  test "watchdog restarts route when SDI playout is frozen" do
-    now = System.monotonic_time(:millisecond)
-
-    data = %{
-      id: "test_route_sdi",
-      route: %{
-        "id" => "test_route_sdi",
-        "destinations" => [
-          %{"schema" => "SDI", "device-number" => 2}
-        ]
-      },
-      port: nil,
-      ffmpeg_port: nil,
-      reconnect_timer: nil,
-      reconnect_started_at: nil,
-      reconnect_count: 0,
-      last_bytes_received: 100,
-      # network is fine
-      last_bytes_changed_at: now,
-      last_sdi_frames: %{2 => 500},
-      # playout frozen for 70 seconds (> 60s threshold)
-      last_sdi_frames_changed_at: now - 70_000,
-      started_at: now - 80_000,
-      consecutive_startup_crashes: 0
-    }
-
-    # SDI frames have not advanced (still 500)
-    stats = %{
-      "total-bytes-received" => 100,
-      "sdi_video_stats" => [
-        %{"device_number" => 2, "video_frames" => 500}
-      ]
-    }
-
-    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
 
     res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
     assert elem(res, 0) == :next_state
@@ -632,11 +523,8 @@ defmodule Blackgate.RouteHandlerTest do
         reconnect_count: 0,
         last_bytes_received: 0,
         last_bytes_changed_at: now,
-        last_sdi_frames: %{},
-        last_sdi_frames_changed_at: now,
         started_at: now - 20_000,
         consecutive_startup_crashes: 0,
-        sdi_audio_last_restart_at: nil,
         active_source: "primary",
         failover_switched: false,
         source_health: %{primary: :unknown, secondary: :unknown},
@@ -712,7 +600,7 @@ defmodule Blackgate.RouteHandlerTest do
     # Scenario (b): mode="manual" + a live port + an SRT secondary is dual-ingest eligible, but an
     # engine exit must still rebuild the pipeline: an exited engine cannot switch in-process. The old
     # expectation here - keep_state with the dead port still attached - is exactly what left a route
-    # reporting "started" while nothing was running and the SDI output stayed black. Manual mode means
+    # reporting "started" while nothing was running. Manual mode means
     # operator action is required, so the route stops, honestly.
     test "mode=manual on engine exit: route stops instead of pretending to run" do
       capture_update_route()
@@ -728,7 +616,7 @@ defmodule Blackgate.RouteHandlerTest do
 
     # Scenario (c): on an engine exit, maintain-stability rebuilds the pipeline on the source its
     # policy picks (toggle away from primary) and enters :reconnecting, instead of holding a dead
-    # port in :started. The in-process switch path - which is only legal for a route without an SDI
+    # port in :started. The in-process switch path - which needs a live engine port
     # destination - is exercised by the "failover mode engine" describe block below via
     # evaluate_failover_for_test/1 with explicit health maps.
     test "mode=maintain-stability on engine exit: switches source and reconnects" do

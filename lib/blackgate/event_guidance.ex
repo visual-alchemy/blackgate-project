@@ -31,24 +31,13 @@ defmodule Blackgate.EventGuidance do
     "route_start_failed" =>
       "the route did not start: check its configuration, the source URL, and that the source is reachable",
     "route_hardware_error" =>
-      "check the SDI device: Blackmagic Desktop Video driver, cable, and incoming signal",
+      "check the network path and the source encoder — the gateway could not bring the pipeline up",
     "reconnect_failed" =>
       "the source is unreachable after repeated attempts: check the source and the network path",
     "watchdog_restart" =>
       "none if the route recovers; if it repeats, check CPU load and the source bitrate",
     "source_video_corrupted" =>
       "check the source encoder — the gateway is receiving corrupt frames",
-    "sdi_failed" =>
-      "the route keeps streaming but has no SDI output, and the engine does not retry: check the Blackmagic Desktop Video driver and the card's devices, then restart the route",
-    "sdi_audio_silent" =>
-      "check the audio in the source; the gateway restarts the pipeline automatically while SDI audio stays silent",
-    "sdi_audio_source_silent" =>
-      "the source has no audio yet: no action needed unless audio is expected",
-    "sdi_audio_desync_restart" =>
-      "none — the pipeline was restarted automatically to resync SDI audio",
-    "sdi_audio_desync_repeated" =>
-      "audio keeps losing SDI sync: check the source audio and the SDI card",
-    "sdi_audio_recovered" => "none — SDI audio is back in sync",
     "ffmpeg_missing" =>
       "install ffmpeg (the appliance image and `make install` provide it); RTMP/HTTP/HLS sources cannot start without it",
     "ffmpeg_started" => "none — informational",

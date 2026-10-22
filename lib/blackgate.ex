@@ -5,7 +5,7 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    with :ok <- check_sdi_claims(id) do
+    with :ok <- check_output_claims(id) do
       # A registered-but-dead tree makes the supervisor answer `{:already_started, pid}` for a route that is not
       # running at all. Clear it before starting, so Start always means start.
       case get_route(id) do
@@ -34,8 +34,8 @@ defmodule Blackgate do
   Routes that are actually running, with their destinations.
 
   Liveness comes from the route registry rather than the stored `status`: the status can read `started` for a
-  route whose engine has died, and a route that is running but momentarily mislabelled must still hold its SDI
-  output. This is the list the SDI gate judges against.
+  route whose engine has died, and a route that is running but momentarily mislabelled must still hold its
+  listening port. This is the list the output gate judges against.
   """
   @spec running_routes() :: [map()]
   def running_routes do
@@ -59,10 +59,10 @@ defmodule Blackgate do
   @doc """
   The routes that hold an output, judged by their ENGINES.
 
-  The connector is held by the engine process - it is the one with the DeckLink handle - so the live engine list is
-  the ground truth and the route record is only used to give those entries their real destinations. The registry
+  A listening port is held by the engine process - it is the one that binds it - so the live engine list is the
+  ground truth and the route record is only used to give those entries their real destinations. The registry
   alone is not usable here: it can keep a route whose engine is gone, and measured on this box that made RTMP the
-  listed holder of SDI 1 with no engine of its own, which then refused the WORKING route on that connector.
+  listed holder of a port with no engine of its own, which then refused the WORKING route on that port.
 
   A route that only the engine list knows (its record missing) is kept as a bare id: it still counts as running but
   holds no output, because a route with no destinations cannot.
@@ -78,21 +78,18 @@ defmodule Blackgate do
     end)
   end
 
-  # A shared SDI connector is judged at START time, not at configuration time: the operator may point a route at
-  # an output another route uses, and the route that is already running keeps it.
-  defp check_sdi_claims(id) do
+  # A listening port is judged at START time, not at configuration time: the operator may point a route at a port
+  # another route listens on, and the route that is already running keeps it.
+  defp check_output_claims(id) do
     case Db.get_route(id) do
       {:ok, route} ->
-        # A route with neither an SDI destination nor a listening port cannot conflict with anybody, so it is not
-        # even asked: the check reads a process listing, and starting an SRT/RTMP-only route has to stay exactly as
-        # cheap as it was before any of this existed.
-        if Blackgate.SdiClaims.devices_of(route) == [] and
-             Blackgate.SdiClaims.listening_ports_of(route) == [] do
+        # A route with no listening port cannot conflict with anybody, so it is not even asked: the check reads a
+        # process listing, and starting a caller-only route has to stay exactly as cheap as it was before any of
+        # this existed.
+        if Blackgate.OutputClaims.listening_ports_of(route) == [] do
           :ok
         else
-          # Every claim is collected BEFORE anything is reported, so a route that would be refused is refused
-          # whole: it does not start its SRT output and then fail on its SDI one.
-          case Blackgate.SdiClaims.claims_of(route, running_routes()) do
+          case Blackgate.OutputClaims.claims_of(route, running_routes()) do
             [] -> :ok
             claims -> {:error, {:resource_in_use, claims}}
           end
@@ -223,7 +220,7 @@ defmodule Blackgate do
     # start_route/1 with no check at all - so a route could be pointed at an output somebody else already held, get
     # its own engine stopped, and then be refused (or worse, race the holder). Refusing first leaves it running on
     # its previous, valid destination, which is the state the operator can still see and fix.
-    with :ok <- check_sdi_claims(id) do
+    with :ok <- check_output_claims(id) do
       case stop_route(id) do
         {:error, reason} ->
           Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")

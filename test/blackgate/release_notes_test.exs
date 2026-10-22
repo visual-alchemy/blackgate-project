@@ -17,14 +17,14 @@ defmodule Blackgate.ReleaseNotesTest do
     {
       "version": "2026.10.21.1",
       "released_on": "2026-10-21",
-      "changes": ["SDI branch failures are no longer fatal", "read-only System tab"]
+      "changes": ["sink branch failures are no longer fatal", "read-only System tab"]
     }
     """)
 
     assert %{version: "2026.10.21.1", released_on: "2026-10-21", changes: changes} =
              ReleaseNotes.load(path)
 
-    assert changes == ["SDI branch failures are no longer fatal", "read-only System tab"]
+    assert changes == ["sink branch failures are no longer fatal", "read-only System tab"]
   end
 
   test "tolerates a release with no changes list", %{dir: dir} do

@@ -53,7 +53,7 @@ defmodule Blackgate.SystemControl do
   @doc """
   Everything the System tab shows: host identity, resources, DeckLink devices, UDP buffers, the
   engine binary in use, the service unit, the deployment root with its updates, the actions the
-  dashboard may offer, and a per-route summary (SDI included).
+  dashboard may offer, and a per-route summary.
   """
   @spec status() :: map()
   def status do
@@ -211,7 +211,7 @@ defmodule Blackgate.SystemControl do
   end
 
   # Actions show up in Events: an operator who reboots a gateway from the dashboard leaves a trace of
-  # what was scheduled and when, next to the route and SDI events. The severity is a literal (rather
+  # what was scheduled and when, next to the route events. The severity is a literal (rather
   # than a computed value) on purpose: the guidance coverage test finds event types by scanning for
   # `EventLog.log(:severity, "type"` call sites, and a variable there would hide this type from it.
   defp audit(action, argument) do
@@ -602,27 +602,9 @@ defmodule Blackgate.SystemControl do
       health: stats_map["health"],
       bandwidth_mbps: stats_map["bandwidth-mbps"],
       loss_window_10s_pct: stats_map["loss-window-10s-pct"],
-      sdi: sdi_entries(stats_map["sdi_video_stats"]),
       stats_updated_at: stats && stats[:updated_at]
     }
   end
-
-  defp sdi_entries(entries) when is_list(entries) do
-    Enum.map(entries, fn entry ->
-      %{
-        device_number: entry["device_number"],
-        detected_mode: entry["detected_mode"],
-        video_frames: entry["video_frames"],
-        dropped_frames: entry["dropped_frames"],
-        duplicated_frames: entry["duplicated_frames"],
-        drops_per_sec: entry["drops_per_sec"],
-        duplicates_per_sec: entry["duplicates_per_sec"],
-        audio_buffers: entry["audio_buffers"]
-      }
-    end)
-  end
-
-  defp sdi_entries(_), do: []
 
   ## Report helpers
 
@@ -636,23 +618,9 @@ defmodule Blackgate.SystemControl do
   end
 
   defp route_report_line(route) do
-    base =
-      "  - #{route.name} [#{route.status}] health=#{route.health || "unknown"}" <>
-        " bandwidth=#{round_or_dash(route.bandwidth_mbps)}Mbps" <>
-        " loss_10s=#{round_or_dash(route.loss_window_10s_pct)}%"
-
-    case route.sdi do
-      [] -> base
-      entries -> base <> "\n" <> Enum.map_join(entries, "\n", &("      " <> sdi_report_line(&1)))
-    end
-  end
-
-  defp sdi_report_line(sdi) do
-    "SDI device #{sdi.device_number}: mode=#{sdi.detected_mode || "unknown"}" <>
-      " frames=#{sdi.video_frames || 0}" <>
-      " dropped=#{sdi.dropped_frames || 0}" <>
-      " duplicated=#{sdi.duplicated_frames || 0}" <>
-      " audio_buffers=#{sdi.audio_buffers || 0}"
+    "  - #{route.name} [#{route.status}] health=#{route.health || "unknown"}" <>
+      " bandwidth=#{round_or_dash(route.bandwidth_mbps)}Mbps" <>
+      " loss_10s=#{round_or_dash(route.loss_window_10s_pct)}%"
   end
 
   defp memory_line(nil), do: "unavailable"

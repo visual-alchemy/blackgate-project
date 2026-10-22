@@ -23,20 +23,10 @@ defmodule Blackgate.RouteHandler do
   # Don't check for first 30 seconds after start
   @watchdog_grace_period_ms 30_000
 
-  # SDI audio desync auto-recovery (RTMP/HTTP/HLS only)
-  # Minimum total audio buffers before we treat a silence event as a hardware desync.
-  # If total_buffers < this, the source itself likely has no audio — do not restart.
-  @sdi_audio_min_buffers_before_restart 5_000
-
   # How long an in-process switch may wait for the engine's confirmation. The engine holds the switch
   # until the TARGET source carries a keyframe (that is what makes the cut invisible); a source that is
   # dead, stalled, or not the same programme never produces one, and silence must not look like success.
   @switch_ack_timeout_ms 12_000
-  # After an auto-restart for audio desync, wait this long before restarting again.
-  # Prevents an infinite loop if the source permanently loses audio.
-  # 5 minutes
-  @sdi_audio_restart_cooldown_ms 300_000
-
   @impl true
   def callback_mode, do: [:handle_event_function]
 
@@ -56,13 +46,8 @@ defmodule Blackgate.RouteHandler do
       reconnect_count: 0,
       last_bytes_received: 0,
       last_bytes_changed_at: nil,
-      last_sdi_frames: %{},
-      last_sdi_frames_changed_at: nil,
       started_at: nil,
       consecutive_startup_crashes: 0,
-      # Tracks last time we auto-restarted due to SDI audio desync.
-      # Used to enforce a cooldown and prevent restart loops.
-      sdi_audio_last_restart_at: nil,
       active_source: "primary",
       failover_switched: false,
       source_health: %{primary: :unknown, secondary: :unknown},
@@ -111,10 +96,7 @@ defmodule Blackgate.RouteHandler do
              started_at: now,
              last_bytes_received: 0,
              last_bytes_changed_at: now,
-             last_sdi_frames_changed_at: now,
-             last_sdi_frames: %{},
              consecutive_startup_crashes: 0,
-             sdi_audio_last_restart_at: nil,
              failover_switched: false
          }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
@@ -162,24 +144,12 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
-  def handle_event(:info, {_port, {:data, info}}, state, data) do
+  def handle_event(:info, {_port, {:data, info}}, _state, data) do
     # Process each line from Rust engine stdout and check for actionable events.
-    # Returns updated data if SDI audio desync recovery fires, otherwise keeps state.
     new_data =
       String.split(info, "\n")
       |> Enum.reduce(data, fn line, acc ->
         Logger.warning("RouteHandler: pipeline: #{line}")
-
-        # Detect SDI graceful failure from Rust engine output. The engine prints
-        # "WARNING: SDI sink N failed — continuing without SDI output" and does not retry, so
-        # the route keeps running with no SDI picture and only an operator can fix it: this is
-        # not a warning that will clear on its own.
-        if String.contains?(line, "WARNING: SDI sink") and String.contains?(line, "failed") do
-          Blackgate.EventLog.log(:critical, "sdi_failed", String.trim(line), %{
-            route_id: acc.id,
-            route_name: get_in(acc, [:route, "name"]) || acc.id
-          })
-        end
 
         # C dual-srtsrc bin reports per-source liveness. Drive immediate
         # in-process failover on SOURCE_INVALID for dual-ingest routes.
@@ -233,37 +203,6 @@ defmodule Blackgate.RouteHandler do
             acc
           end
 
-        # Detect SDI audio silence — log always, then check if we should auto-restart
-        acc =
-          if String.contains?(line, "SDI_AUDIO_SILENT:") do
-            Blackgate.EventLog.log(
-              :warning,
-              "sdi_audio_silent",
-              "SDI audio stopped: #{String.trim(line)}",
-              %{
-                route_id: acc.id,
-                route_name: get_in(acc, [:route, "name"]) || acc.id
-              }
-            )
-
-            maybe_restart_for_audio_desync(line, state, acc)
-          else
-            acc
-          end
-
-        # Detect SDI audio recovery
-        if String.contains?(line, "SDI_AUDIO_RECOVERED:") do
-          Blackgate.EventLog.log(
-            :info,
-            "sdi_audio_recovered",
-            "SDI audio recovered: #{String.trim(line)}",
-            %{
-              route_id: acc.id,
-              route_name: get_in(acc, [:route, "name"]) || acc.id
-            }
-          )
-        end
-
         acc
       end)
 
@@ -283,8 +222,7 @@ defmodule Blackgate.RouteHandler do
       {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
     else
       # Dual-ingest routes are judged by the mode's policy on stats-driven health; evaluate_failover/1
-      # then picks the mechanism - an in-process cut, or a pipeline rebuild on the selected source for
-      # an SDI route, which must not be cut in place without the guarded seamless machinery.
+      # then picks the mechanism - an in-process cut, or a pipeline rebuild on the selected source.
       if dual_ingest_eligible?(data.route) do
         refreshed = refresh_source_health_from_stats(data)
 
@@ -294,32 +232,6 @@ defmodule Blackgate.RouteHandler do
         # Get current bytes from stats registry
         current_bytes = get_total_bytes_received(data.id)
 
-        has_sdi_destination? = route_has_sdi_destination?(data.route)
-
-        # Query latest SDI video stats
-        stats =
-          case Blackgate.RouteStatsRegistry.get_stats(data.id) do
-            %{stats: stats} when is_map(stats) -> stats
-            _ -> nil
-          end
-
-        sdi_frames_map =
-          if stats && is_list(stats["sdi_video_stats"]) do
-            Enum.reduce(stats["sdi_video_stats"], %{}, fn sdi_item, acc ->
-              dev = sdi_item["device_number"]
-              frames = sdi_item["video_frames"] || 0
-
-              if is_integer(dev) do
-                Map.put(acc, dev, frames)
-              else
-                acc
-              end
-            end)
-          else
-            %{}
-          end
-
-        # 1. Evaluate Network Bytes.
         # `total-bytes-received` is cumulative, but it is per engine process and
         # per SRT socket: it restarts near 0 when the engine restarts or the SRT
         # session is re-created. Only a FROZEN counter is a stall — treating any
@@ -332,79 +244,33 @@ defmodule Blackgate.RouteHandler do
             {current_bytes, now}
           end
 
-        # 2. Evaluate Playout Frames (only if SDI destination is present)
-        playout_stalled? =
-          if has_sdi_destination? do
-            if map_size(sdi_frames_map) > 0 do
-              # Stalled if any configured device's frame count has not advanced
-              Enum.any?(sdi_frames_map, fn {dev, current_val} ->
-                last_val = Map.get(data.last_sdi_frames, dev, 0)
-                current_val <= last_val
-              end)
-            else
-              # SDI destination exists but no frames/stats received yet from Rust engine
-              true
-            end
-          else
-            false
-          end
-
-        {last_sdi_frames, last_sdi_frames_changed_at} =
-          if playout_stalled? do
-            {data.last_sdi_frames, data.last_sdi_frames_changed_at}
-          else
-            {sdi_frames_map, now}
-          end
-
         net_stall_duration = now - last_bytes_changed_at
-        sdi_stall_duration = now - last_sdi_frames_changed_at
 
-        cond do
-          net_stall_duration >= @watchdog_stall_threshold_ms ->
-            Logger.warning(
-              "RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route"
-            )
+        if net_stall_duration >= @watchdog_stall_threshold_ms do
+          Logger.warning(
+            "RouteHandler: Watchdog detected network stall (#{div(net_stall_duration, 1000)}s no data), restarting route"
+          )
 
-            Blackgate.EventLog.log(
-              :warning,
-              "watchdog_restart",
-              "No data for #{div(net_stall_duration, 1000)}s, restarting route",
-              %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              }
-            )
-
-            trigger_restart(data)
-
-          sdi_stall_duration >= @watchdog_stall_threshold_ms ->
-            Logger.warning(
-              "RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route"
-            )
-
-            Blackgate.EventLog.log(
-              :warning,
-              "watchdog_restart",
-              "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route",
-              %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              }
-            )
-
-            trigger_restart(data)
-
-          true ->
-            updated_data = %{
-              data
-              | last_bytes_received: last_bytes_received,
-                last_bytes_changed_at: last_bytes_changed_at,
-                last_sdi_frames: last_sdi_frames,
-                last_sdi_frames_changed_at: last_sdi_frames_changed_at
+          Blackgate.EventLog.log(
+            :warning,
+            "watchdog_restart",
+            "No data for #{div(net_stall_duration, 1000)}s, restarting route",
+            %{
+              route_id: data.id,
+              route_name: get_in(data, [:route, "name"]) || data.id
             }
+          )
 
-            {:keep_state, updated_data,
-             {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+          trigger_restart(data)
+        else
+          updated_data = %{
+            data
+            | last_bytes_received: last_bytes_received,
+              last_bytes_changed_at: last_bytes_changed_at
+          }
+
+          {:keep_state, updated_data,
+           {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
         end
       end
     end
@@ -591,11 +457,8 @@ defmodule Blackgate.RouteHandler do
                  reconnect_count: 0,
                  started_at: now,
                  last_bytes_changed_at: now,
-                 last_sdi_frames_changed_at: now,
-                 last_sdi_frames: %{},
                  last_bytes_received: 0,
                  consecutive_startup_crashes: 0,
-                 sdi_audio_last_restart_at: nil,
                  failover_switched: false
              }, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
 
@@ -721,19 +584,6 @@ defmodule Blackgate.RouteHandler do
     })
   end
 
-  # SDI audio desync auto-recovery: fired by maybe_restart_for_audio_desync/3 via send(self(), ...)
-  # Using send+handle_event keeps the gen_statem state transition clean and separate from
-  # the data-update return path in the pipeline stdout handler.
-  def handle_event(:info, :sdi_audio_desync_restart, :started, data) do
-    Logger.warning("RouteHandler: Executing SDI audio desync restart for route #{data.id}")
-    trigger_restart(data)
-  end
-
-  # Already reconnecting or stopped — ignore the deferred restart message
-  def handle_event(:info, :sdi_audio_desync_restart, _state, _data) do
-    :keep_state_and_data
-  end
-
   # Manual source switch requested by the operator via the REST API
   # (POST /api/routes/:route_id/switch-source).
   #
@@ -828,79 +678,13 @@ defmodule Blackgate.RouteHandler do
   # Failover Helpers (pure)
   # ===========================================================================
 
-  # A route whose destinations include SDI may only switch sources inside the RUNNING pipeline when
-  # the SDI branch can survive it. Flipping the input-selector under a live decklink branch without
-  # the guarded seamless machinery (matching MPEG-TS map, target-keyframe wait, PCR/PTS/continuity
-  # normalization) feeds a foreign timeline into the decoder: measured as macroblocks in one
-  # direction and a starved demuxer in the other. The reference branch encodes the same rule in its
-  # in_process_switch_allowed?/1 and keeps SDI routes on restart-based switching by default.
   @doc false
-  def route_has_sdi_destination?(route) when is_map(route) do
-    case Map.get(route, "destinations") do
-      destinations when is_list(destinations) ->
-        Enum.any?(destinations, &(is_map(&1) and &1["schema"] == "SDI"))
-
-      _ ->
-        false
-    end
-  end
-
-  @doc false
-  def route_has_sdi_destination?(_), do: false
-
-  # Fields that describe the SHAPE of a source's bitstream, taken from the stats the engine reports
-  # for it. Two sources whose fingerprints match carry the same codec configuration, video format and
-  # elementary-stream layout, which is what makes an in-place cut possible. This is the set the
-  # reference branch's seamless guard names: codec configuration, video/audio format, program layout
-  # and PIDs.
-  @source_fingerprint_keys ~w(video-codec video-width video-height video-framerate-num
-                              video-framerate-den video-interlace-mode video-profile video-level-idc
-                              video-chroma-format video-bit-depth video-pid audio-pids)
-
-  @doc false
-  def source_fingerprint(stats) when is_map(stats) do
-    values = Enum.map(@source_fingerprint_keys, &{&1, Map.get(stats, &1)})
-
-    if Enum.all?(values, fn {_key, value} -> not is_nil(value) end),
-      do: Map.new(values),
-      else: nil
-  end
-
-  def source_fingerprint(_), do: nil
-
-  @doc false
-  # Unknown on either side is NOT a match: without a fingerprint there is nothing proving the cut is
-  # safe, and the rebuild path is the deterministic answer. `sources_differ_in/2` names the first
-  # field that disagreed so the refusal can be honest about why.
-  def sources_structurally_match?(primary_stats, secondary_stats) do
-    primary = source_fingerprint(primary_stats)
-    secondary = source_fingerprint(secondary_stats)
-
-    is_map(primary) and is_map(secondary) and primary == secondary
-  end
-
-  @doc false
-  def sources_differ_in(primary_stats, secondary_stats) do
-    primary = source_fingerprint(primary_stats) || %{}
-    secondary = source_fingerprint(secondary_stats) || %{}
-
-    case Enum.find(@source_fingerprint_keys, fn key ->
-           Map.get(primary, key, :missing) != Map.get(secondary, key, :missing)
-         end) do
-      nil -> "indistinguishable"
-      key -> "#{key} #{inspect(Map.get(primary, key))} vs #{inspect(Map.get(secondary, key))}"
-    end
-  end
-
-  @doc false
-  # May this route cut between its sources INSIDE the running pipeline? A route without an SDI
-  # destination always may; an SDI route may only when the two sources are structurally
-  # indistinguishable, because a cut between different bitstream shapes is what produced macroblocks
-  # and a starved demuxer. A live port is still required and is checked at the call site.
-  def in_process_switch_allowed?(route, primary_stats, secondary_stats) do
-    dual_ingest_eligible?(route) and
-      (not route_has_sdi_destination?(route) or
-         sources_structurally_match?(primary_stats, secondary_stats))
+  # May this route cut between its sources INSIDE the running pipeline? Yes for every route that can
+  # receive a second source: the engine holds the cut until the target carries a keyframe and
+  # normalizes its timeline first, so the mechanism is what makes the switch safe, not the route's
+  # output schema. A live port is still required and is checked at the call site.
+  def in_process_switch_allowed?(route, _primary_stats, _secondary_stats) do
+    dual_ingest_eligible?(route)
   end
 
   @doc false
@@ -1014,7 +798,7 @@ defmodule Blackgate.RouteHandler do
   # The pipeline is gone by the time this runs, so it always rebuilds it. It used to hand dual-ingest
   # routes to evaluate_failover/1 first, which can return keep_state: the fsm then stayed in :started
   # with a dead port, no reconnect timer was ever armed, and the route kept reporting "started" while
-  # nothing was running and the SDI output stayed black. An exited engine cannot switch sources
+  # nothing was running while the route still reported "started". An exited engine cannot switch sources
   # in-process either, so the switch decision belongs to the source-health paths, not here.
   # Runtime form of in_process_switch_allowed?/3: pulls both sources' stats out of the registry.
   defp in_place_cut_allowed?(data) do
@@ -1156,9 +940,8 @@ defmodule Blackgate.RouteHandler do
           {:keep_state, %{data | both_dead_reported: false}}
 
         target ->
-          # The DECISION is the same for every route; only the MECHANISM differs. A route that must
-          # not cut in place (an SDI destination without the guarded seamless machinery) rebuilds the
-          # pipeline on the target instead of flipping the selector under a live decklink branch.
+          # The DECISION is the same for every route; only the MECHANISM differs. A route whose engine
+          # port is gone cannot cut in place, so it rebuilds the pipeline on the target instead.
           # The pipeline is rebuilt from a self-sent message because this function runs inside the
           # engine-stdout reducer, which can only return data - a state transition needs a callback.
           _ = Db.update_route(data.id, %{"active_source" => target})
@@ -1184,8 +967,7 @@ defmodule Blackgate.RouteHandler do
             Blackgate.EventLog.log(
               :warning,
               "failover_auto",
-              "Auto-switched to #{target} (mode=#{mode}, pipeline restart: sources differ in " <>
-                "#{sources_differ_in(primary_stats_of(data.id), secondary_stats_of(data.id))})",
+              "Auto-switched to #{target} (mode=#{mode}, pipeline restart)",
               %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
             )
           end
@@ -1234,114 +1016,6 @@ defmodule Blackgate.RouteHandler do
       )
 
       enter_reconnecting(%{data | active_source: next})
-    end
-  end
-
-  # Decides whether to auto-restart the pipeline after an SDI_AUDIO_SILENT event.
-  #
-  # Rules (in order):
-  #   1. SRT sources → skip (SRT is self-healing, this has never happened on SRT)
-  #   2. total_buffers < threshold → source has no audio, not a hardware desync → skip
-  #   3. Within cooldown window → log critical, skip to avoid restart loop
-  #   4. All clear → trigger restart, record timestamp
-  #
-  # Returns updated `data` map (with sdi_audio_last_restart_at set) if a restart was
-  # triggered, or the original `data` unchanged if not.
-  defp maybe_restart_for_audio_desync(line, state, data) do
-    source_schema = get_in(data, [:route, "schema"]) || ""
-
-    cond do
-      # Rule 1: SRT sources are rock solid — never auto-restart for them
-      source_schema == "SRT" ->
-        Logger.info("RouteHandler: SDI_AUDIO_SILENT on SRT source, skipping auto-restart")
-        data
-
-      # Rule 2: Parse total_buffers — if tiny, the source itself has no audio
-      true ->
-        total_buffers =
-          case Regex.run(~r/total_buffers=(\d+)/, line) do
-            [_, n] -> String.to_integer(n)
-            _ -> 0
-          end
-
-        cond do
-          total_buffers < @sdi_audio_min_buffers_before_restart ->
-            Logger.info(
-              "RouteHandler: SDI_AUDIO_SILENT with total_buffers=#{total_buffers} " <>
-                "(< #{@sdi_audio_min_buffers_before_restart}), source likely has no audio — skipping restart"
-            )
-
-            Blackgate.EventLog.log(
-              :warning,
-              "sdi_audio_source_silent",
-              "SDI audio silence detected but source appears to have no audio (total_buffers=#{total_buffers})",
-              %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              }
-            )
-
-            data
-
-          # Rule 3: Within cooldown window after a previous auto-restart
-          data.sdi_audio_last_restart_at != nil and
-              System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at <
-                @sdi_audio_restart_cooldown_ms ->
-            remaining_s =
-              div(
-                @sdi_audio_restart_cooldown_ms -
-                  (System.monotonic_time(:millisecond) - data.sdi_audio_last_restart_at),
-                1000
-              )
-
-            Logger.warning(
-              "RouteHandler: SDI_AUDIO_SILENT within cooldown window (#{remaining_s}s remaining), " <>
-                "skipping auto-restart — manual check may be required"
-            )
-
-            Blackgate.EventLog.log(
-              :critical,
-              "sdi_audio_desync_repeated",
-              "SDI audio desynced again within cooldown window (#{remaining_s}s remaining). " <>
-                "Source audio may be intermittent — manual check required.",
-              %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              }
-            )
-
-            data
-
-          # Rule 4: Genuine hardware embedder desync — restart the pipeline
-          state == :started ->
-            Logger.warning(
-              "RouteHandler: SDI_AUDIO_SILENT on #{source_schema} source with " <>
-                "total_buffers=#{total_buffers} — triggering auto-restart for hardware desync recovery"
-            )
-
-            Blackgate.EventLog.log(
-              :warning,
-              "sdi_audio_desync_restart",
-              "SDI audio embedder desynced (total_buffers=#{total_buffers}), auto-restarting pipeline",
-              %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              }
-            )
-
-            # Record timestamp BEFORE trigger_restart (which is a gen_statem state transition)
-            # We embed it in data so the reconnect path carries it forward.
-            # trigger_restart will call enter_reconnecting which transitions state.
-            # We return the updated data but the state transition is done as a side-effect here.
-            # Since gen_statem only acts on return values from handle_event, we use
-            # Process.send_after to schedule a restart command to self.
-            send(self(), :sdi_audio_desync_restart)
-            %{data | sdi_audio_last_restart_at: System.monotonic_time(:millisecond)}
-
-          true ->
-            # Not in :started state (already reconnecting etc.) — skip
-            data
-        end
     end
   end
 
@@ -1635,33 +1309,6 @@ defmodule Blackgate.RouteHandler do
     ])
   end
 
-  def sink_from_record(%{"schema" => "SDI", "schema_options" => opts}) do
-    video_mode = Map.get(opts, "video_mode", 0)
-    {mode_str, width, height, framerate} = sdi_video_mode_to_gst(video_mode)
-
-    # In auto-detect mode, interlaced is always false — Rust engine determines
-    # interlacing dynamically from the decoded video caps.
-    # In manual mode, detect from the mode string as before.
-    interlaced =
-      if mode_str == "auto" do
-        false
-      else
-        String.contains?(mode_str, "i") or mode_str in ["pal", "ntsc"]
-      end
-
-    props = %{
-      "type" => "sdisink",
-      "device-number" => Map.get(opts, "device_number", 0),
-      "video-mode" => mode_str,
-      "width" => width,
-      "height" => height,
-      "framerate" => framerate,
-      "interlaced" => interlaced
-    }
-
-    {:ok, props}
-  end
-
   def sink_from_record(%{"type" => type} = opts) when is_binary(type) do
     schema_options = %{
       "localaddress" => Map.get(opts, "host") || Map.get(opts, "localaddress", "0.0.0.0"),
@@ -1679,27 +1326,6 @@ defmodule Blackgate.RouteHandler do
   end
 
   def sink_from_record(_), do: {:error, :invalid_destination}
-
-  # UI video_mode value -> {GStreamer mode string, width, height, framerate}
-  # GStreamer mode strings (enum nicks) work regardless of plugin version.
-  # video_mode=0 is "auto" — Rust engine detects source and picks mode.
-  # The width/height/framerate here serve as fallback values if auto-detect can't match.
-  defp sdi_video_mode_to_gst(0), do: {"auto", 1920, 1080, "25/1"}
-  defp sdi_video_mode_to_gst(9), do: {"1080p25", 1920, 1080, "25/1"}
-  defp sdi_video_mode_to_gst(11), do: {"1080p30", 1920, 1080, "30/1"}
-  defp sdi_video_mode_to_gst(12), do: {"1080p50", 1920, 1080, "50/1"}
-  defp sdi_video_mode_to_gst(13), do: {"1080p60", 1920, 1080, "60/1"}
-  defp sdi_video_mode_to_gst(7), do: {"1080i50", 1920, 1080, "25/1"}
-  defp sdi_video_mode_to_gst(8), do: {"1080i60", 1920, 1080, "30/1"}
-  defp sdi_video_mode_to_gst(14), do: {"720p50", 1280, 720, "50/1"}
-  defp sdi_video_mode_to_gst(15), do: {"720p60", 1280, 720, "60/1"}
-  defp sdi_video_mode_to_gst(17), do: {"pal", 720, 576, "25/1"}
-  defp sdi_video_mode_to_gst(18), do: {"ntsc", 720, 480, "30/1"}
-  defp sdi_video_mode_to_gst(22), do: {"2160p25", 3840, 2160, "25/1"}
-  defp sdi_video_mode_to_gst(23), do: {"2160p30", 3840, 2160, "30/1"}
-  defp sdi_video_mode_to_gst(24), do: {"2160p50", 3840, 2160, "50/1"}
-  defp sdi_video_mode_to_gst(25), do: {"2160p60", 3840, 2160, "60/1"}
-  defp sdi_video_mode_to_gst(_), do: {"1080p25", 1920, 1080, "25/1"}
 
   # ===========================================================================
   # FFmpeg Sidecar for RTMP/HTTP/HLS Sources
@@ -1948,39 +1574,29 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp diagnose_hardware_issue do
-    # 1. Check if GStreamer plugin is installed
+    # The SRT elements the engine links against.
     gst_status =
-      case System.cmd("gst-inspect-1.0", ["decklinkvideosink"], stderr_to_stdout: true) do
+      case System.cmd("gst-inspect-1.0", ["srtsink"], stderr_to_stdout: true) do
         {_, 0} -> :ok
         _ -> :error
       end
 
-    # 2. Check if DesktopVideoHelper is running
-    helper_status =
-      case System.cmd("pgrep", ["-f", "DesktopVideoHelper"]) do
-        {_, 0} -> :ok
-        _ -> :error
-      end
-
-    # 3. Check if physical hardware node exists
-    dev_status =
-      case System.cmd("sh", ["-c", "ls /dev/blackmagic/io*"], stderr_to_stdout: true) do
+    # ffmpeg, needed only by the RTMP/HTTP/HLS sidecar.
+    ffmpeg_status =
+      case System.cmd("sh", ["-c", "command -v ffmpeg"], stderr_to_stdout: true) do
         {_, 0} -> :ok
         _ -> :error
       end
 
     cond do
       gst_status != :ok ->
-        "GStreamer DeckLink plugin not available. Please install the gstreamer1.0-plugins-bad package."
+        "GStreamer SRT plugin not available. Install gstreamer1.0-plugins-bad (srtsink/srtsrc)."
 
-      helper_status != :ok ->
-        "Blackmagic DesktopVideoHelper service is not running. Start it with '/usr/lib/blackmagic/DesktopVideo/DesktopVideoHelper -n' or via systemctl."
-
-      dev_status != :ok ->
-        "No Blackmagic DeckLink hardware detected (missing /dev/blackmagic/io*). Check PCIe card installation."
+      ffmpeg_status != :ok ->
+        "ffmpeg is missing: RTMP/HTTP/HLS sources cannot be pulled. Install ffmpeg or use an SRT/UDP source."
 
       true ->
-        "SDI Pipeline failed to initialize. The DeckLink device may be occupied by another application or in an invalid video mode."
+        "Pipeline failed to start three times. Check the source URL and that the route's ports are free."
     end
   end
 

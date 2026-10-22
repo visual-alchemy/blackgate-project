@@ -42,39 +42,6 @@ defmodule Blackgate.RouteStatsRegistry do
     {stats, warning_count, prev_health} =
       case :ets.lookup(@table_name, route_id) do
         [{^route_id, prev_stats, prev_updated_at}] ->
-          prev_sdi_stats = prev_stats["sdi_video_stats"] || []
-          curr_sdi_stats = stats["sdi_video_stats"] || []
-
-          updated_sdi_stats =
-            Enum.map(curr_sdi_stats, fn curr_item ->
-              dev = curr_item["device_number"]
-              prev_item = Enum.find(prev_sdi_stats, &(&1["device_number"] == dev))
-
-              if prev_item && prev_updated_at < updated_at do
-                delta_drops = max(0, curr_item["dropped_frames"] - prev_item["dropped_frames"])
-
-                delta_dups =
-                  max(0, curr_item["duplicated_frames"] - prev_item["duplicated_frames"])
-
-                delta_time_sec = (updated_at - prev_updated_at) / 1000.0
-
-                {drops_per_sec, dups_per_sec} =
-                  if delta_time_sec > 0.1 do
-                    {delta_drops / delta_time_sec, delta_dups / delta_time_sec}
-                  else
-                    {0.0, 0.0}
-                  end
-
-                curr_item
-                |> Map.put("drops_per_sec", Float.round(drops_per_sec, 2))
-                |> Map.put("duplicates_per_sec", Float.round(dups_per_sec, 2))
-              else
-                curr_item
-                |> Map.put("drops_per_sec", 0.0)
-                |> Map.put("duplicates_per_sec", 0.0)
-              end
-            end)
-
           # Source loss over this report window. The cumulative counters keep the
           # connection-startup burst in the ratio for the whole life of the
           # connection, so a route with ~0.5% steady-state loss kept reporting
@@ -99,7 +66,6 @@ defmodule Blackgate.RouteStatsRegistry do
 
           stats =
             stats
-            |> Map.put("sdi_video_stats", updated_sdi_stats)
             |> Map.put("loss-window-pct", loss_window_pct)
             # Reset to 0 for next window
             |> Map.put("warning_count", 0)
@@ -111,18 +77,8 @@ defmodule Blackgate.RouteStatsRegistry do
           {stats, warning_count, prev_health}
 
         _ ->
-          curr_sdi_stats = stats["sdi_video_stats"] || []
-
-          updated_sdi_stats =
-            Enum.map(curr_sdi_stats, fn curr_item ->
-              curr_item
-              |> Map.put("drops_per_sec", 0.0)
-              |> Map.put("duplicates_per_sec", 0.0)
-            end)
-
           stats =
             stats
-            |> Map.put("sdi_video_stats", updated_sdi_stats)
             |> Map.put("warning_count", 0)
 
           {stats, 0, "disconnected"}
@@ -338,7 +294,7 @@ defmodule Blackgate.RouteStatsRegistry do
   @doc """
   Get secondary-source stats for a route. Returns the raw stats map or nil.
   Unlike get_stats/1, this returns the bare map (no wrapping) because
-  secondary stats skip the SDI-drop / health-evaluation pipeline.
+  secondary stats skip the per-sink drop / health-evaluation pipeline.
   """
   def get_secondary_stats(route_id) when is_binary(route_id) do
     case :ets.lookup(@table_name, {:secondary, route_id}) do

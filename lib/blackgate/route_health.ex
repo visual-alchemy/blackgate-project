@@ -61,7 +61,7 @@ defmodule Blackgate.RouteHealth do
       rtt = stats["rtt-ms"] || caller["rtt-ms"] || 0.0
       streak = stats["loss-streak"] || 0
 
-      # `drops_per_sec` in `sdi_video_stats` is deliberately excluded here:
+      # Per-sink drop counters are deliberately excluded here:
       # it counts `videorate` "drop" events, i.e. expected framerate-conversion
       # drops (50p -> 25p drops every other frame), not DeckLink hardware
       # failures. Hardware failures crash the pipeline and are handled by
