@@ -616,9 +616,18 @@ fn add_srt_sink(
     apply_extra_props(&sink, &cfg.extra_props);
 
     sink.set_property("async", false);
-    sink.set_property("sync", true);
+    // sync=FALSE, like the UDP sink below. A network sink must not pace itself on the pipeline clock: with
+    // sync=TRUE the sink waits for the pipeline clock before handing each buffer to SRT, and in a route that
+    // also has an SDI sink (a live sink carrying its own DeckLink clock) that wait never resolves - the sink
+    // stops draining, its 2 MB branch queue fills, the tee blocks and the SDI branch starves with it. Measured
+    // on the operator's own route: engine at 2% of one core while its SDI-only siblings ran 60-70%, SDI sink
+    // duplicating 1085 frames against 1238 received, egress loss 15% against a link that pings clean, and
+    // GStreamer warning "Pipeline construction is invalid, please add queues" from srtsink0. Single-destination
+    // routes never showed it because nothing competes for the clock. SRT schedules delivery itself from the
+    // timestamps and the negotiated latency, so the sink does not need to.
+    sink.set_property("sync", false);
     sink.set_property("wait-for-connection", false);
-    println!("Configured SRT sink with async=FALSE, sync=TRUE, wait-for-connection=FALSE");
+    println!("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE");
 
     let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
 
@@ -1322,6 +1331,42 @@ mod tests {
     // The old branch used a 50 MB / 3 s ring buffer. It was not the cause of the RSS
     // regression (the preview branch was), but the bound itself was never justified: a
     // UDP or SRT destination that cannot keep up must not be able to grow tens of MB.
+    #[test]
+    fn srt_sink_does_not_pace_on_the_pipeline_clock() {
+        // sync=TRUE made the sink wait for the pipeline clock before handing each buffer to SRT. In a route
+        // that also has an SDI sink - a live sink carrying the DeckLink card's own clock - that wait never
+        // resolved: the sink stopped draining, its branch queue filled, the tee blocked and the SDI branch
+        // starved with it. Measured with scripts/multi_sink_probe.py against the pre-fix binary: SDI sink
+        // received 0 of 625 nominal frames, engine at 0.0% of one core, and the feeding ffmpeg failed with
+        // "Error muxing a packet: Input/output error" because the engine had stopped reading its source.
+        gst::init().unwrap();
+        let pipeline = gst::Pipeline::new();
+        let tee = gst::ElementFactory::make("tee").build().expect("tee");
+        pipeline.add(&tee).expect("add tee");
+        let cfg = SinkConfig {
+            element_type: "srtsink".to_string(),
+            protocol: SinkProtocol::Srt,
+            uri: Some("srt://127.0.0.1:9?mode=listener".to_string()),
+            host: None,
+            port: None,
+            latency_ms: 2000,
+            mode: None,
+            passphrase: None,
+            streamid: None,
+            sdi: None,
+            extra_props: std::collections::BTreeMap::new(),
+        };
+        let sink = add_srt_sink(&pipeline, &tee, &cfg).expect("srt sink");
+        assert!(
+            !sink.property::<bool>("sync"),
+            "the SRT sink must not wait on the pipeline clock (see the multi-destination stall)"
+        );
+        assert!(
+            !sink.property::<bool>("async"),
+            "the SRT sink stays async=FALSE: a live route must not wait for preroll"
+        );
+    }
+
     #[test]
     fn sink_queue_budget_stays_small() {
         gst::init().unwrap();
