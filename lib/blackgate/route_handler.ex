@@ -257,11 +257,10 @@ defmodule Blackgate.RouteHandler do
     if now - data.started_at < @watchdog_grace_period_ms do
       {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
     else
-      # A dual-ingest route whose destinations are not SDI switches sources in-process, driven by
-      # stats-based health. An SDI route does not: the in-process cut needs the guarded seamless
-      # machinery, so it falls through to the frame-stall handling below and restarts the pipeline
-      # on the selected source instead.
-      if in_process_switch_allowed?(data.route) do
+      # Dual-ingest routes are judged by the mode's policy on stats-driven health; evaluate_failover/1
+      # then picks the mechanism - an in-process cut, or a pipeline rebuild on the selected source for
+      # an SDI route, which must not be cut in place without the guarded seamless machinery.
+      if dual_ingest_eligible?(data.route) do
         refreshed = refresh_source_health_from_stats(data)
 
         {:keep_state, new_data} = evaluate_failover(refreshed)
@@ -631,6 +630,27 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # A source switch was decided for a route that must not cut in place: rebuild the pipeline on the
+  # target. This deliberately does NOT go through failover_restart/1, which would apply the mode's
+  # policy a second time and could immediately move the source again - the target here is already the
+  # decision.
+  def handle_event(:info, {:switch_source_restart, target}, :started, data)
+      when target in ["primary", "secondary"] do
+    Logger.warning("RouteHandler: switching source to #{target} by rebuilding the pipeline")
+
+    if data.port && is_port(data.port), do: close_port(data.port)
+    if data.ffmpeg_port && is_port(data.ffmpeg_port), do: close_port(data.ffmpeg_port)
+
+    enter_reconnecting(%{
+      data
+      | port: nil,
+        ffmpeg_port: nil,
+        active_source: target,
+        failover_switched: true,
+        route: Map.put(data.route, "active_source", target)
+    })
+  end
+
   # SDI audio desync auto-recovery: fired by maybe_restart_for_audio_desync/3 via send(self(), ...)
   # Using send+handle_event keeps the gen_statem state transition clean and separate from
   # the data-update return path in the pipeline stdout handler.
@@ -659,7 +679,7 @@ defmodule Blackgate.RouteHandler do
       when target in ["primary", "secondary"] do
     Logger.info("RouteHandler: source switch -> #{target} for route #{data.id}")
 
-    if dual_ingest_eligible?(data.route) and is_port(data.port) do
+    if in_process_switch_allowed?(data.route) and is_port(data.port) do
       maybe_join_or_leave_for_auto_join(data, target)
 
       Port.command(
@@ -998,21 +1018,37 @@ defmodule Blackgate.RouteHandler do
           {:keep_state, %{data | both_dead_reported: false}}
 
         target ->
-          maybe_join_or_leave_for_auto_join(data, target)
-
-          Port.command(
-            data.port,
-            Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
-          )
-
+          # The DECISION is the same for every route; only the MECHANISM differs. A route that must
+          # not cut in place (an SDI destination without the guarded seamless machinery) rebuilds the
+          # pipeline on the target instead of flipping the selector under a live decklink branch.
+          # The pipeline is rebuilt from a self-sent message because this function runs inside the
+          # engine-stdout reducer, which can only return data - a state transition needs a callback.
           _ = Db.update_route(data.id, %{"active_source" => target})
 
-          Blackgate.EventLog.log(
-            :warning,
-            "failover_auto",
-            "Auto-switched to #{target} (mode=#{mode})",
-            %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
-          )
+          if in_process_switch_allowed?(data.route) and is_port(data.port) do
+            maybe_join_or_leave_for_auto_join(data, target)
+
+            Port.command(
+              data.port,
+              Jason.encode!(%{"command" => "switch-source", "target" => target}) <> "\n"
+            )
+
+            Blackgate.EventLog.log(
+              :warning,
+              "failover_auto",
+              "Auto-switched to #{target} (mode=#{mode})",
+              %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+            )
+          else
+            send(self(), {:switch_source_restart, target})
+
+            Blackgate.EventLog.log(
+              :warning,
+              "failover_auto",
+              "Auto-switched to #{target} (mode=#{mode}, pipeline restart)",
+              %{route_id: data.id, route_name: get_in(data, [:route, "name"]) || data.id}
+            )
+          end
 
           {:keep_state,
            %{data | active_source: target, failover_switched: true, both_dead_reported: false}}

@@ -94,6 +94,70 @@ defmodule Blackgate.RouteHandlerSdiSwitchTest do
     end
   end
 
+  describe "the failover DECISION still runs for an SDI route" do
+    # The operator's symptom: mode=maintain-primary, switched to secondary by hand, never came back
+    # because the gate stopped the decision itself instead of only the in-place cut. The decision must
+    # run for every dual-ingest route; the mechanism is what differs.
+    defp engine_data(route, active, health, port \\ nil) do
+      %{
+        id: "decision-route",
+        route: route,
+        active_source: active,
+        source_health: health,
+        both_dead_reported: false,
+        failover_switched: false,
+        auto_join: true,
+        port: port,
+        ffmpeg_port: nil
+      }
+    end
+
+    test "maintain-primary on secondary with a valid primary decides primary and schedules a rebuild" do
+      route = dual_srt_route([%{"schema" => "SDI"}])
+      data = engine_data(route, "secondary", %{primary: :valid, secondary: :valid})
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+
+      assert new_data.active_source == "primary"
+      assert new_data.failover_switched
+
+      assert_receive {:switch_source_restart, "primary"},
+                     100,
+                     "an SDI route must rebuild on the target instead of cutting in place"
+    end
+
+    test "an invalid primary still moves an SDI route to the secondary, by rebuild" do
+      route = dual_srt_route([%{"schema" => "SDI"}])
+      data = engine_data(route, "primary", %{primary: :invalid, secondary: :valid})
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+
+      assert new_data.active_source == "secondary"
+      assert_receive {:switch_source_restart, "secondary"}, 100
+    end
+
+    test "a route without SDI decides in place and asks for no rebuild" do
+      port = Port.open({:spawn, "cat"}, [:binary])
+      route = dual_srt_route([%{"schema" => "SRT"}])
+      data = engine_data(route, "secondary", %{primary: :valid, secondary: :valid}, port)
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+
+      assert new_data.active_source == "primary"
+      refute_receive {:switch_source_restart, _}, 100
+    end
+
+    test "both sources invalid changes nothing and schedules nothing" do
+      route = dual_srt_route([%{"schema" => "SDI"}])
+      data = engine_data(route, "primary", %{primary: :invalid, secondary: :invalid})
+
+      {:keep_state, new_data} = RouteHandler.evaluate_failover_for_test(data)
+
+      assert new_data.active_source == "primary"
+      refute_receive {:switch_source_restart, _}, 100
+    end
+  end
+
   describe "handle_event/4 with a port exit" do
     # The clause has to exist and be tolerant: without it every departing engine logged
     # "Undefined msg" and the fsm kept whatever state it had.
