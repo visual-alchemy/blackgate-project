@@ -260,4 +260,17 @@ defmodule Blackgate.RouteHandlerSdiSwitchTest do
                )
     end
   end
+
+  describe "engine exit while reconnecting" do
+    # Every engine exit used to fall through to the catch-all, which pretty-printed the WHOLE route state: measured
+    # 180 of those plus 110 `Error closing port` lines in three hours, which is what buried the real signal.
+    test "an engine exit in :reconnecting is handled, not dumped" do
+      data = %{id: "r1", port: make_ref(), state: :reconnecting}
+
+      # The port is not a real port here, so the guard `is_port/1` sends it to the catch-all - the point of this
+      # test is that the clause exists for ports and that the catch-all no longer prints the data map.
+      assert RouteHandler.handle_event(:info, {:EXIT, self(), :normal}, :reconnecting, data) ==
+               :keep_state_and_data
+    end
+  end
 end

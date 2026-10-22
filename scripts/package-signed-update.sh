@@ -64,23 +64,11 @@ fi
 APP_DIR="$(find _build/prod/rel/blackgate/lib -maxdepth 1 -type d -name 'blackgate-*' | head -1)"
 [ -n "$APP_DIR" ] || { echo "Release app dir not found — did make build succeed?" >&2; exit 65; }
 
-# The dashboard reads priv/release-notes.json to show which release is deployed and what changed in
-# it, so bake it into the release before packing. Quotes are stripped from the subjects: this is a
-# display string, and a hand-written notes file is used when one exists.
-CHANGES="$(if [ -r "$NOTES_FILE" ]; then cat "$NOTES_FILE"; else git log --pretty='- %s' -12; fi)"
-NOTES_JSON="$APP_DIR/priv/release-notes.json"
-{
-  printf '{\n  "version": "%s",\n  "released_on": "%s",\n  "changes": [\n' "$VERSION" "$(date +%F)"
-  printf '%s\n' "$CHANGES" | sed -e 's/[\\"]//g' -e 's/^- //' -e '/^[[:space:]]*$/d' | awk '{printf "    \"%s\",\n", $0}'
-  printf '    "Packaged by scripts/package-signed-update.sh"\n  ]\n}\n'
-} > "$NOTES_JSON"
-python3 -c "import json,sys; json.load(open('$NOTES_JSON')); print('release notes valid:', '$NOTES_JSON')"
-
-# Running under sudo writes the notes file as root inside a tree the operator owns, which then blocks
-# the *next* non-root packaging run ("Permission denied" on the same path). Hand it back.
-if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
-  chown "$SUDO_USER" "$NOTES_JSON" 2>/dev/null || true
-fi
+# The dashboard reads priv/release-notes.json to show which release is deployed and what changed in it, so
+# bake it into the release before packing. Shared with iso-builder/build.sh - one implementation, so the appliance
+# image cannot drift behind an update package again (it did: ISO releases reported no notes at all).
+"$PROJECT_ROOT/scripts/write-release-notes.sh" "$APP_DIR" "$VERSION" \
+  "$NOTES_FILE" "Packaged by scripts/package-signed-update.sh"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

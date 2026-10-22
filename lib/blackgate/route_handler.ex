@@ -480,6 +480,24 @@ defmodule Blackgate.RouteHandler do
     end
   end
 
+  # The same exit can arrive in ANY state, and only :started had a clause. While reconnecting the handler is
+  # already waiting to rebuild the pipeline, so an exit there is expected - yet each one fell through to the
+  # catch-all and dumped the entire route state (measured: 180 of those in three hours, plus 110 `Error closing
+  # port` lines from the same dead port in close_port/1).
+  def handle_event(:info, {:EXIT, port, reason}, _state, data) when is_port(port) do
+    if port == data.port do
+      # Our own engine went away. Forget the port so nothing tries to close it again, and say so once - quietly
+      # for a clean exit (the reconnect path already narrates it), loudly for anything else.
+      if reason not in [:normal, :shutdown] do
+        Logger.warning("RouteHandler: engine port exited (#{inspect(reason)}) while reconnecting")
+      end
+
+      {:keep_state, %{data | port: nil}}
+    else
+      :keep_state_and_data
+    end
+  end
+
   # Reconnect timer fired — attempt to restart the pipeline
   def handle_event({:timeout, :reconnect}, :retry, :reconnecting, data) do
     elapsed = System.monotonic_time(:millisecond) - data.reconnect_started_at
@@ -793,10 +811,14 @@ defmodule Blackgate.RouteHandler do
     :keep_state_and_data
   end
 
+  # Unknown messages stay visible, as ONE line. A pretty-printed dump of the whole route state is what made the
+  # log unreadable; the engine-exit case that produced most of it is now handled at its source, and this is the
+  # backstop for genuinely new shapes.
   def handle_event(type, content, state, data) do
     Logger.error(
-      "RouteHandler: Undefined msg: #{inspect([{"type", type}, {"content", content}, {"state", state}, {"data", data}],
-      pretty: true)}"
+      "RouteHandler: Undefined msg type=#{inspect(type)} " <>
+        "content=#{inspect(content, limit: 8, printable_limit: 200)} " <>
+        "state=#{inspect(state)} route=#{inspect(Map.get(data, :id))}"
     )
 
     :keep_state_and_data
@@ -1483,6 +1505,17 @@ defmodule Blackgate.RouteHandler do
   end
 
   defp close_port(port) do
+    # A port whose process has already exited cannot be closed - Port.close/1 raises ArgumentError - and there is
+    # nothing left to kill. Asking first turns a path that logged a warning AND an error for every engine that
+    # had already gone into a no-op.
+    if Port.info(port) do
+      close_live_port(port)
+    end
+
+    :ok
+  end
+
+  defp close_live_port(port) do
     try do
       case Port.info(port, :os_pid) do
         {:os_pid, pid} when is_integer(pid) ->
