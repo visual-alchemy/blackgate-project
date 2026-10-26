@@ -315,12 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Main thread = bus loop (C g_main_loop_run with bus_callback)
-    engine_gst::run_bus_watch(
-        &pipeline,
-        socket.clone(),
-        &config.route_id,
-        stop.clone(),
-    );
+    engine_gst::run_bus_watch(&pipeline, socket.clone(), &config.route_id, stop.clone());
 
     // C cleanup_pipeline
     running.store(false, Ordering::Relaxed);
