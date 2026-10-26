@@ -263,6 +263,17 @@ export const routesApi = {
       method: 'POST',
       body: JSON.stringify({ action, route_ids: routeIds }),
     });
+
+    // Same trap `stop` fell into: returning the body whatever the status was meant a refusal
+    // (422 `{"error":":not_found"}`, or a 400 for a malformed request) came back looking like
+    // success. The caller then read `result.data.filter(...)` off an object with no `data`, and
+    // the operator saw "Cannot read properties of undefined (reading 'filter')" instead of the
+    // reason the server gave.
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Bulk ${action} failed (${response.status})`);
+    }
+
     return response.json();
   },
 

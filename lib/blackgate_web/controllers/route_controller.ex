@@ -275,6 +275,28 @@ defmodule BlackgateWeb.RouteController do
     |> json(%{data: results})
   end
 
+  # A request the clause above cannot match used to raise FunctionClauseError, so a malformed
+  # body came back as a 500 whose shape the dashboard could not read (it crashed with
+  # "Cannot read properties of undefined (reading 'filter')"). Answer 400 with a reason instead:
+  # the operator needs to know what was wrong, not that the server broke.
+  def bulk_action(conn, params) when is_map(params) do
+    reason =
+      cond do
+        params["action"] not in ["start", "stop"] ->
+          "action must be \"start\" or \"stop\""
+
+        not is_list(params["route_ids"]) ->
+          "route_ids must be a list of route ids"
+
+        true ->
+          "invalid bulk action request"
+      end
+
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: reason})
+  end
+
   def clone(conn, %{"route_id" => route_id}) do
     with {:ok, route} <- Db.get_route(route_id, true) do
       # Prepare route data for cloning
