@@ -95,9 +95,20 @@ impl ThumbnailBranch {
         let route_id = route_id.to_string();
 
         // ─── Element creation ──────────────────────────────────────────
-        // Queue: never leak compressed TS (duo2/quad2). Allow decode/scheduling
-        // bursts to queue up; sustained overload back-pressures this tee branch
-        // once the bounded queue fills.
+        // Queue: allow decode/scheduling bursts to queue up, but never let this branch
+        // back-pressure the tee.
+        //
+        // The tee feeds the SRT destinations *and* this preview branch, so a preview that
+        // falls behind stalls everything: the queue fills, the tee blocks, and the SRT sink
+        // starves. Measured on a 1080p HLS route: with a non-leaky queue the receiver had no
+        // data in 27-29 of 40 seconds and the pattern was ragged; making the branch leaky
+        // brought it to 7 of 40 with a flat pattern (the preview branch is the only change).
+        //
+        // Dropping here is safe because the budget is generous (64 MB / 8 s): shedding only
+        // starts once the branch is ~8 s behind, where the preview is stale anyway. This is
+        // not the old `leaky=downstream, max-size-buffers=2` bug — that budget was ~2.6 kB
+        // (1.6 ms of a 13 Mbps feed), so it shredded the stream before the demuxer on every
+        // frame. The preview may miss a GOP under sustained overload; the live output must not.
         let tqueue = gst::ElementFactory::make("queue")
             .name("thumb-queue")
             .build()
@@ -105,7 +116,7 @@ impl ThumbnailBranch {
         tqueue.set_property("max-size-buffers", 0u32);
         tqueue.set_property("max-size-bytes", 64u32 * 1024 * 1024);
         set_time_property(&tqueue, "max-size-time", 8);
-        tqueue.set_property_from_str("leaky", "no");
+        tqueue.set_property_from_str("leaky", "downstream");
 
         let tsdemux = gst::ElementFactory::make("tsdemux")
             .name("thumb-tsdemux")
