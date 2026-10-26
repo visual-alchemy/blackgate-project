@@ -323,38 +323,26 @@ const RouteItem = () => {
         // If the route is started, stop it
         result = await routesApi.stop(id);
 
-        // Only update if result has data
-        if (result && result.data) {
-          setRouteData(prev => ({
-            ...prev,
-            status: result.data.status
-          }));
-        } else {
-          // If no data is returned, assume the route is stopped
-          setRouteData(prev => ({
-            ...prev,
-            status: 'stopped'
-          }));
-        }
+        // Only update if result has data. `result.data` can be absent (an error body, an empty
+        // 204-style reply), and reading `.status` off undefined produced the toast "Failed to
+        // stop route: Cannot read properties of undefined (reading 'status')".
+        const stoppedStatus = result?.data?.status;
+        setRouteData(prev => ({
+          ...prev,
+          status: stoppedStatus || 'stopped'
+        }));
 
         messageApi.success('Route stopped successfully');
       } else {
         // If the route is not started, start it
         result = await routesApi.start(id);
 
-        // Only update if result has data
-        if (result && result.data) {
-          setRouteData(prev => ({
-            ...prev,
-            status: result.data.status
-          }));
-        } else {
-          // If no data is returned, assume the route is started
-          setRouteData(prev => ({
-            ...prev,
-            status: 'started'
-          }));
-        }
+        // Same care as above: never assume the body carries `data`.
+        const startedStatus = result?.data?.status;
+        setRouteData(prev => ({
+          ...prev,
+          status: startedStatus || 'started'
+        }));
 
         messageApi.success('Route started successfully');
       }

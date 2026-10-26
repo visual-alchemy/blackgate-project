@@ -220,12 +220,28 @@ export const routesApi = {
   // Stop a route
   stop: async (id) => {
     const response = await authFetch(`/api/routes/${id}/stop`);
+
+    // Stop used to return the body whatever the status was, so a 422 `{"error":":not_found"}`
+    // came back looking like success. The caller then read `result.data.status` off an object
+    // with no `data`, and the operator saw "Failed to stop route: Cannot read properties of
+    // undefined (reading 'status')" instead of "this route was already stopped".
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Stop failed (${response.status})`);
+    }
+
     return response.json();
   },
 
   // Restart a route
   restart: async (id) => {
     const response = await authFetch(`/api/routes/${id}/restart`);
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Restart failed (${response.status})`);
+    }
+
     return response.json();
   },
 
