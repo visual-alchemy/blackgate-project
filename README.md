@@ -314,13 +314,10 @@ git clone https://github.com/visual-alchemy/blackgate-project.git
 cd blackgate-project
 
 # Install everything else: build tools, GStreamer 1.24, SRT, cJSON, ffmpeg, ripgrep,
-# the pinned OTP/Elixir/Node/Rust toolchains (SHA256-verified, no sudo), Elixir deps
-# and `npm ci`. Step 0 prints the prerequisites above before it starts.
+# the pinned OTP/Elixir/Node/Rust toolchains (SHA256-verified, no sudo), Elixir deps,
+# `npm ci`, and the kernel UDP buffers SRT needs. Step 0 prints the prerequisites above
+# before it starts.
 make install
-
-# Kernel UDP buffers, so SRT does not drop packets at high bitrate. The appliance image
-# sets these at first boot; a development host must do it once (survives until reboot).
-sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
 
 # Start development servers
 make dev-all
@@ -331,6 +328,14 @@ Default credentials: `admin` / `password123`
 
 `make install` is the only installation step a fresh Ubuntu 24.04 host needs. It is
 idempotent, and it reuses any pinned toolchain already on PATH.
+
+Step 7 of `make install` raises the kernel socket buffers SRT needs
+(`net.core.rmem_max` / `net.core.wmem_max` = 16 MB). It writes
+`/etc/sysctl.d/90-blackgate.conf` — the same file the appliance image writes at first boot, so
+both install paths end up identical — and then reads the values back and warns loudly if they are
+still below the target. Below 16 MB, SRT loses datagrams at broadcast bitrates and the symptom
+looks like network loss, not like a host setting. It survives a reboot; `sysctl -w` would not.
+If you install without sudo, the step prints the exact commands to run as root.
 
 ### Manual Installation
 

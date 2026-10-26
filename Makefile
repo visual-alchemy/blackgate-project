@@ -23,8 +23,9 @@ install:
 	echo "  make   (package: make)      to invoke this target"; \
 	echo "  git, or a copy of the repo  to get the code here"; \
 	echo "  sudo + network              for the package-manager step below"; \
-	echo "Bare Ubuntu 24.04 server:  sudo apt-get update && sudo apt-get install -y make git"; \
-	echo "Step 3 needs no sudo: the pinned toolchains land in ~/.blackgate/toolchain."; \
+		echo "Bare Ubuntu 24.04 server:  sudo apt-get update && sudo apt-get install -y make git"; \
+		echo "Step 3 needs no sudo: the pinned toolchains land in ~/.blackgate/toolchain."; \
+		echo "Step 7 needs sudo once: it writes /etc/sysctl.d/90-blackgate.conf (SRT socket buffers)."; \
 	echo ""; \
 	if [ "$$(uname)" = "Linux" ] && command -v apt-get >/dev/null && ! command -v sudo >/dev/null; then \
 		echo "ERROR: sudo is missing and the apt step needs it."; \
@@ -96,6 +97,48 @@ install:
 	echo "Step 6: Installing Frontend Dependencies..."; \
 	echo "=============================================="; \
 	npm --prefix web_app ci; \
+	echo ""; \
+	echo "=============================================="; \
+	echo "Step 7: Raising socket buffers for SRT..."; \
+	echo "=============================================="; \
+	@# SRT needs large socket buffers. Without them the kernel drops datagrams at broadcast
+	@# bitrates and the failure looks like network loss — loss/retransmit climb, output glitches,
+	@# and nothing in the logs names the cause. The appliance ISO already writes this file in
+	@# firstboot; a `git clone` + `make install` host gets it here, identically, so both install
+	@# paths end up in the same state. Persisted in /etc/sysctl.d/ (not `sysctl -w`), so it
+	@# survives a reboot.
+	@if [ "$$(uname)" = "Linux" ]; then \
+		want=16777216; \
+		if command -v sudo >/dev/null 2>&1 && [ "$$(id -u)" != "0" ]; then as_root="sudo"; else as_root=""; fi; \
+		if [ -w /etc/sysctl.d ] || [ -n "$$as_root" ]; then \
+			printf '%s\n' \
+				"# Blackgate: SRT socket buffers. Written by 'make install' and by the appliance first boot." \
+				"net.core.rmem_max=$$want" \
+				"net.core.wmem_max=$$want" \
+				| $$as_root tee /etc/sysctl.d/90-blackgate.conf >/dev/null \
+				&& $$as_root sysctl --system >/dev/null 2>&1 \
+				&& echo "  wrote /etc/sysctl.d/90-blackgate.conf and applied it"; \
+		else \
+			echo "  SKIPPED: no sudo and /etc/sysctl.d is not writable."; \
+		fi; \
+		rmem=$$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0); \
+		wmem=$$(sysctl -n net.core.wmem_max 2>/dev/null || echo 0); \
+		echo "  now: net.core.rmem_max=$$rmem  net.core.wmem_max=$$wmem  (target >= $$want)"; \
+		if [ "$$rmem" -lt "$$want" ] || [ "$$wmem" -lt "$$want" ]; then \
+			echo ""; \
+			echo "  WARNING: socket buffers are below the SRT target."; \
+			echo "  SRT will lose datagrams at high bitrate and the logs will blame the network."; \
+			echo "  Run this as root, then re-run 'make install':"; \
+			echo "    sudo tee /etc/sysctl.d/90-blackgate.conf <<'EOF'"; \
+			echo "    net.core.rmem_max=$$want"; \
+			echo "    net.core.wmem_max=$$want"; \
+			echo "    EOF"; \
+			echo "    sudo sysctl --system"; \
+			echo ""; \
+		fi; \
+	else \
+		echo "  not Linux — set the equivalent of net.core.rmem_max/wmem_max manually"; \
+	fi; \
 	echo ""; \
 	echo "=============================================="; \
 	echo "Installation Complete!"; \
