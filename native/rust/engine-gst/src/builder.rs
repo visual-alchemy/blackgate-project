@@ -539,7 +539,7 @@ fn add_srt_sink(
     sink.set_property("wait-for-connection", false);
     println!("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE");
 
-    let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
+    let queue = make_queue2(sink_queue_bytes(), sink_queue_time_ns());
 
     // C: tsparse alignment=7 set-timestamps=TRUE before srtsink
     let tsparse = match gst::ElementFactory::make("tsparse")
@@ -602,7 +602,7 @@ fn add_udp_sink(
 
     // Same bounded decoupling buffer as the SRT sink branch: a UDP destination cannot
     // back-pressure, so a 50 MB ring buffer only bought RSS, never smoothness.
-    let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
+    let queue = make_queue2(sink_queue_bytes(), sink_queue_time_ns());
 
     pipeline
         .add_many([&queue, &sink])
@@ -638,13 +638,53 @@ fn preview_requested(config: &RouteConfig, env_allows: bool) -> bool {
     config.preview && !config.route_id.is_empty() && env_allows
 }
 
-/// Decoupling buffer for an SRT destination branch: enough to ride out scheduling
-/// jitter, small enough that peak RSS stays in the C engine's range.
-const SINK_QUEUE_BYTES: u32 = 2 * 1024 * 1024;
-const SINK_QUEUE_TIME_NS: u64 = 500_000_000;
-// Compile-time guard: a destination that cannot keep up must never grow tens of MB again.
-// The old 50 MB / 3 s ring buffer cost ~47 MB of peak RSS on the udp-to-srt workload.
-const _: () = assert!(SINK_QUEUE_BYTES <= 4 * 1024 * 1024);
+/// Decoupling buffer for an SRT destination branch.
+///
+/// This has to absorb two different things, and the *bytes* bound is what protects RSS:
+///
+/// - scheduling jitter (milliseconds), and
+/// - the arrival shape of the source. A live HLS feed delivers a whole segment every ~2 s, so a
+///   destination branch sees a burst and then silence. Measured on a 4 Mbps HLS route: with a
+///   0.5 s / 2 MB budget the receiver starved in 27 of 39 seconds; with a multi-second budget the
+///   same route delivered a steady stream. The 0.5 s budget was too small to bridge one segment.
+///
+/// The old 50 MB / 3 s ring buffer cost ~47 MB of peak RSS on the udp-to-srt workload, which is
+/// why bytes stay bounded here: time absorbs the segment burst, bytes cap the damage.
+const SINK_QUEUE_BYTES: u32 = 8 * 1024 * 1024;
+const SINK_QUEUE_TIME_NS: u64 = 3_000_000_000;
+
+/// Operator override: `BLACKGATE_SINK_QUEUE_SECONDS` / `BLACKGATE_SINK_QUEUE_MB`.
+///
+/// A receiver that stutters may be starving rather than receiving corrupt data, and telling those
+/// apart should not need a rebuild. Bounded so a typo cannot reintroduce the 50 MB buffer.
+fn sink_queue_bytes() -> u32 {
+    env_bounded_u64(
+        "BLACKGATE_SINK_QUEUE_MB",
+        SINK_QUEUE_BYTES as u64 / (1024 * 1024),
+        256,
+    )
+    .saturating_mul(1024 * 1024) as u32
+}
+
+fn sink_queue_time_ns() -> u64 {
+    env_bounded_u64(
+        "BLACKGATE_SINK_QUEUE_SECONDS",
+        SINK_QUEUE_TIME_NS / 1_000_000_000,
+        600,
+    )
+    .saturating_mul(1_000_000_000)
+}
+
+fn env_bounded_u64(key: &str, default: u64, max: u64) -> u64 {
+    match std::env::var(key) {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(0) => 0,
+            Ok(v) => v.min(max),
+            Err(_) => default,
+        },
+        Err(_) => default,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -725,11 +765,28 @@ mod tests {
     }
 
     #[test]
-    fn sink_queue_budget_stays_small() {
+    fn sink_queue_budget_absorbs_hls_segments_without_blowing_up_rss() {
         gst::init().unwrap();
         let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
-        assert_eq!(queue.property::<u32>("max-size-bytes"), 2 * 1024 * 1024);
-        assert_eq!(queue.property::<u64>("max-size-time"), 500_000_000);
+        // Long enough to bridge an HLS segment gap (a live feed delivers a whole segment every
+        // ~2 s), small enough that a stalled destination cannot grow tens of MB.
+        assert!(queue.property::<u64>("max-size-time") >= 2_000_000_000);
+        assert!(queue.property::<u32>("max-size-bytes") <= 8 * 1024 * 1024);
         assert_eq!(queue.property::<u32>("max-size-buffers"), 0);
+    }
+
+    // The defaults above are a starting point, not a law: telling a starving receiver apart from
+    // one being fed corrupt data must not need a rebuild. The bounds are what keep a typo from
+    // reintroducing the 50 MB buffer that cost ~47 MB of peak RSS.
+    #[test]
+    fn sink_queue_overrides_are_honoured_and_bounded() {
+        assert_eq!(env_bounded_u64("BLACKGATE_NO_SUCH_VAR_HERE", 7, 100), 7);
+        std::env::set_var("BLACKGATE_TEST_BOUNDED", "42");
+        assert_eq!(env_bounded_u64("BLACKGATE_TEST_BOUNDED", 7, 100), 42);
+        std::env::set_var("BLACKGATE_TEST_BOUNDED", "9999");
+        assert_eq!(env_bounded_u64("BLACKGATE_TEST_BOUNDED", 7, 100), 100);
+        std::env::set_var("BLACKGATE_TEST_BOUNDED", "nonsense");
+        assert_eq!(env_bounded_u64("BLACKGATE_TEST_BOUNDED", 7, 100), 7);
+        std::env::remove_var("BLACKGATE_TEST_BOUNDED");
     }
 }
