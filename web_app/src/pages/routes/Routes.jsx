@@ -221,9 +221,12 @@ const Routes = () => {
         throw new Error(result.error);
       }
 
-      // Update the specific route in the routes array
+      // Update the specific route in the routes array. The body may not carry `data` (an error
+      // shape, or an empty reply), so fall back to the status the action implies rather than
+      // reading `.status` off undefined.
+      const nextStatus = result?.data?.status || (action === 'stop' ? 'stopped' : 'started');
       setRoutes(routes.map(route =>
-        route.id === id ? { ...route, status: result.data.status } : route
+        route.id === id ? { ...route, status: nextStatus } : route
       ));
 
       messageApi.success(`Route ${action}ed successfully`);
