@@ -243,8 +243,12 @@ const Routes = () => {
     setBulkLoading(true);
     try {
       const result = await routesApi.bulkAction(action, selectedRowKeys);
-      const successCount = result.data.filter(r => r.status && !r.error).length;
-      const failCount = result.data.filter(r => r.error).length;
+      // `data` is only present on success; a refusal throws in the api layer now, so reaching
+      // here means the array is real. Guard anyway: a partial/older server must not turn into
+      // "Cannot read properties of undefined".
+      const results = Array.isArray(result?.data) ? result.data : [];
+      const successCount = results.filter(r => r.status && !r.error).length;
+      const failCount = results.filter(r => r.error).length;
 
       if (failCount > 0) {
         messageApi.warning(`${successCount} routes ${action}ed, ${failCount} failed`);
