@@ -644,14 +644,29 @@ fn preview_requested(config: &RouteConfig, env_allows: bool) -> bool {
 ///
 /// - scheduling jitter (milliseconds), and
 /// - the arrival shape of the source. A live HLS feed delivers a whole segment every ~2 s, so a
-///   destination branch sees a burst and then silence. Measured on a 4 Mbps HLS route: with a
-///   0.5 s / 2 MB budget the receiver starved in 27 of 39 seconds; with a multi-second budget the
-///   same route delivered a steady stream. The 0.5 s budget was too small to bridge one segment.
+///   destination branch sees a burst and then silence.
 ///
-/// The old 50 MB / 3 s ring buffer cost ~47 MB of peak RSS on the udp-to-srt workload, which is
-/// why bytes stay bounded here: time absorbs the segment burst, bytes cap the damage.
-const SINK_QUEUE_BYTES: u32 = 8 * 1024 * 1024;
-const SINK_QUEUE_TIME_NS: u64 = 3_000_000_000;
+/// Measured on a 4 Mbps HLS route whose segments are 1.96 s long (a ~0.97 MB burst each):
+///
+/// - 0.5 s / 2 MB -> the receiver starved in 27 of 39 seconds; the branch could not bridge even
+///   one segment.
+/// - 3 s / 8 MB   -> worked while the route was young and single-caller, then regressed to 31 of
+///   45 idle seconds once it carried two destinations: 3 s is only 1.5 segments, so any source
+///   jitter emptied the branch.
+/// - 10 s / 32 MB -> 7 of 45 idle seconds, and the 7 are connect + buffer fill; six destinations
+///   across three routes (3.4 / 6.8 / 8.3 Mbps, two callers on one) all ran gap-free after that.
+///
+/// 10 s leaves a five-segment margin, which is what the earlier budgets lacked. The old 50 MB /
+/// 3 s ring buffer cost ~47 MB of peak RSS on the udp-to-srt workload, which is why bytes stay
+/// bounded: time absorbs the segment burst, bytes cap the damage.
+///
+/// The 32 MB cap is sized for the high-bitrate feeds this box actually carries, not for the
+/// 4 Mbps test route. 10 s of buffer needs ~4.8 MB at 4 Mbps but ~24 MB at 20 Mbps (the encrypted
+/// PLTV route) and ~48 MB at 40 Mbps (HEVC), so an 8 MB cap would silently shorten the buffer to
+/// 3 s at 20 Mbps and 1.6 s at 40 Mbps - exactly the thin margin that starved before. At 32 MB
+/// the buffer stays 10 s up to ~27 Mbps and degrades gracefully above that instead of collapsing.
+const SINK_QUEUE_BYTES: u32 = 32 * 1024 * 1024;
+const SINK_QUEUE_TIME_NS: u64 = 10_000_000_000;
 
 /// Operator override: `BLACKGATE_SINK_QUEUE_SECONDS` / `BLACKGATE_SINK_QUEUE_MB`.
 ///
@@ -768,10 +783,10 @@ mod tests {
     fn sink_queue_budget_absorbs_hls_segments_without_blowing_up_rss() {
         gst::init().unwrap();
         let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
-        // Long enough to bridge an HLS segment gap (a live feed delivers a whole segment every
-        // ~2 s), small enough that a stalled destination cannot grow tens of MB.
-        assert!(queue.property::<u64>("max-size-time") >= 2_000_000_000);
-        assert!(queue.property::<u32>("max-size-bytes") <= 8 * 1024 * 1024);
+        // Five segments of margin on a 1.96 s HLS segment: 3 s (1.5 segments) was measured
+        // starving once the route carried two destinations.
+        assert!(queue.property::<u64>("max-size-time") >= 8_000_000_000);
+        assert!(queue.property::<u32>("max-size-bytes") <= 32 * 1024 * 1024);
         assert_eq!(queue.property::<u32>("max-size-buffers"), 0);
     }
 
