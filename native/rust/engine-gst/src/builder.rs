@@ -632,7 +632,7 @@ fn add_srt_sink(
     sink.set_property("wait-for-connection", false);
     println!("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE");
 
-    let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
+    let queue = make_queue2(sink_queue_bytes(), sink_queue_time_ns());
 
     // C: tsparse alignment=7 set-timestamps=TRUE before srtsink
     let tsparse = match gst::ElementFactory::make("tsparse")
@@ -695,7 +695,7 @@ fn add_udp_sink(
 
     // Same bounded decoupling buffer as the SRT sink branch: a UDP destination cannot
     // back-pressure, so a 50 MB ring buffer only bought RSS, never smoothness.
-    let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
+    let queue = make_queue2(sink_queue_bytes(), sink_queue_time_ns());
 
     pipeline
         .add_many([&queue, &sink])
@@ -760,6 +760,39 @@ fn preview_requested(config: &RouteConfig, env_allows: bool) -> bool {
 /// the buffer stays 10 s up to ~27 Mbps and degrades gracefully above that instead of collapsing.
 const SINK_QUEUE_BYTES: u32 = 32 * 1024 * 1024;
 const SINK_QUEUE_TIME_NS: u64 = 10_000_000_000;
+
+/// Operator override: `BLACKGATE_SINK_QUEUE_SECONDS` / `BLACKGATE_SINK_QUEUE_MB`.
+///
+/// A receiver that stutters may be starving rather than receiving corrupt data, and telling those
+/// apart should not need a rebuild. Bounded so a typo cannot reintroduce the 50 MB buffer.
+fn sink_queue_bytes() -> u32 {
+    env_bounded_u64(
+        "BLACKGATE_SINK_QUEUE_MB",
+        SINK_QUEUE_BYTES as u64 / (1024 * 1024),
+        256,
+    )
+    .saturating_mul(1024 * 1024) as u32
+}
+
+fn sink_queue_time_ns() -> u64 {
+    env_bounded_u64(
+        "BLACKGATE_SINK_QUEUE_SECONDS",
+        SINK_QUEUE_TIME_NS / 1_000_000_000,
+        600,
+    )
+    .saturating_mul(1_000_000_000)
+}
+
+fn env_bounded_u64(key: &str, default: u64, max: u64) -> u64 {
+    match std::env::var(key) {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(0) => 0,
+            Ok(v) => v.min(max),
+            Err(_) => default,
+        },
+        Err(_) => default,
+    }
+}
 
 // ── SDI sink branch (C add_sink_to_pipeline sdisink path) ───────────────
 
@@ -1393,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn sink_queue_budget_stays_small() {
+    fn sink_queue_budget_absorbs_hls_segments_without_blowing_up_rss() {
         gst::init().unwrap();
         let queue = make_queue2(SINK_QUEUE_BYTES, SINK_QUEUE_TIME_NS);
         // Five segments of margin on a 1.96 s HLS segment: 3 s (1.5 segments) was measured
@@ -1401,5 +1434,20 @@ mod tests {
         assert!(queue.property::<u64>("max-size-time") >= 8_000_000_000);
         assert!(queue.property::<u32>("max-size-bytes") <= 32 * 1024 * 1024);
         assert_eq!(queue.property::<u32>("max-size-buffers"), 0);
+    }
+
+    // The defaults above are a starting point, not a law: telling a starving receiver apart from
+    // one being fed corrupt data must not need a rebuild. The bounds are what keep a typo from
+    // reintroducing the 50 MB buffer that cost ~47 MB of peak RSS.
+    #[test]
+    fn sink_queue_overrides_are_honoured_and_bounded() {
+        assert_eq!(env_bounded_u64("BLACKGATE_NO_SUCH_VAR_HERE", 7, 100), 7);
+        std::env::set_var("BLACKGATE_TEST_BOUNDED", "42");
+        assert_eq!(env_bounded_u64("BLACKGATE_TEST_BOUNDED", 7, 100), 42);
+        std::env::set_var("BLACKGATE_TEST_BOUNDED", "9999");
+        assert_eq!(env_bounded_u64("BLACKGATE_TEST_BOUNDED", 7, 100), 100);
+        std::env::set_var("BLACKGATE_TEST_BOUNDED", "nonsense");
+        assert_eq!(env_bounded_u64("BLACKGATE_TEST_BOUNDED", 7, 100), 7);
+        std::env::remove_var("BLACKGATE_TEST_BOUNDED");
     }
 }

@@ -1442,6 +1442,34 @@ defmodule Blackgate.RouteHandler do
       {~c"BLACKGATE_STATS_SOCKET", String.to_charlist(Blackgate.stats_socket_path())}
     ]
 
+    # Port.open is given an explicit env, so the engine inherits nothing from this process: an
+    # override only reaches it when it is passed here. Bounded in the engine as well, so a typo
+    # cannot reintroduce the 50 MB buffer that cost ~47 MB of RSS.
+    engine_env =
+      Enum.reduce(
+        [{"BLACKGATE_SINK_QUEUE_SECONDS", 600}, {"BLACKGATE_SINK_QUEUE_MB", 256}],
+        engine_env,
+        fn {key, max}, acc ->
+          case System.get_env(key) do
+            nil ->
+              acc
+
+            raw ->
+              case Integer.parse(String.trim(raw)) do
+                {value, _} when value >= 0 ->
+                  acc ++
+                    [
+                      {String.to_charlist(key),
+                       String.to_charlist(Integer.to_string(min(value, max)))}
+                    ]
+
+                _ ->
+                  acc
+              end
+          end
+        end
+      )
+
     engine_env =
       if is_binary(route["gstDebug"]) do
         engine_env ++ [{~c"GST_DEBUG", ~c"#{route["gstDebug"]}"}]
@@ -1833,8 +1861,18 @@ defmodule Blackgate.RouteHandler do
         []
       end
 
+    # HLS only: pace the output at 1x. `-re` reads the input at its native frame rate, which turns
+    # the segment bursts into a steady stream. Without it ffmpeg forwards each segment the instant
+    # it lands, and the receiver starves between segments.
+    #
+    # Deliberately NOT applied to RTMP: that source is already continuous (measured: 6 idle seconds
+    # of 44, versus 23-24 for HLS), and `-re` on a live source would only add latency.
+    hls? = hls_source?(url)
+    readrate = if hls?, do: ["-re"], else: []
+
     ["-hide_banner", "-loglevel", "warning"] ++
       reconnect ++
+      readrate ++
       [
         "-i",
         url,
@@ -1848,6 +1886,16 @@ defmodule Blackgate.RouteHandler do
         "mpegts",
         "srt://127.0.0.1:#{internal_port}?mode=listener&latency=500000"
       ]
+  end
+
+  @doc false
+  # The control plane labels HLS, RTMP and plain HTTP sources with one schema, so the URL decides.
+  # The playlist is the last path segment (`.m3u8`, possibly followed by a query string); a path
+  # that merely *contains* ".m3u8" is not a playlist.
+  def hls_source?(url) do
+    lower = String.downcase(url)
+    path = lower |> String.split(["?", "#"]) |> List.first() || ""
+    String.ends_with?(path, ".m3u8")
   end
 
   defp find_available_port do
