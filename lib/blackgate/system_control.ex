@@ -280,6 +280,7 @@ defmodule Blackgate.SystemControl do
     |> Enum.join("\n")
   end
 
+
   ## Host identity
 
   defp hostname do
