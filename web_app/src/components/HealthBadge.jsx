@@ -48,7 +48,7 @@ const HEALTH_CONFIG = {
     color: 'warning',
     icon: <WarningOutlined />,
     label: 'Egress Loss',
-    tooltip: 'Video stream is healthy inside Blackgate, but output SRT client transmission is experiencing packet loss.',
+    tooltip: 'Output SRT is reporting lost packets on the link to a destination for several seconds running. SRT retransmits most of them inside the latency, so the picture can still be clean — check Destination Statistics for the lost and retransmitted counts.',
   },
 };
 

@@ -67,26 +67,17 @@ defmodule Blackgate.RouteHealth do
       # failures. Hardware failures crash the pipeline and are handled by
       # RouteHandler restart logic instead.
 
-      # Extract pipeline warnings and egress loss
+      # Extract pipeline warnings and the egress verdict
       warning_count = stats["warning_count"] || 0
-      sink_stats = stats["sink_stats"] || []
 
-      has_egress_loss? =
-        Enum.any?(sink_stats, fn %{stats: s_stats} ->
-          sent = s_stats["packets-sent"] || 0
-          lost = s_stats["packets-sent-lost"] || 0
-
-          callers_list = s_stats["callers"] || []
-
-          caller_loss? =
-            Enum.any?(callers_list, fn c ->
-              c_sent = c["packets-sent"] || 0
-              c_lost = c["packets-sent-lost"] || 0
-              c_sent + c_lost > 0 and c_lost / (c_sent + c_lost) * 100.0 >= 2.0
-            end)
-
-          (sent + lost > 0 and lost / (sent + lost) * 100.0 >= 2.0) or caller_loss?
-        end)
+      # Egress loss is judged on the same ~10 s window and the same hysteresis as the ingest
+      # leg, not on the sink's lifetime counters. `packets-sent-lost` on an srtsink is SRT's
+      # reported loss (`pktSndLossTotal`): packets the PEER reported missing, most of which the
+      # sender retransmits inside the negotiated latency. Summed over the life of the engine, a
+      # burst while a client connected pinned the route to "Egress Loss" while every viewer
+      # played without a single artefact. The windowed figure and the destination that held it
+      # come from Blackgate.RouteStatsRegistry, which owns the history.
+      has_egress_loss? = egress_loss?(stats["egress-loss-10s-pct"], stats["egress-streak"] || 0)
 
       cond do
         # 1. Pipeline warning present
@@ -145,6 +136,26 @@ defmodule Blackgate.RouteHealth do
   end
 
   def degraded?(_), do: false
+
+  @doc """
+  True when the egress leg has been losing packets long enough to be real.
+
+  `pct` is the worst destination's ratio over the ~10 s window and `streak` the number of
+  consecutive reports that crossed `egress_threshold/0`. Severe loss fires at once; anything
+  between the warning threshold and severe has to hold, exactly like the ingest leg. A `nil`
+  `pct` means the route has not reported enough history to judge — that is not evidence of
+  loss, and it must never degrade a route on its own.
+  """
+  def egress_loss?(pct, streak) when is_number(pct) and is_integer(streak),
+    do: pct >= @loss_critical or (pct >= @loss_warning and streak >= @warning_streak)
+
+  def egress_loss?(_, _), do: false
+
+  @doc """
+  The threshold the egress verdict shares with the ingest verdict, so the registry can count
+  a streak from one number instead of duplicating it.
+  """
+  def egress_threshold, do: @loss_warning
 
   # --- private ---
 

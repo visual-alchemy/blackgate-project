@@ -5,7 +5,8 @@ import {
     UserOutlined,
     TeamOutlined,
     SyncOutlined,
-    WifiOutlined
+    WifiOutlined,
+    WarningOutlined
 } from '@ant-design/icons';
 import { routesApi } from '../utils/api';
 
@@ -117,6 +118,17 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
         const sendRate = destStats['send-rate-mbps'] || 0;
         const rtt = destStats['rtt-ms'] || 0;
         const bytesSent = destStats['bytes-sent-total'] || 0;
+        // `packets-sent-lost` is what SRT reports back as lost on this destination, and most of
+        // those are retransmitted and delivered inside the negotiated latency. Shown beside the
+        // badge so the verdict is never an unexplained label: the operator can see the two
+        // numbers the health check uses, without leaving the page.
+        const packetsSent = destStats['packets-sent'] || 0;
+        const packetsLost = destStats['packets-sent-lost'] || 0;
+        const packetsRetransmitted = destStats['packets-sent-retransmitted'] || 0;
+        const lifetimeLossPct =
+            packetsSent + packetsLost > 0
+                ? (packetsLost / (packetsSent + packetsLost)) * 100
+                : 0;
 
         // Access schema_options for nested properties
         const schemaOpts = dest.schema_options || {};
@@ -170,6 +182,19 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
                             <Space>
                                 <ArrowUpOutlined />
                                 <Text>{formatBytes(bytesSent)}</Text>
+                            </Space>
+                        </Tooltip>
+                        <Tooltip title="Packets SRT reported lost on this destination, and the share of that in the lifetime total. Most are retransmitted and delivered inside the latency, so a non-zero figure is not by itself a broken picture.">
+                            <Space>
+                                <WarningOutlined style={{ color: packetsLost > 0 ? '#faad14' : '#52c41a' }} />
+                                <Text>{packetsLost.toLocaleString()} lost</Text>
+                                <Text type="secondary">({lifetimeLossPct.toFixed(2)}%)</Text>
+                            </Space>
+                        </Tooltip>
+                        <Tooltip title="Packets retransmitted on this destination">
+                            <Space>
+                                <SyncOutlined />
+                                <Text>{packetsRetransmitted.toLocaleString()} retx</Text>
                             </Space>
                         </Tooltip>
                         {mode === 'listener' && (
