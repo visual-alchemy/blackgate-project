@@ -108,6 +108,11 @@ blackgate-updater         the root updater, so an old appliance can update itsel
 
 Build one (the version comes from `iso-builder/release-version` unless you pass one):
 
+The version is `YEAR.MONTH.DAY.SESSIONBUILD`. The last field counts builds **within that day** and
+starts again at `1` on a new day (`2026.10.27.1`, then `.2`, `.3`, …), so it never continues the
+previous day's counter. `iso-builder/release-version` is the one source of truth shared by the
+packager and the ISO builder.
+
 ```bash
 # The signing key is 0600 root, so signing needs root — but `make build` must not run as root (it
 # writes priv/static and web_app/dist, which would then be root-owned and break your next build).
