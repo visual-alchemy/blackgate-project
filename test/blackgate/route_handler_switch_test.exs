@@ -86,7 +86,8 @@ defmodule Blackgate.RouteHandlerSwitchTest do
       assert new_data.active_source == "primary"
       assert new_data.failover_switched
 
-      assert_receive {:switch_source_restart, "primary"}, 100,
+      assert_receive {:switch_source_restart, "primary"},
+                     100,
                      "with no live port the route rebuilds on the target"
     end
 

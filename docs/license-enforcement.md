@@ -123,3 +123,31 @@ sync preserving the cache, and sync being refused without an activated key.
 Not verified here: the real `Req` call to the license server (mocked), the actual process stop performed by
 `Blackgate.stop_route/1` (recorder), and the behaviour of a physical stream when enforcement stops its route.
 Those are the same boundaries before and after this change, and the C-branch runbook for them still applies.
+
+## Cost of the tick
+
+The reconciler asks for the live engine list once a second, and that list is built by shelling out to `ps`.
+Measured on the 4-scheduler appliance VM with no routes running: `Blackgate.running_routes/0` 10–15 ms
+(one 392 ms sample while the `ps` binary was being read from disk for the first time), `enforce/0` 10–15 ms.
+At the production interval that is roughly 1 percent of one scheduler, and it does not grow with stream
+throughput — it scales with the number of engine processes, not with the traffic they carry.
+
+## Test-suite flakiness found while verifying this work
+
+`test/blackgate/process_monitor_test.exs` ("engine_pid?/1 accepts a process whose command line names the engine
+binary") failed in about one suite run in three — on the unmodified branch too, measured over 15 full-suite runs
+(2 failures in 7 baseline runs, 3 in 8 with this change, always that test). Cause: the Erlang port reports the
+child pid as soon as it is forked, before it execs, so reading `/proc/<pid>/cmdline` immediately could still see
+the pre-exec argv; and `sh -c "sleep 5"` let the shell replace its own argv by exec'ing `sleep`, removing the
+name entirely. The fixture now keeps the shell alive and waits for the command line to be visible before
+asserting, so the test fails on a broken fixture instead of on a timing race.
+
+The other failures seen during verification — `ProcessMonitorTest` process rows, `SystemControllerTest` pipeline
+rows, `RouteHandlerTest` failover — appeared only while the enforcer tick was still 1 s in tests, where a tick
+can land inside a `:meck`-replaced module; after the interval was raised they did not recur in eight consecutive
+full-suite runs. They are shared-state races of the same family, not assertions this change broke.
+
+`config/test.exs` raises `:license_enforcer_tick_ms` to 60 s because hundreds of these tests replace whole
+modules with `:meck`, and `:meck.unload/0` purges their old code: a tick landing inside a purged module hangs
+the purge, and the suite then stops with no output at all (observed once, before the interval was configurable).
+Tests therefore call `Blackgate.LicenseEnforcer.enforce/0` directly instead of waiting for the tick.

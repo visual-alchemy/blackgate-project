@@ -105,17 +105,47 @@ defmodule Blackgate.ProcessMonitorTest do
     test "accepts a process whose command line names the engine binary" do
       # No real engine is needed: the predicate reads /proc/<pid>/cmdline, so a process we control that
       # merely carries the name proves the read works.
+      #
+      # Two things made this flaky (about 1 run in 3, on this branch and on the unmodified one):
+      #   * the port reports the pid as soon as the child is forked, BEFORE it execs, so an immediate read
+      #     could still see the parent's argv;
+      #   * `sh -c "sleep 5"` let sh replace its own argv by exec'ing sleep, so the name disappeared
+      #     entirely.
+      # The fixture therefore keeps this shell alive, and the test waits for its command line to be
+      # visible; a fixture that never becomes ready fails the wait instead of the predicate.
       port =
         Port.open({:spawn_executable, "/bin/sh"}, [
           :binary,
-          args: ["-c", "sleep 5", "blackgate-engine"]
+          args: ["-c", "while :; do sleep 0.2; done", "blackgate-engine"]
         ])
 
       {:os_pid, os_pid} = Port.info(port, :os_pid)
 
-      assert ProcessMonitor.engine_pid?(os_pid)
+      try do
+        assert wait_for_cmdline(os_pid, "blackgate-engine", 200),
+               "fixture #{os_pid} never reported a command line naming the engine binary"
 
-      Port.close(port)
+        assert ProcessMonitor.engine_pid?(os_pid)
+      after
+        Port.close(port)
+      end
     end
   end
+
+  defp wait_for_cmdline(pid, needle, attempts) when attempts > 0 do
+    case File.read("/proc/#{pid}/cmdline") do
+      {:ok, cmdline} when is_binary(cmdline) ->
+        String.contains?(cmdline, needle) ||
+          (
+            Process.sleep(5)
+            wait_for_cmdline(pid, needle, attempts - 1)
+          )
+
+      _ ->
+        Process.sleep(5)
+        wait_for_cmdline(pid, needle, attempts - 1)
+    end
+  end
+
+  defp wait_for_cmdline(_pid, _needle, 0), do: false
 end

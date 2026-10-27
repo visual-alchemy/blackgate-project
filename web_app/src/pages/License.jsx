@@ -246,10 +246,10 @@ const License = () => {
                             />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Issued" value={license?.issued_at || '—'} />
+                            <Statistic title="Issued" value={license?.issued_at?.slice(0, 10) || '—'} />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Expires" value={license?.expires_at || '—'} />
+                            <Statistic title="Expires" value={license?.expires_at?.slice(0, 10) || '—'} />
                         </Col>
                     </Row>
                 </Space>
