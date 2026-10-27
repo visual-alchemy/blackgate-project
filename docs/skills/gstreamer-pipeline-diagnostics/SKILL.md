@@ -260,7 +260,24 @@ effect.
   (`{ printf '%s\n' "$JSON"; sleep 90; } | ./<engine> <route-id>`). A standalone engine also needs
   a reachable stats socket: point the stats-socket env var at a path with a dummy listener (a
   few-line AF_UNIX accept loop) or its connect fails and it exits. Ready-made probe:
-  `scripts/probe_engine_rss.sh`.
+  `scripts/probe_engine_rss.sh`. Standalone sink-stats probe with its own socket:
+  `~/.hermes/cache/scratch/srt-sink-probe2.sh` (scratch, may be pruned — reconstruct from this bullet).
+  A probe engine also takes its route id as the FIRST argv: omit it and it runs as `unknown`
+  (`Argument 1: unknown`), which combined with a non-overridden stats socket injects records into
+  the LIVE registry under the wrong route id. Always pass an id AND export the socket path.
+- A **listener** srtsink reports only `bytes-sent-total` at the top level; every per-connection
+  figure — `packets-sent`, `packets-sent-lost`, `packets-retransmitted`, `rtt-ms`,
+  `send-rate-mbps`, `bandwidth-mbps`, `negotiated-latency-ms` — lives inside `callers[]`. Measured
+  on the production engine with one connected client: top level `packets-sent` 0, `rtt-ms` 0.0,
+  `send-rate-mbps` 0.0; the same instant inside `callers[0]`: 2138, 0.068, 1.662. Anything that
+  reads the top level of a listener leg therefore measures NOTHING, and it fails silently — the
+  dashboard showed `0 Mbps` / `0.0 ms` next to a growing byte total, and the egress-loss verdict
+  computed `0/(0+0)`, so the Egress Loss badge could never fire: its green was vacuous, not clean.
+  `build_source_stats` (engine-stats) carried this exact caller fallback for srtsrc from the start;
+  the sink path (`build_sink_stats`) was never given it. Aggregate the callers — sum counters and
+  rates, MAX the RTT and negotiated latency (a per-path figure: the worst client is what a verdict
+  must see) — and only when the top level is empty, so a sink in caller mode keeps GStreamer's own
+  totals. Every egress listener route here hits this.
 - `Pipeline construction is invalid, please add queues` plus a paired `clock problem` are
   ONE condition, not two bugs: `gstbasesink.c` posts `GST_ELEMENT_WARNING(sink, CORE, CLOCK,
   ...)` when the sink's `processing_deadline` cannot fit the upstream latency window
