@@ -48,11 +48,26 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def create(conn, %{"route" => route_params}) do
-    with {:ok, route} <- Db.create_route(route_params) do
-      conn
-      |> put_status(:created)
-      |> data(route)
+    case Db.create_route(route_params) do
+      {:ok, route} ->
+        conn
+        |> put_status(:created)
+        |> data(route)
+
+      {:error, {:route_creation_not_allowed, reason}} ->
+        route_creation_limit_error(conn, reason)
+
+      # Everything else - a refused destination schema above all - is returned untouched so
+      # BlackgateWeb.FallbackController keeps deciding the status and the message.
+      {:error, _reason} = error ->
+        error
     end
+  end
+
+  defp route_creation_limit_error(conn, reason) do
+    conn
+    |> put_status(:payment_required)
+    |> json(%{error: reason})
   end
 
   def show(conn, %{"id" => id}) do
@@ -97,67 +112,66 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def start(conn, %{"route_id" => route_id}) do
-    case Blackgate.License.can_start_route?() do
-      {:error, reason} ->
+    case Blackgate.start_route(route_id) do
+      {:ok, _pid} ->
+        conn
+        |> put_status(:ok)
+        |> data(%{status: "started", route_id: route_id})
+
+      # The license is judged inside start_route/1, under the admission lock - checking it here as well would
+      # judge capacity outside the lock that makes the count meaningful.
+      {:error, {:license, reason}} ->
         conn
         |> put_status(:payment_required)
         |> json(%{error: reason})
 
-      {:ok, :allowed} ->
-        case Blackgate.start_route(route_id) do
-          {:ok, _pid} ->
-            conn
-            |> put_status(:ok)
-            |> data(%{status: "started", route_id: route_id})
+      # Another running route is already listening on this port. Refusing here - and naming the holder - is
+      # what keeps this from becoming a route that fails to bind with nothing explaining why.
+      {:error, {:resource_in_use, claims}} ->
+        name = route_name(route_id)
 
-          # Another running route is already listening on this port. Refusing here - and naming the holder - is
-          # what keeps this from becoming a route that fails to bind with nothing explaining why.
-          {:error, {:resource_in_use, claims}} ->
-            name = route_name(route_id)
+        # One line per claim, so the operator sees every reason at once instead of fixing one and hitting the
+        # next on the second attempt.
+        Enum.each(claims, fn claim ->
+          Blackgate.EventLog.log(
+            :warning,
+            "output_in_use",
+            "Cannot start #{name}: #{claim.label} is in use by #{claim.held_by.route_name}",
+            %{
+              route_id: route_id,
+              route_name: name,
+              kind: claim.kind,
+              label: claim.label,
+              held_by_route_id: claim.held_by.route_id,
+              held_by_route_name: claim.held_by.route_name
+            }
+          )
+        end)
 
-            # One line per claim, so the operator sees every reason at once instead of fixing one and hitting the
-            # next on the second attempt.
-            Enum.each(claims, fn claim ->
-              Blackgate.EventLog.log(
-                :warning,
-                "output_in_use",
-                "Cannot start #{name}: #{claim.label} is in use by #{claim.held_by.route_name}",
-                %{
-                  route_id: route_id,
-                  route_name: name,
-                  kind: claim.kind,
-                  label: claim.label,
-                  held_by_route_id: claim.held_by.route_id,
-                  held_by_route_name: claim.held_by.route_name
-                }
-              )
+        first = hd(claims)
+
+        conn
+        |> put_status(:conflict)
+        |> json(%{
+          error: "#{first.label} is being used by #{first.held_by.route_name}",
+          message:
+            Enum.map_join(claims, "; ", fn claim ->
+              "#{claim.label} is in use by #{claim.held_by.route_name}"
+            end),
+          conflicts:
+            Enum.map(claims, fn claim ->
+              %{
+                kind: claim.kind,
+                label: claim.label,
+                held_by: %{id: claim.held_by.route_id, name: claim.held_by.route_name}
+              }
             end)
+        })
 
-            first = hd(claims)
-
-            conn
-            |> put_status(:conflict)
-            |> json(%{
-              error: "#{first.label} is being used by #{first.held_by.route_name}",
-              message:
-                Enum.map_join(claims, "; ", fn claim ->
-                  "#{claim.label} is in use by #{claim.held_by.route_name}"
-                end),
-              conflicts:
-                Enum.map(claims, fn claim ->
-                  %{
-                    kind: claim.kind,
-                    label: claim.label,
-                    held_by: %{id: claim.held_by.route_id, name: claim.held_by.route_name}
-                  }
-                end)
-            })
-
-          {:error, reason} ->
-            conn
-            |> put_status(:unprocessable_entity)
-            |> json(%{error: inspect(reason)})
-        end
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: inspect(reason)})
     end
   end
 
@@ -181,6 +195,11 @@ defmodule BlackgateWeb.RouteController do
         conn
         |> put_status(:ok)
         |> data(%{status: "restarted", route_id: route_id})
+
+      {:error, {:license, reason}} ->
+        conn
+        |> put_status(:payment_required)
+        |> json(%{error: reason})
 
       {:error, reason} ->
         conn

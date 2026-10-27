@@ -21,5 +21,11 @@ config :logger, level: :warning
 config :blackgate,
   stats_socket_path: Path.join(System.tmp_dir!(), "blackgate_stats_#{System.pid()}.sock")
 
+# Hundreds of tests replace whole modules with :meck, and :meck.unload/0 purges their old code. A
+# reconciler that calls into those modules every second can still be inside a purged module when the
+# purge happens: the purge then waits forever for the running call and the suite hangs with no output.
+# The tick interval is therefore configurable, and tests drive LicenseEnforcer.enforce/0 directly.
+config :blackgate, license_enforcer_tick_ms: 60_000
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime

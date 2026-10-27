@@ -47,6 +47,8 @@ defmodule Blackgate.EventGuidance do
     "failover_auto" => "none — failover is automatic; check the source that failed",
     "output_in_use" =>
       "stop the route that holds this output or port, or point this route at another one",
+    "license_route_stopped" =>
+      "activate or renew the license, then restart the routes you need; saved configurations are kept",
     "failover_inprocess_switch" =>
       "none — the pipeline switched source in place; check the source that failed",
     "failover_inprocess_requested" =>

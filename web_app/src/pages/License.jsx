@@ -9,6 +9,7 @@ import {
     ExclamationCircleOutlined,
     CloseCircleOutlined,
     DeleteOutlined,
+    SyncOutlined,
 } from '@ant-design/icons';
 import { licenseApi } from '../utils/api';
 
@@ -19,6 +20,7 @@ const License = () => {
     const [license, setLicense] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activating, setActivating] = useState(false);
+    const [syncing, setSyncing] = useState(false);
     const [licenseKey, setLicenseKey] = useState('');
     const [modal, modalContextHolder] = Modal.useModal();
     const [messageApi, messageContextHolder] = message.useMessage();
@@ -78,10 +80,32 @@ const License = () => {
         }
     };
 
+    const handleSync = async () => {
+        setSyncing(true);
+        try {
+            const response = await licenseApi.sync();
+
+            if (response.error) {
+                const retry = response.retry_after_seconds
+                    ? ` Try again in ${response.retry_after_seconds} seconds.`
+                    : '';
+                messageApi.error(`${response.error}${retry}`);
+                return;
+            }
+
+            setLicense(response.data);
+            messageApi.success('License synchronized');
+        } catch {
+            messageApi.error('Cannot reach the gateway. Existing license state was preserved.');
+        } finally {
+            setSyncing(false);
+        }
+    };
+
     const handleDeactivate = () => {
         modal.confirm({
             title: 'Deactivate License',
-            content: 'Are you sure you want to deactivate your license? This will revert to trial mode.',
+            content: 'Are you sure you want to deactivate your license? Running routes are stopped and no new route can start until a valid key is activated. Saved configurations are kept.',
             okText: 'Deactivate',
             okType: 'danger',
             cancelText: 'Cancel',
@@ -146,26 +170,34 @@ const License = () => {
                             <Title level={4} style={{ margin: 0 }}>License Status</Title>
                             {getStatusTag()}
                         </Space>
-                        {license?.status === 'licensed' && (
-                            <Button
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={handleDeactivate}
-                                size="small"
-                            >
-                                Deactivate
-                            </Button>
-                        )}
+                        <Space>
+                            {license?.can_sync && (
+                                <Button
+                                    icon={<SyncOutlined />}
+                                    onClick={handleSync}
+                                    loading={syncing}
+                                    size="small"
+                                >
+                                    Sync license now
+                                </Button>
+                            )}
+                            {license?.status === 'licensed' && (
+                                <Button
+                                    danger
+                                    icon={<DeleteOutlined />}
+                                    onClick={handleDeactivate}
+                                    size="small"
+                                >
+                                    Deactivate
+                                </Button>
+                            )}
+                        </Space>
                     </div>
 
                     {license?.expired && (
                         <Alert
-                            message={license.status === 'trial' ? 'Trial Period Expired' : 'License Expired'}
-                            description={
-                                license.status === 'trial'
-                                    ? 'Your 30-day trial has ended. Please activate a license key to continue using Blackgate.'
-                                    : 'Your license has expired. Please renew your license to start new routes.'
-                            }
+                            message="Route operation blocked"
+                            description={`${license.reason || 'A valid license is required.'} Running routes are stopped; saved configurations remain.`}
                             type="error"
                             showIcon
                         />

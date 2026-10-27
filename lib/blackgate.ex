@@ -5,21 +5,36 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    with :ok <- check_output_claims(id) do
-      # A registered-but-dead tree makes the supervisor answer `{:already_started, pid}` for a route that is not
-      # running at all. Clear it before starting, so Start always means start.
-      case get_route(id) do
-        {:ok, pid} ->
-          if route_tree_usable?(pid) do
-            {:error, {:already_started, pid}}
-          else
-            _ = clear_stale_route_entry(id)
-            do_start_route(id)
-          end
-
-        _ ->
-          do_start_route(id)
+    # One serialized gate for every path that admits a route - API start, restart, clone-then-start and the
+    # engine's own reconnect. Judging the license and starting the engine under the same lock is what stops a
+    # burst of concurrent starts from walking past the route limit.
+    with_route_lock(fn ->
+      with :ok <- check_output_claims(id),
+           {:ok, :allowed} <- Blackgate.License.can_start_route?(id) do
+        admit_route(id)
       end
+    end)
+  end
+
+  # All admission, restart and cutoff decisions share this lock. The requester has to be self(), otherwise
+  # :global treats concurrent callers as one owner and the lock stops excluding anything.
+  def with_route_lock(fun),
+    do: :global.trans({{__MODULE__, :admission}, self()}, fun, [node()])
+
+  defp admit_route(id) do
+    # A registered-but-dead tree makes the supervisor answer `{:already_started, pid}` for a route that is not
+    # running at all. Clear it before starting, so Start always means start.
+    case get_route(id) do
+      {:ok, pid} ->
+        if route_tree_usable?(pid) do
+          {:error, {:already_started, pid}}
+        else
+          _ = clear_stale_route_entry(id)
+          do_start_route(id)
+        end
+
+      _ ->
+        do_start_route(id)
     end
   end
 
@@ -216,23 +231,30 @@ defmodule Blackgate do
 
   @spec restart_route(String.t()) :: {:ok, term()} | {:error, term()}
   def restart_route(id) do
-    # Checked BEFORE stopping: changing a destination restarts a running route, and that path used to go straight to
-    # start_route/1 with no check at all - so a route could be pointed at an output somebody else already held, get
-    # its own engine stopped, and then be refused (or worse, race the holder). Refusing first leaves it running on
-    # its previous, valid destination, which is the state the operator can still see and fix.
-    with :ok <- check_output_claims(id) do
-      case stop_route(id) do
-        {:error, reason} ->
-          Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
+    with_route_lock(fn ->
+      # Checked BEFORE stopping: changing a destination restarts a running route, and that path used to go straight to
+      # start_route/1 with no check at all - so a route could be pointed at an output somebody else already held, get
+      # its own engine stopped, and then be refused (or worse, race the holder). Refusing first leaves it running on
+      # its previous, valid destination, which is the state the operator can still see and fix.
+      #
+      # The license is judged while the route is still running, so a restart never consumes a capacity slot it
+      # already holds: without that, editing the last route a license allows would stop it and then refuse to
+      # start it again.
+      with :ok <- check_output_claims(id),
+           {:ok, :allowed} <- Blackgate.License.can_start_route?(id) do
+        case stop_route(id) do
+          {:error, reason} ->
+            Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
 
-        _ ->
-          nil
-      end
+          _ ->
+            nil
+        end
 
-      with {:ok, _pid} <- start_route(id) do
-        {:ok, :restarted}
+        with {:ok, _pid} <- admit_route(id) do
+          {:ok, :restarted}
+        end
       end
-    end
+    end)
   end
 
   @doc """

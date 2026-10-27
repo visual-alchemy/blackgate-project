@@ -470,6 +470,14 @@ export const licenseApi = {
     return response.json();
   },
 
+  // Immediately refresh the current entitlement from the license server
+  sync: async () => {
+    const response = await authFetch('/api/license/sync', {
+      method: 'POST',
+    });
+    return response.json();
+  },
+
   // Deactivate current license
   deactivate: async () => {
     const response = await authFetch('/api/license/deactivate', {

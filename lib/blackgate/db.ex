@@ -4,6 +4,17 @@ defmodule Blackgate.Db do
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
+    # The same admission lock route starts take: judging the saved-route count outside it lets two concurrent
+    # imports both see capacity for one.
+    :global.trans({{__MODULE__, :route_creation}, self()}, fn ->
+      case Blackgate.License.can_create_route?() do
+        {:ok, :allowed} -> do_create_route(data, id)
+        {:error, _reason} = error -> error
+      end
+    end)
+  end
+
+  defp do_create_route(data, id) do
     id = if id, do: id, else: UUID.uuid1()
     {destinations, route_data} = Map.pop(data, "destinations", [])
 

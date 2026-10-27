@@ -14,7 +14,12 @@ defmodule Blackgate.Application do
 
     khepri_data_dir = System.get_env("DATABASE_DATA_DIR", "#{File.cwd!()}/khepri##{node()}")
     Logger.notice("Database directory: #{khepri_data_dir}")
-    Logger.notice("Starting database: #{inspect(:khepri.start(khepri_data_dir))}")
+
+    # Startup must happen even when notice logging is disabled (e.g. tests), and a store that cannot be opened is
+    # fatal: the previous version only logged a `:noproc`/`:already_started` reply, so a node that found no store
+    # came up with an empty configuration instead of refusing to start.
+    {:ok, store} = :khepri.start(khepri_data_dir)
+    Logger.notice("Started database: #{inspect(store)}")
 
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
@@ -48,6 +53,7 @@ defmodule Blackgate.Application do
       # Blackgate.ErlSysMon,  # disabled: OTP 29 os_mon incompatibility
       Blackgate.Monitoring.CpuSampler,
       Blackgate.License,
+      Blackgate.LicenseEnforcer,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},
       {Registry,
