@@ -73,12 +73,20 @@ defmodule Blackgate.EventLog do
       :ets.select_delete(@table_name, [{{:"$1", :_}, [{:"=<", :"$1", prune_key}], [true]}])
     end
 
-    # Broadcast to PubSub for real-time UI updates
-    Phoenix.PubSub.broadcast(
-      Blackgate.PubSub,
-      "events",
-      {:new_event, event}
-    )
+    # Broadcast to PubSub for real-time UI updates. Wrapped because a caller can log before the PubSub process
+    # exists - the licence check runs at boot, ahead of it in the supervision tree - and an event that cannot be
+    # broadcast is still an event: losing the notification must not take down the caller that recorded it.
+    try do
+      Phoenix.PubSub.broadcast(
+        Blackgate.PubSub,
+        "events",
+        {:new_event, event}
+      )
+    rescue
+      _ -> :ok
+    catch
+      :exit, _ -> :ok
+    end
 
     :ok
   end

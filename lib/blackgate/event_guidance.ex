@@ -58,6 +58,14 @@ defmodule Blackgate.EventGuidance do
     "failover_auto" => "none — failover is automatic; check the source that failed",
     "output_in_use" =>
       "stop the route that holds this output or port, or point this route at another one",
+    "license_route_stopped" =>
+      "more routes were running than the licence covers: stop routes yourself or activate a licence that covers " <>
+        "them; the gateway keeps the same routes running and stops the rest",
+    "license_missing" =>
+      "this gateway has no licence: activate one, or keep using the trial within its window and route count",
+    "license_unreadable" =>
+      "the gateway could not read its licence state, so no routes were stopped: check that the box\'s storage is " <>
+        "intact, then restart the gateway",
     "failover_inprocess_switch" =>
       "none — the pipeline switched source in place; check the source that failed",
     "failover_inprocess_requested" =>

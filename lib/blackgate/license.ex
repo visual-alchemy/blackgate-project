@@ -9,7 +9,10 @@ defmodule Blackgate.License do
   use GenServer
   require Logger
 
+  alias Blackgate.EventLog
+
   @table_name :blackgate_license
+  @clock_key ["license", "clock_high_water"]
   @trial_max_routes 2
   @trial_days 30
   # Re-verify license every 6 hours to keep Supabase alive and catch revocations
@@ -31,9 +34,16 @@ defmodule Blackgate.License do
     end
   end
 
-  @doc "Check if adding a new route is allowed"
-  @spec can_start_route?() :: {:ok, :allowed} | {:error, String.t()}
-  def can_start_route? do
+  @doc """
+  Judge route admission against a caller-supplied count of RUNNING routes.
+
+  The count comes from the caller because the honest one is the live engine set:
+  `count_active_routes/0` reads the stored `status`, which can read `started` for a route whose engine is gone.
+  Counting a dead route against the licence would refuse a start the operator is entitled to, and missing a live
+  one would let a route through. `can_start_route?/0` is kept for callers that only have the record to go on.
+  """
+  @spec can_admit_route?(non_neg_integer()) :: {:ok, :allowed} | {:error, String.t()}
+  def can_admit_route?(active_routes) when is_integer(active_routes) and active_routes >= 0 do
     license = get_license()
 
     cond do
@@ -41,8 +51,6 @@ defmodule Blackgate.License do
         {:error, "License expired. Please activate a valid license key."}
 
       license.status == :trial ->
-        active_routes = count_active_routes()
-
         if active_routes >= @trial_max_routes do
           {:error,
            "Trial limit reached (#{@trial_max_routes} routes). Activate a license for more routes."}
@@ -51,8 +59,6 @@ defmodule Blackgate.License do
         end
 
       license.status == :licensed ->
-        active_routes = count_active_routes()
-
         if active_routes >= license.max_routes do
           {:error,
            "Route limit reached (#{license.max_routes}). Upgrade your license for more routes."}
@@ -63,6 +69,35 @@ defmodule Blackgate.License do
       true ->
         {:error, "No valid license. Please activate a license key."}
     end
+  end
+
+  @doc """
+  The route capacity this licence allows right now.
+
+  Zero when the licence does not permit operation at all (expired, unlicensed, or a deactivated key): the
+  capacity an enforcement pass measures against is a number, and "no licence" has to be one - not a licence
+  that quietly allows everything.
+  """
+  @spec max_routes_now() :: non_neg_integer()
+  def max_routes_now, do: capacity_of(get_license())
+
+  @doc "The capacity a licence payload allows. Zero for anything that permits nothing."
+  @spec capacity_of(map()) :: non_neg_integer()
+  def capacity_of(%{expired: false, status: :licensed, max_routes: n})
+      when is_integer(n) and n >= 0,
+      do: n
+
+  def capacity_of(%{expired: false, status: :trial}), do: @trial_max_routes
+  def capacity_of(_license), do: 0
+
+  @doc "The trial capacity, so callers do not hard-code it."
+  @spec trial_max_routes() :: non_neg_integer()
+  def trial_max_routes, do: @trial_max_routes
+
+  @doc "Check if adding a new route is allowed"
+  @spec can_start_route?() :: {:ok, :allowed} | {:error, String.t()}
+  def can_start_route? do
+    can_admit_route?(count_active_routes())
   end
 
   @doc "Get the current license information"
@@ -84,6 +119,54 @@ defmodule Blackgate.License do
   @spec deactivate() :: :ok
   def deactivate do
     GenServer.call(__MODULE__, :deactivate)
+  end
+
+  @doc """
+  Re-check the licence against the server now, on the operator's request.
+
+  The heartbeat asks every 6 hours, so a key extended, replaced or revoked on the server would otherwise take up
+  to that long to reach a running gateway. This is the way to ask now - and the only way to find out whether the
+  server is reachable at all, which the heartbeat only records in the log.
+  """
+  @spec sync() :: {:ok, map()} | {:error, String.t()}
+  def sync do
+    GenServer.call(__MODULE__, :sync, 60_000)
+  end
+
+  @doc """
+  The date expiry and trial windows are judged against: today, or the furthest-forward date this gateway has ever
+  seen, whichever is later.
+
+  A licence is a date, and a date can be moved: setting the box's clock back would otherwise extend a licence that
+  had run out - and give a fresh trial window to a gateway whose trial had passed. The highest date seen is kept
+  in `["license", "clock_high_water"]` and used as the floor, so the clock can only ever move the deadline
+  forward, never back.
+  """
+  @spec judgement_date(Date.t()) :: Date.t()
+  def judgement_date(today \\ Date.utc_today()) do
+    case :khepri.get(@clock_key) do
+      {:ok, iso} when is_binary(iso) ->
+        case Date.from_iso8601(iso) do
+          {:ok, seen} ->
+            if Date.compare(today, seen) == :lt do
+              seen
+            else
+              store_floor(today)
+              today
+            end
+
+          _ ->
+            store_floor(today)
+            today
+        end
+
+      _ ->
+        store_floor(today)
+        today
+    end
+  rescue
+    # A licence judgment must not fail because the clock floor could not be stored: today is the safe answer.
+    _ -> today
   end
 
   # ─── GenServer Callbacks ─────────────────────────────────────────────────
@@ -112,6 +195,7 @@ defmodule Blackgate.License do
       _ ->
         Logger.info("License: No license found, checking trial status...")
         init_trial()
+        warn_missing_license()
     end
 
     {:ok, %{}}
@@ -131,6 +215,11 @@ defmodule Blackgate.License do
         schedule_heartbeat()
 
         Logger.info("License: Activated for #{payload["client_name"]} (#{payload["plan_tier"]})")
+
+        # A new key can cover FEWER routes than are running (a downgrade, or a licence re-issued after a return):
+        # the pass makes the running set match what was just activated instead of leaving the old engines up.
+        Blackgate.LicenseEnforcer.enforce_soon()
+
         {:reply, {:ok, license_data}, state}
 
       {:error, reason} ->
@@ -143,7 +232,37 @@ defmodule Blackgate.License do
     :khepri.delete(["license", "data"])
     init_trial()
     Logger.info("License: Deactivated, reverting to trial mode")
+
+    # The trial covers 2 routes (and none once its window has passed), so a deactivation can leave the box running
+    # more than it now covers. Make the running set match the state the operator just chose.
+    Blackgate.LicenseEnforcer.enforce_soon()
+
     {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call(:sync, _from, state) do
+    case :khepri.get(["license", "data"]) do
+      {:ok, payload} when is_map(payload) ->
+        case verify_license_with_server(payload["license_key"]) do
+          {:ok, fresh} ->
+            :khepri.put(["license", "data"], fresh)
+            license_data = build_license_data(fresh)
+            :ets.insert(@table_name, {:license, license_data})
+            Blackgate.LicenseEnforcer.enforce_soon()
+            Logger.info("License: Re-verified with the server on request")
+            {:reply, {:ok, license_data}, state}
+
+          # The cached licence stays in use: a server that is unreachable or down must not take an appliance's
+          # entitlement away. The answer says which of the two happened instead of leaving the operator to guess.
+          {:error, reason} ->
+            {:reply, {:error, "#{reason} (the cached licence is still in use)"}, state}
+        end
+
+      _ ->
+        {:reply, {:error, "No licence key to re-check: this gateway is running on the trial"},
+         state}
+    end
   end
 
   @impl true
@@ -162,6 +281,8 @@ defmodule Blackgate.License do
   end
 
   # ─── Private Functions ───────────────────────────────────────────────────
+
+  defp store_floor(date), do: :khepri.put(@clock_key, Date.to_iso8601(date))
 
   defp schedule_heartbeat do
     Process.send_after(self(), :heartbeat, @heartbeat_interval)
@@ -220,6 +341,10 @@ defmodule Blackgate.License do
         license_data = build_license_data(payload)
         :ets.insert(@table_name, {:license, license_data})
 
+        # A re-verification is where a key that was revoked, expired or moved to a smaller plan shows up, and it
+        # runs quietly in the background: without this the change would only take effect on the next tick.
+        Blackgate.LicenseEnforcer.enforce_soon()
+
       {:error, reason} ->
         Logger.warning(
           "License: Background verification failed (#{reason}). Keeping cached license active."
@@ -234,7 +359,7 @@ defmodule Blackgate.License do
         do: Date.from_iso8601!(payload["expires_at"] |> String.slice(0, 10)),
         else: nil
 
-    today = Date.utc_today()
+    today = judgement_date()
 
     # Calculate days remaining if expiration exists
     {days_remaining, is_expired} =
@@ -258,6 +383,34 @@ defmodule Blackgate.License do
     }
   end
 
+  # A gateway that should hold a licence but does not - its store lost the record, or a key was never activated -
+  # looks exactly like one that was never licensed: the dashboard shows a trial. That is a true statement and an
+  # easy one to walk past, so it is said as an event the Events tab carries, with the two different consequences
+  # spelled out: a trial with days left still streams, a trial whose window has passed starts nothing.
+  defp warn_missing_license do
+    case get_license() do
+      %{status: :trial, expired: true} ->
+        EventLog.log(
+          :critical,
+          "license_missing",
+          "No licence found and the trial window has passed: no route can be started until a licence is activated",
+          %{}
+        )
+
+      %{status: :trial} = trial ->
+        EventLog.log(
+          :warning,
+          "license_missing",
+          "No licence found: running on the trial (#{trial[:days_remaining]} days left, " <>
+            "#{@trial_max_routes} routes)",
+          %{days_remaining: trial[:days_remaining], max_routes: @trial_max_routes}
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
   defp init_trial do
     # Get or set the first boot timestamp
     first_boot =
@@ -274,9 +427,13 @@ defmodule Blackgate.License do
     # Calculate trial remaining
     {:ok, boot_dt, _} = DateTime.from_iso8601(first_boot)
     boot_date = DateTime.to_date(boot_dt)
-    today = Date.utc_today()
+    today = judgement_date()
     days_elapsed = Date.diff(today, boot_date)
-    days_remaining = max(@trial_days - days_elapsed, 0)
+
+    # Never more than a full window: a first-boot stamp in the future (a clock that was set forward, then
+    # corrected) would otherwise compute a negative elapsed time and hand out a longer trial than the product
+    # allows.
+    days_remaining = (@trial_days - days_elapsed) |> min(@trial_days) |> max(0)
     is_expired = days_remaining <= 0
 
     trial_data = %{

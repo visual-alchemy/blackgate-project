@@ -48,6 +48,7 @@ defmodule Blackgate.Application do
       # Blackgate.ErlSysMon,  # disabled: OTP 29 os_mon incompatibility
       Blackgate.Monitoring.CpuSampler,
       Blackgate.License,
+      Blackgate.LicenseEnforcer,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: Blackgate.DynamicSupervisor},
       {Registry,
