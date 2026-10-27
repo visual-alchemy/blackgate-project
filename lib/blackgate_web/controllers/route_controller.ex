@@ -102,6 +102,10 @@ defmodule BlackgateWeb.RouteController do
   defp describe_restart_error({:resource_in_use, claims}),
     do: Blackgate.SdiClaims.describe_conflicts(claims)
 
+  # The licence already wrote this sentence for an operator ("Route limit reached (10)..."), so it is passed
+  # through: the alternative is a tuple they cannot act on.
+  defp describe_restart_error({:license, reason}), do: reason
+
   defp describe_restart_error(:not_found), do: "this route is no longer registered"
   defp describe_restart_error(reason), do: inspect(reason)
 
@@ -118,65 +122,66 @@ defmodule BlackgateWeb.RouteController do
   end
 
   def start(conn, %{"route_id" => route_id}) do
-    case Blackgate.License.can_start_route?() do
-      {:error, reason} ->
+    # The licence is judged inside Blackgate.start_route/1, under the admission lock, so this path and the bulk
+    # one cannot disagree about it. It used to be judged HERE and only here - which is how Start-all came to
+    # bypass the 402: it called start_route/1, and start_route/1 never asked.
+    case Blackgate.start_route(route_id) do
+      {:ok, _pid} ->
+        conn
+        |> put_status(:ok)
+        |> data(%{status: "started", route_id: route_id})
+
+      # 402 with the sentence the licence itself produced, which names the limit and what to do about it.
+      {:error, {:license, reason}} ->
         conn
         |> put_status(:payment_required)
         |> json(%{error: reason})
 
-      {:ok, :allowed} ->
-        case Blackgate.start_route(route_id) do
-          {:ok, _pid} ->
-            conn
-            |> put_status(:ok)
-            |> data(%{status: "started", route_id: route_id})
+      # Its SDI output is already playing somewhere else. Refusing here - and naming the holder - is what
+      # keeps this from becoming a route that starts with a silently missing picture: a second engine cannot
+      # enable that connector, and it drops the SDI branch without failing the route.
+      {:error, {:resource_in_use, claims}} ->
+        name = route_name(route_id)
 
-          # Its SDI output is already playing somewhere else. Refusing here - and naming the holder - is what
-          # keeps this from becoming a route that starts with a silently missing picture: a second engine cannot
-          # enable that connector, and it drops the SDI branch without failing the route.
-          {:error, {:resource_in_use, claims}} ->
-            name = route_name(route_id)
+        # One line per claim, so the operator sees every reason at once instead of fixing one and hitting the
+        # next on the second attempt.
+        Enum.each(claims, fn claim ->
+          Blackgate.EventLog.log(
+            :warning,
+            "output_in_use",
+            "Cannot start #{name}: #{claim.label} is in use by #{claim.held_by.route_name}",
+            %{
+              route_id: route_id,
+              route_name: name,
+              kind: claim.kind,
+              label: claim.label,
+              held_by_route_id: claim.held_by.route_id,
+              held_by_route_name: claim.held_by.route_name
+            }
+          )
+        end)
 
-            # One line per claim, so the operator sees every reason at once instead of fixing one and hitting the
-            # next on the second attempt.
-            Enum.each(claims, fn claim ->
-              Blackgate.EventLog.log(
-                :warning,
-                "output_in_use",
-                "Cannot start #{name}: #{claim.label} is in use by #{claim.held_by.route_name}",
-                %{
-                  route_id: route_id,
-                  route_name: name,
-                  kind: claim.kind,
-                  label: claim.label,
-                  held_by_route_id: claim.held_by.route_id,
-                  held_by_route_name: claim.held_by.route_name
-                }
-              )
+        first = hd(claims)
+
+        conn
+        |> put_status(:conflict)
+        |> json(%{
+          error: "SDI being used by #{first.held_by.route_name}",
+          message: Blackgate.SdiClaims.describe_conflicts(claims),
+          conflicts:
+            Enum.map(claims, fn claim ->
+              %{
+                kind: claim.kind,
+                label: claim.label,
+                held_by: %{id: claim.held_by.route_id, name: claim.held_by.route_name}
+              }
             end)
+        })
 
-            first = hd(claims)
-
-            conn
-            |> put_status(:conflict)
-            |> json(%{
-              error: "SDI being used by #{first.held_by.route_name}",
-              message: Blackgate.SdiClaims.describe_conflicts(claims),
-              conflicts:
-                Enum.map(claims, fn claim ->
-                  %{
-                    kind: claim.kind,
-                    label: claim.label,
-                    held_by: %{id: claim.held_by.route_id, name: claim.held_by.route_name}
-                  }
-                end)
-            })
-
-          {:error, reason} ->
-            conn
-            |> put_status(:unprocessable_entity)
-            |> json(%{error: inspect(reason)})
-        end
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: inspect(reason)})
     end
   end
 
@@ -200,6 +205,13 @@ defmodule BlackgateWeb.RouteController do
         conn
         |> put_status(:ok)
         |> data(%{status: "restarted", route_id: route_id})
+
+      # Same refusal, same status as start: a restart is a start with the stop in front of it, and the licence is
+      # judged before anything is stopped - so the route is still running and the operator can fix the licence.
+      {:error, {:license, reason}} ->
+        conn
+        |> put_status(:payment_required)
+        |> json(%{error: reason})
 
       {:error, reason} ->
         conn
@@ -276,6 +288,10 @@ defmodule BlackgateWeb.RouteController do
             "start" ->
               case Blackgate.start_route(route_id) do
                 {:ok, _pid} -> %{route_id: route_id, status: "started"}
+                # The licence sentence, not `inspect` of it: this is the row the operator reads in the
+                # "N routes started, M failed" summary, and `{:license, "Route limit reached (10)..."}` is not
+                # something they can act on.
+                {:error, {:license, reason}} -> %{route_id: route_id, error: reason}
                 {:error, reason} -> %{route_id: route_id, error: inspect(reason)}
               end
 

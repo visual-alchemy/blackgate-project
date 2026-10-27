@@ -5,7 +5,33 @@ defmodule Blackgate do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    with :ok <- check_sdi_claims(id) do
+    with_route_lock(fn -> admit_and_start_route(id, running_route_count()) end)
+  end
+
+  @doc """
+  Runs `fun` while holding the route-admission lock.
+
+  Admission is judged AND acted on inside it: two starts that arrive together each read the running set before the
+  other one's engine exists, so both see room for the last slot the licence has and both take it. `:global.trans`
+  is the lock the SDI claim gate already relies on being reachable from every node; there is one node, and the
+  engines live on it. Nothing inside may call this again - every internal helper takes the caller's judgment as an
+  argument instead of re-reading it.
+  """
+  @spec with_route_lock((-> result)) :: result when result: term()
+  def with_route_lock(fun) when is_function(fun, 0) do
+    :global.trans({{__MODULE__, :admission}, self()}, fun, [node()])
+  end
+
+  @doc "The route ids whose engines are actually running."
+  @spec running_route_ids() :: [String.t()]
+  def running_route_ids, do: engine_process_route_ids()
+
+  defp running_route_count, do: running_route_ids() |> Enum.uniq() |> length()
+
+  # Licence first, then the SDI claims: a route the licence does not cover must not be reported as a connector
+  # conflict. Locked by both callers, so the judgment and the start cannot be split by a concurrent start.
+  defp admit_and_start_route(id, active_routes) do
+    with :ok <- license_admits_route(active_routes), :ok <- check_sdi_claims(id) do
       # A registered-but-dead tree makes the supervisor answer `{:already_started, pid}` for a route that is not
       # running at all. Clear it before starting, so Start always means start.
       case get_route(id) do
@@ -20,6 +46,13 @@ defmodule Blackgate do
         _ ->
           do_start_route(id)
       end
+    end
+  end
+
+  defp license_admits_route(active_routes) do
+    case Blackgate.License.can_admit_route?(active_routes) do
+      {:ok, :allowed} -> :ok
+      {:error, reason} -> {:error, {:license, reason}}
     end
   end
 
@@ -247,23 +280,34 @@ defmodule Blackgate do
 
   @spec restart_route(String.t()) :: {:ok, term()} | {:error, term()}
   def restart_route(id) do
-    # Checked BEFORE stopping: changing a destination restarts a running route, and that path used to go straight to
-    # start_route/1 with no check at all - so a route could be pointed at an output somebody else already held, get
-    # its own engine stopped, and then be refused (or worse, race the holder). Refusing first leaves it running on
-    # its previous, valid destination, which is the state the operator can still see and fix.
-    with :ok <- check_sdi_claims(id) do
-      case stop_route(id) do
-        {:error, reason} ->
-          Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
+    with_route_lock(fn ->
+      # A restart does NOT consume a new slot: the route is already running and is about to be stopped, so it is
+      # not counted against the licence. Without that, editing the destination of the route that fills the last
+      # slot would be refused - the one case where the operator is not asking for more than they bought.
+      running_here? = id in running_route_ids()
+      active_routes = running_route_count() - if(running_here?, do: 1, else: 0)
 
-        _ ->
-          nil
-      end
+      # Both judgments happen BEFORE the stop, so a refusal leaves the route running on its previous, valid
+      # destination instead of taking its engine away and then declining to give it back.
+      # The SDI check was already here: changing a destination restarts a running route, and that path used to go
+      # straight to start_route/1 with no check at all - so a route could be pointed at an output somebody else
+      # already held, get its own engine stopped, and then be refused (or worse, race the holder).
+      with :ok <- license_admits_route(active_routes), :ok <- check_sdi_claims(id) do
+        case stop_route(id) do
+          {:error, reason} ->
+            Logger.warning("Attempt to restart route #{id}, but: #{inspect(reason)}")
 
-      with {:ok, _pid} <- start_route(id) do
-        {:ok, :restarted}
+          _ ->
+            nil
+        end
+
+        # The same judgment is passed back in rather than re-read: the licence was judged for this route a moment
+        # ago, and re-reading it after the stop would judge a route that no longer has an engine.
+        with {:ok, _pid} <- admit_and_start_route(id, active_routes) do
+          {:ok, :restarted}
+        end
       end
-    end
+    end)
   end
 
   @doc """

@@ -77,6 +77,10 @@ defmodule BlackgateWeb.DestinationController do
   defp describe_restart_error({:resource_in_use, claims}),
     do: Blackgate.SdiClaims.describe_conflicts(claims)
 
+  # The licence already wrote this sentence for an operator ("Route limit reached (10)..."), so it is passed
+  # through: the alternative is a tuple they cannot act on.
+  defp describe_restart_error({:license, reason}), do: reason
+
   defp describe_restart_error(:not_found), do: "this route is no longer registered"
   defp describe_restart_error(reason), do: inspect(reason)
 
