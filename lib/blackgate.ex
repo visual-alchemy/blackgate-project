@@ -126,7 +126,7 @@ defmodule Blackgate do
   def stop_route(id) do
     case find_route_tree(id) do
       {:ok, pid} ->
-        _ = Supervisor.stop(pid, :normal)
+        stop_route_tree(pid)
 
         # Supervisor.stop/2 returns :ok even when the tree was already unusable - measured: a tree that answered
         # `:undefined` for its own RouteHandler child, i.e. the handler was gone while the supervisor stayed
@@ -188,14 +188,31 @@ defmodule Blackgate do
           :ok
         else
           _ = :syn.unregister(:routes, id)
-
-          case Supervisor.stop(pid, :normal) do
-            _ -> :ok
-          end
+          stop_route_tree(pid)
         end
 
       _ ->
         :ok
+    end
+  end
+
+  # `Supervisor.stop/2` EXITS with `{:noproc, {GenServer, :stop, [pid, :normal, :infinity]}}` when the tree is not
+  # there - measured on this box: 11 times, every one of them an operator Stop or a destination change, whose HTTP
+  # request process died on the spot while the route itself stopped correctly. The operator saw a failed action that
+  # had in fact worked. A tree that is already down is exactly the state the caller asked for, so it is reported as
+  # :ok instead of taking the caller down with it. Public because both stop paths and their tests judge it.
+  @spec stop_route_tree(pid()) :: :ok
+  def stop_route_tree(pid) when is_pid(pid) do
+    if Process.alive?(pid) do
+      try do
+        _ = Supervisor.stop(pid, :normal)
+        :ok
+      catch
+        # The tree can still die between the liveness check and the stop: treat that as done, not as a failure.
+        :exit, {:noproc, _} -> :ok
+      end
+    else
+      :ok
     end
   end
 
