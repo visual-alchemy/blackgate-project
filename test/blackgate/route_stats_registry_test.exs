@@ -225,8 +225,7 @@ defmodule Blackgate.RouteStatsRegistryTest do
   defp put_sink(route_id, index, sent, lost) do
     :ets.insert(
       :route_stats,
-      {{route_id, :sink, index},
-       %{"packets-sent" => sent, "packets-sent-lost" => lost},
+      {{route_id, :sink, index}, %{"packets-sent" => sent, "packets-sent-lost" => lost},
        System.system_time(:millisecond)}
     )
   end
