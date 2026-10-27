@@ -122,6 +122,11 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
             loadingMessage();
             if (id !== 'new' && data?.data?.restarted) {
               messageApi.success('Route saved and restarted successfully');
+            } else if (data?.data?.restart_error) {
+              // Saved but NOT live: the restart was refused (a held output port, or the licence no longer
+              // covering this route). Saying "saved successfully" here hid a route still streaming on its
+              // previous settings.
+              messageApi.warning(`Route saved, but the restart was refused: ${data.data.restart_error}`);
             } else {
               messageApi.success('Route saved successfully');
             }

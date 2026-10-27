@@ -186,4 +186,17 @@ defmodule BlackgateWeb.RouteControllerSwitchSourceTest do
     assert json_response(conn, 400)["error"] != nil
     assert :meck.num_calls(Blackgate, :switch_route_source, :_) == 0
   end
+
+  test "clone answers 402 with the licence reason instead of a 500" do
+    :meck.expect(Blackgate.Db, :get_route, fn @route_id, _ -> {:ok, failover_route()} end)
+
+    :meck.expect(Blackgate.Db, :create_route, fn _params ->
+      {:error,
+       {:route_creation_not_allowed, "Trial route limit reached (2). Activate a license."}}
+    end)
+
+    conn = auth_conn() |> post("/api/routes/#{@route_id}/clone")
+
+    assert json_response(conn, 402)["error"] =~ "Trial route limit"
+  end
 end

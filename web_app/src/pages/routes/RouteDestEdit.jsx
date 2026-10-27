@@ -130,6 +130,9 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                             messageApi.success('Destination saved — route restarted');
                         } else if (destId === 'new' && data?.data?.restarted) {
                             messageApi.success('Destination created — route restarted');
+                        } else if (data?.data?.restart_error) {
+                            // Saved but NOT live: the restart was refused. See RouteSourceEdit.
+                            messageApi.warning(`Saved, but the route restart was refused: ${data.data.restart_error}`);
                         } else {
                             messageApi.success('Destination saved successfully');
                         }

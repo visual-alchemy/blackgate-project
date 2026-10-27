@@ -24,13 +24,11 @@ defmodule BlackgateWeb.DestinationController do
     was_running = route_is_running?(route_id)
 
     with {:ok, route} <- Db.create_destination(route_id, dest_params) do
-      if was_running do
-        Blackgate.restart_route(route_id)
-      end
+      restart = maybe_restart(route_id, was_running)
 
       conn
       |> put_status(:created)
-      |> data(Map.put(route, "restarted", was_running))
+      |> data(Map.merge(route, restart))
     end
   end
 
@@ -43,11 +41,8 @@ defmodule BlackgateWeb.DestinationController do
     was_running = route_is_running?(route_id)
 
     with {:ok, route} <- Db.update_destination(route_id, id, dest_params) do
-      if was_running do
-        Blackgate.restart_route(route_id)
-      end
-
-      data(conn, Map.put(route, "restarted", was_running))
+      restart = maybe_restart(route_id, was_running)
+      data(conn, Map.merge(route, restart))
     end
   end
 
@@ -55,15 +50,30 @@ defmodule BlackgateWeb.DestinationController do
     was_running = route_is_running?(route_id)
 
     with :ok <- Db.del_destination(route_id, id) do
-      if was_running do
-        Blackgate.restart_route(route_id)
-      end
+      restart = maybe_restart(route_id, was_running)
 
       conn
       |> put_status(:ok)
-      |> json(%{data: %{deleted: true, restarted: was_running}})
+      |> json(%{data: Map.merge(%{deleted: true}, restart)})
     end
   end
+
+  ## A destination edit on a running route restarts it. That restart can be REFUSED - a held output port, or a
+  # licence that no longer covers the route - and reporting `restarted: true` regardless told the operator the
+  # change was live when the route was still streaming on its previous destination. The refusal is reported
+  # beside the change, so the response never claims more than happened.
+  defp maybe_restart(_route_id, false), do: %{"restarted" => false}
+
+  defp maybe_restart(route_id, true) do
+    case Blackgate.restart_route(route_id) do
+      {:ok, _} -> %{"restarted" => true}
+      :ok -> %{"restarted" => true}
+      {:error, reason} -> %{"restarted" => false, "restart_error" => describe(reason)}
+    end
+  end
+
+  defp describe({:license, reason}), do: reason
+  defp describe(reason), do: inspect(reason)
 
   defp route_is_running?(route_id) do
     case Blackgate.get_route(route_id) do

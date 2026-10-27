@@ -22,7 +22,14 @@ defmodule Blackgate.LicenseTest do
       :khepri.delete_many("license/**")
       Enum.each(original_records, fn {key, value} -> :khepri.put(key, value) end)
       :sys.replace_state(License, fn _ -> original_state end)
+
+      # SYNCHRONOUS restore. `send` + returning left the process still holding a test's (possibly deactivated)
+      # cache in ETS while the next test file read it: a synchronous test that created a route right after this
+      # one failed with "License deactivated. Activate a valid license." - a leaked test state, not a product
+      # fault. The call both waits for the process and forces a publish.
+      :sys.get_state(License)
       send(License, :checkpoint)
+      :sys.get_state(License)
       :meck.unload()
     end)
 

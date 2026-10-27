@@ -182,6 +182,10 @@ defmodule BlackgateWeb.BackupController do
   end
 
   defp import_single_route(route_data) do
+    # The import reports per-route results, so a licence/trial refusal arrives here as an {:error, _} for that
+    # one route and is counted as failed instead of aborting the whole import. With a partially imported file
+    # the operator therefore sees "imported: N, failed: M" and must check which is which.
+    #
     # Extract route fields (remove id to create new)
     route_params =
       route_data

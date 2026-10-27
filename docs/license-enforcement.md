@@ -124,6 +124,20 @@ Not verified here: the real `Req` call to the license server (mocked), the actua
 `Blackgate.stop_route/1` (recorder), and the behaviour of a physical stream when enforcement stops its route.
 Those are the same boundaries before and after this change, and the C-branch runbook for them still applies.
 
+## Reports that must not overstate
+
+A destination or route edit on a *running* route restarts it, and that restart can be **refused** — a held
+output port, or a licence that no longer covers the route. Every one of those paths used to answer
+`restarted: true` regardless, and the dashboard turned that into "saved and restarted successfully": the
+operator was told a change was live while the engine kept streaming on its previous settings. The restart
+result is now reported beside the change (`restarted`, plus `restart_error` when it was refused), and the
+dashboard shows a warning instead of a success in that case.
+
+Route **clone** and **restore/import** also create saved routes, so the licence/trial cap applies to them. Clone
+answers 402 with the reason (`BlackgateWeb.FallbackController` covers the creation refusal for any caller that
+does not map it itself); a restore reports a refused route as a failure for that route, so a partial import
+returns `imported: N, failed: M` and the operator must check which routes are missing.
+
 ## Cost of the tick
 
 The reconciler asks for the live engine list once a second, and that list is built by shelling out to `ps`.
@@ -151,3 +165,9 @@ full-suite runs. They are shared-state races of the same family, not assertions 
 modules with `:meck`, and `:meck.unload/0` purges their old code: a tick landing inside a purged module hangs
 the purge, and the suite then stops with no output at all (observed once, before the interval was configurable).
 Tests therefore call `Blackgate.LicenseEnforcer.enforce/0` directly instead of waiting for the tick.
+
+`test/blackgate/license_test.exs` restores the process state **synchronously** in `on_exit` (`:sys.get_state/1`
+after the replacement). An asynchronous `send(License, :checkpoint)` returned while the test's deactivated cache
+was still in ETS, and the next synchronous test file failed in its own `setup` with "License deactivated.
+Activate a valid license." — a leaked test state that reads exactly like a product fault. Six consecutive runs,
+including three with the seed that reproduced it, are clean afterwards.

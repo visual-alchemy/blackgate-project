@@ -85,4 +85,36 @@ defmodule BlackgateWeb.DestinationControllerTest do
     assert %{"deleted" => true, "restarted" => false} = json_response(conn, 200)["data"]
     assert {:error, :not_found} = Db.get_destination(route_id, destination_id)
   end
+
+  test "a refused restart is reported instead of claiming the change is live", %{
+    conn: conn,
+    route_id: route_id
+  } do
+    destination_id = UUID.uuid4()
+
+    assert {:ok, _destination} =
+             Db.create_destination(route_id, @destination_attrs, destination_id)
+
+    # The route reads as running, but the restart is refused for a licence reason. The response must not
+    # claim `restarted: true` - that told the operator the new destination was live while the engine was
+    # still streaming on the previous one.
+    :meck.new(Blackgate, [:passthrough])
+    on_exit(fn -> :meck.unload() end)
+
+    :meck.expect(Blackgate, :get_route, fn ^route_id -> {:ok, self()} end)
+
+    :meck.expect(Blackgate, :restart_route, fn ^route_id ->
+      {:error, {:license, "Route limit reached (2)."}}
+    end)
+
+    conn =
+      put(conn, ~p"/api/routes/#{route_id}/destinations/#{destination_id}",
+        destination: %{"name" => "Refused restart"}
+      )
+
+    data = json_response(conn, 200)["data"]
+    assert data["restarted"] == false
+    assert data["restart_error"] == "Route limit reached (2)."
+    assert data["name"] == "Refused restart"
+  end
 end

@@ -91,13 +91,27 @@ defmodule BlackgateWeb.RouteController do
     was_running = route_is_running?(id)
 
     with {:ok, route} <- Db.update_route(id, route_params) do
-      if was_running do
-        Blackgate.restart_route(id)
-      end
-
-      data(conn, Map.put(route, "restarted", was_running))
+      # Reporting `restarted: true` regardless told the operator the edited route was live when the restart
+      # was refused (a held output port, or a licence that no longer covers it). See DestinationController.
+      restart = maybe_restart(id, was_running)
+      data(conn, Map.merge(route, restart))
     end
   end
+
+  ## A route edit on a running route restarts it, and that restart can be refused. The refusal is reported
+  # beside the change, so the response never claims more than happened.
+  defp maybe_restart(_id, false), do: %{"restarted" => false}
+
+  defp maybe_restart(id, true) do
+    case Blackgate.restart_route(id) do
+      {:ok, _} -> %{"restarted" => true}
+      :ok -> %{"restarted" => true}
+      {:error, reason} -> %{"restarted" => false, "restart_error" => describe(reason)}
+    end
+  end
+
+  defp describe({:license, reason}), do: reason
+  defp describe(reason), do: inspect(reason)
 
   def delete(conn, %{"id" => id}) do
     # Stop it before dropping the records. Db.delete_route/1 only removes rows, so a route that was still
@@ -339,6 +353,16 @@ defmodule BlackgateWeb.RouteController do
         conn
         |> put_status(:created)
         |> data(full_route)
+      else
+        # A clone is a new saved route, so the licence/trial cap applies to it. Without this clause the
+        # tuple reached Phoenix unmapped and the operator saw a 500 for a limit they can act on.
+        {:error, {:route_creation_not_allowed, reason}} ->
+          route_creation_limit_error(conn, reason)
+
+        {:error, reason} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{error: inspect(reason)})
       end
     end
   end

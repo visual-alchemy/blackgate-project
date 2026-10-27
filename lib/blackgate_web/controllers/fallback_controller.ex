@@ -26,4 +26,12 @@ defmodule BlackgateWeb.FallbackController do
         "Destination schema #{label} is not supported: this build delivers over the network only (SRT or UDP)."
     })
   end
+
+  # License capacity (the trial's two saved routes) is a limit the operator can act on, so it answers 402
+  # wherever a route is created - including restore, whose own controller clause would otherwise make it a 500.
+  def call(conn, {:error, {:route_creation_not_allowed, reason}}) do
+    conn
+    |> put_status(:payment_required)
+    |> json(%{error: reason})
+  end
 end
