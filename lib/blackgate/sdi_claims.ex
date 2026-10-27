@@ -163,4 +163,17 @@ defmodule Blackgate.SdiClaims do
   def port_conflict?(route, running_routes) do
     Enum.any?(claims_of(route, running_routes), &(&1.kind == :port))
   end
+
+  @doc """
+  One sentence per claim the route cannot take, in the wording the dashboard already recognises:
+  `"SDI 1 is in use by <route>; port 9101 is in use by <route>"`.
+
+  Built here because TWO callers need the same sentence — the Start refusal and the restart that a route or
+  destination edit triggers — and a second copy of the phrasing would drift out of the frontend's pattern.
+  """
+  def describe_conflicts(claims) do
+    Enum.map_join(claims, "; ", fn claim ->
+      "#{claim[:label] || claim[:kind]} is in use by #{claim[:held_by][:route_name]}"
+    end)
+  end
 end

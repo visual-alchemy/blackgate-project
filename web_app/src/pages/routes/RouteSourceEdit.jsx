@@ -4,6 +4,7 @@ import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { routesApi, networkApi } from '../../utils/api';
+import { RESTART_CONFLICT_RE } from '../../utils/sdiPorts';
 import React from 'react';
 import SourceFields from './SourceFields';
 
@@ -120,7 +121,17 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         savePromise
           .then(data => {
             loadingMessage();
-            if (id !== 'new' && data?.data?.restarted) {
+            // A restart can be refused (a listening port or an SDI connector another route holds). The
+            // server says so beside the saved route, so the toast must not report a restart that did not
+            // happen.
+            const restartError = data?.data?.restart_error;
+            if (restartError) {
+              messageApi.warning(
+                RESTART_CONFLICT_RE.test(restartError)
+                  ? `Saved, but the route could not restart: ${restartError}`
+                  : `Saved, but the route did not restart: ${restartError}`
+              );
+            } else if (id !== 'new' && data?.data?.restarted) {
               messageApi.success('Route saved and restarted successfully');
             } else {
               messageApi.success('Route saved successfully');

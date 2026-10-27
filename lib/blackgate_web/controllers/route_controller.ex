@@ -76,13 +76,34 @@ defmodule BlackgateWeb.RouteController do
     was_running = route_is_running?(id)
 
     with {:ok, route} <- Db.update_route(id, route_params) do
-      if was_running do
-        Blackgate.restart_route(id)
-      end
-
-      data(conn, Map.put(route, "restarted", was_running))
+      data(conn, Map.merge(route, maybe_restart(id, was_running)))
     end
   end
+
+  # A route edit on a running route restarts it, and that restart can be REFUSED (a listening port or an SDI
+  # connector another route holds). Reporting `restarted: was_running` told the operator the edited route was live
+  # when it was not.
+  defp maybe_restart(_id, false), do: %{"restarted" => false}
+
+  defp maybe_restart(id, true) do
+    case Blackgate.restart_route(id) do
+      {:ok, _} ->
+        %{"restarted" => true}
+
+      :ok ->
+        %{"restarted" => true}
+
+      {:error, reason} ->
+        %{"restarted" => false, "restart_error" => describe_restart_error(reason)}
+    end
+  end
+
+  # Same wording the Start button uses ("SDI 1 is in use by <route>"), so the UI can recognise the conflict.
+  defp describe_restart_error({:resource_in_use, claims}),
+    do: Blackgate.SdiClaims.describe_conflicts(claims)
+
+  defp describe_restart_error(:not_found), do: "this route is no longer registered"
+  defp describe_restart_error(reason), do: inspect(reason)
 
   def delete(conn, %{"id" => id}) do
     # Stop it before dropping the records. Db.delete_route/1 only removes rows, so a route that was still
@@ -140,10 +161,7 @@ defmodule BlackgateWeb.RouteController do
             |> put_status(:conflict)
             |> json(%{
               error: "SDI being used by #{first.held_by.route_name}",
-              message:
-                Enum.map_join(claims, "; ", fn claim ->
-                  "#{claim.label} is in use by #{claim.held_by.route_name}"
-                end),
+              message: Blackgate.SdiClaims.describe_conflicts(claims),
               conflicts:
                 Enum.map(claims, fn claim ->
                   %{

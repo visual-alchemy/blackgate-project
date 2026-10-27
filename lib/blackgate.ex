@@ -48,7 +48,18 @@ defmodule Blackgate do
   defp route_including_destinations(id), do: Db.get_route(id, true)
 
   # Route ids read off the live engine processes.
+  #
+  # The `:persistent_term` lookup is a TEST SEAM, not a mode: the route list is judged from real engine processes,
+  # and a test may not spawn one (which is why the port/SDI claim gate had no refusal case at all). A test puts the
+  # ids there and deletes the key afterwards; nothing in the running system ever sets it.
   defp engine_process_route_ids do
+    case :persistent_term.get({Blackgate, :running_route_ids}, nil) do
+      ids when is_list(ids) -> ids
+      _ -> live_engine_route_ids()
+    end
+  end
+
+  defp live_engine_route_ids do
     case Blackgate.ProcessMonitor.list_pipeline_processes() do
       list when is_list(list) -> Enum.map(list, & &1[:route_id])
       _ -> []
