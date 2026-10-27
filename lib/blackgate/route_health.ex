@@ -70,13 +70,15 @@ defmodule Blackgate.RouteHealth do
       # Extract pipeline warnings and the egress verdict
       warning_count = stats["warning_count"] || 0
 
-      # Egress loss is judged on the same ~10 s window and the same hysteresis as the ingest
-      # leg, not on the sink's lifetime counters. `packets-sent-lost` on an srtsink is SRT's
-      # reported loss (`pktSndLossTotal`): packets the PEER reported missing, most of which the
-      # sender retransmits inside the negotiated latency. Summed over the life of the engine, a
-      # burst while a client connected pinned the route to "Egress Loss" while every viewer
-      # played without a single artefact. The windowed figure and the destination that held it
-      # come from Blackgate.RouteStatsRegistry, which owns the history.
+      # Egress loss is judged on the same ~10 s window and the same hysteresis as the ingest leg,
+      # not on the sink's lifetime counters, and on the DROPPED counter rather than on
+      # `packets-sent-lost`. That one counts packets the PEER reported missing, which SRT sends
+      # again inside the negotiated latency: measured on this box the two counters were the same
+      # number packet for packet (33,900/33,900 and 36,006/36,006) while both players were clean,
+      # so judging it wore an "Egress Loss 9.29 %" badge on a fully delivered stream.
+      # `packets-sent-dropped` is what the sender gave up on. Either figure summed over the life of
+      # the engine pins a route to a verdict long after the burst that caused it, so the window and
+      # the destination that held it come from Blackgate.RouteStatsRegistry, which owns the history.
       has_egress_loss? = egress_loss?(stats["egress-loss-10s-pct"], stats["egress-streak"] || 0)
 
       cond do

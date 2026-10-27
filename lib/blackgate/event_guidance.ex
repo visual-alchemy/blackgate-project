@@ -105,7 +105,8 @@ defmodule Blackgate.EventGuidance do
         "check the ingest path to the source now; loss this high is visible to viewers"
 
       "network_loss_egress" ->
-        "check the egress link to the destinations — the ingest side is clean"
+        "check the egress link to the destinations: the gateway dropped packets SRT could not " <>
+          "resend in time, so viewers lost them — the ingest side is clean"
 
       "source_corrupted" ->
         "check the source encoder — the gateway is receiving corrupt frames"

@@ -118,6 +118,35 @@ A quick reference guide when something goes wrong. No technical jargon — just 
 
 ---
 
+## 🟡 Route Says "Egress Dropped" (or Shows retx)
+
+Two different things get confused here, so read them apart on the route detail page →
+Destination Statistics:
+
+| Counter on screen | What it means | Is the picture damaged? |
+|---|---|---|
+| **dropped** | Packets the gateway gave up on. SRT could not resend them inside the negotiated latency, so the receiver never got them. | **Yes.** This is real loss. |
+| **retx** | Packets the receiver reported missing and SRT sent again. They arrived (measured: the retx count equals the "reported lost" count packet for packet). | **No.** It is what the link costs, not lost video. |
+
+**"Egress Dropped" badge**: the gateway is dropping packets it cannot recover, report after
+report. Check the cable/switch port and the receiving machine (its NIC, CPU and player). This is
+never the source side — look at the ingest figures on the same page, they will read clean.
+
+**retx only, no dropped**: the link between the gateway and the receiver is losing packets and
+SRT is papering over it. Nothing is wrong with the stream right now, but the margin is gone: if
+the loss grows or the latency is lowered, `dropped` will start moving. Typical causes are a
+half-duplex/duplex-mismatch port, a saturated uplink, bad cabling, or a receiver that stalls long
+enough to overflow its own receive buffer. Confirm on the gateway with:
+
+```bash
+ping -c 200 -i 0.02 <receiver-ip>          # loss to the player
+ping -c 200 -i 0.02 <gateway-ip>           # the same, to the router: should be 0 %
+```
+
+If the router is clean and the player is not, the loss is on the last hop or at the player.
+
+---
+
 ## 🟡 High CPU or Memory Usage
 
 **Symptoms**: Server is slow, other services affected, or Blackgate is using too many resources.

@@ -47,8 +47,8 @@ const HEALTH_CONFIG = {
   network_loss_egress: {
     color: 'warning',
     icon: <WarningOutlined />,
-    label: 'Egress Loss',
-    tooltip: 'Output SRT is reporting lost packets on the link to a destination for several seconds running. SRT retransmits most of them inside the latency, so the picture can still be clean — check Destination Statistics for the lost and retransmitted counts.',
+    label: 'Egress Dropped',
+    tooltip: 'Output SRT has been dropping packets it cannot recover for several seconds running: those never reach the destination. A route whose packets are merely retransmitted — recovered inside the negotiated latency — stays healthy, so compare dropped against retx in Destination Statistics.',
   },
 };
 
