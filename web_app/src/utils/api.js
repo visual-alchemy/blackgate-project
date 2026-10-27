@@ -470,6 +470,19 @@ export const licenseApi = {
     return response.json();
   },
 
+  // Re-check the licence against the server now. Same rule as the other calls: a refusal has to reach the caller as
+  // an error it can show, rather than a body that reads like success.
+  sync: async () => {
+    const response = await authFetch('/api/license/sync', { method: 'POST' });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `License sync failed (${response.status})`);
+    }
+
+    return response.json();
+  },
+
   // Deactivate current license
   deactivate: async () => {
     const response = await authFetch('/api/license/deactivate', {
