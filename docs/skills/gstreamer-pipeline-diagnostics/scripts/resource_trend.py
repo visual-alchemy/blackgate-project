@@ -27,7 +27,12 @@ import sys
 import time
 
 ENGINE_MARKER = "priv/native/build/blackgate-engine"
-NODE_MARKER = "rel/blackgate"
+# A release node is found by the directory its boot script was started from, and the two layouts
+# differ: a development tree boots from `_build/prod/rel/blackgate/...`, while the appliance boots
+# from `/opt/blackgate/releases/<version>/...`. Matching only the first silently recorded
+# node_rss_mb / node_cpu_pct / node_threads / node_fds as 0 on a real gateway, which reads as a
+# broken monitor rather than a missing marker.
+NODE_MARKERS = ("rel/blackgate", "/blackgate/releases/")
 HEADER = (
     "ts,node_rss_mb,node_cpu_pct,node_threads,node_fds,node_procs,"
     "engines,engines_rss_mb,engines_cpu_pct,engines_fds,load1,uptime_s"
@@ -59,7 +64,7 @@ def find_processes() -> tuple[list[int], list[tuple[int, str]]]:
                 (p for p in reversed(parts) if len(p) == 36 and p.count("-") == 4), "?"
             )
             engines.append((pid, route_id))
-        elif NODE_MARKER in cmdline and "beam" in cmdline:
+        elif "beam" in cmdline and any(m in cmdline for m in NODE_MARKERS):
             # `bin/blackgate rpc` starts a helper beam from the same release directory with
             # `-boot .../start_clean`, so it would otherwise be counted as a second node and
             # spike node RSS/threads/fds for one sample. Only the daemon counts.
