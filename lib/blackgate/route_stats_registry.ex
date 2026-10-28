@@ -42,6 +42,39 @@ defmodule Blackgate.RouteStatsRegistry do
     {stats, warning_count, prev_health} =
       case :ets.lookup(@table_name, route_id) do
         [{^route_id, prev_stats, prev_updated_at}] ->
+          prev_sdi_stats = prev_stats["sdi_video_stats"] || []
+          curr_sdi_stats = stats["sdi_video_stats"] || []
+
+          updated_sdi_stats =
+            Enum.map(curr_sdi_stats, fn curr_item ->
+              dev = curr_item["device_number"]
+              prev_item = Enum.find(prev_sdi_stats, &(&1["device_number"] == dev))
+
+              if prev_item && prev_updated_at < updated_at do
+                delta_drops = max(0, curr_item["dropped_frames"] - prev_item["dropped_frames"])
+
+                delta_dups =
+                  max(0, curr_item["duplicated_frames"] - prev_item["duplicated_frames"])
+
+                delta_time_sec = (updated_at - prev_updated_at) / 1000.0
+
+                {drops_per_sec, dups_per_sec} =
+                  if delta_time_sec > 0.1 do
+                    {delta_drops / delta_time_sec, delta_dups / delta_time_sec}
+                  else
+                    {0.0, 0.0}
+                  end
+
+                curr_item
+                |> Map.put("drops_per_sec", Float.round(drops_per_sec, 2))
+                |> Map.put("duplicates_per_sec", Float.round(dups_per_sec, 2))
+              else
+                curr_item
+                |> Map.put("drops_per_sec", 0.0)
+                |> Map.put("duplicates_per_sec", 0.0)
+              end
+            end)
+
           # Source loss over this report window. The cumulative counters keep the
           # connection-startup burst in the ratio for the whole life of the
           # connection, so a route with ~0.5% steady-state loss kept reporting
@@ -66,6 +99,7 @@ defmodule Blackgate.RouteStatsRegistry do
 
           stats =
             stats
+            |> Map.put("sdi_video_stats", updated_sdi_stats)
             |> Map.put("loss-window-pct", loss_window_pct)
             # Reset to 0 for next window
             |> Map.put("warning_count", 0)
@@ -77,14 +111,32 @@ defmodule Blackgate.RouteStatsRegistry do
           {stats, warning_count, prev_health}
 
         _ ->
+          curr_sdi_stats = stats["sdi_video_stats"] || []
+
+          updated_sdi_stats =
+            Enum.map(curr_sdi_stats, fn curr_item ->
+              curr_item
+              |> Map.put("drops_per_sec", 0.0)
+              |> Map.put("duplicates_per_sec", 0.0)
+            end)
+
           stats =
             stats
+            |> Map.put("sdi_video_stats", updated_sdi_stats)
             |> Map.put("warning_count", 0)
 
           {stats, 0, "disconnected"}
       end
 
     sink_stats = get_all_sink_stats(route_id)
+
+    # Egress loss AND egress retransmission over the same ~10 s window the ingest leg uses, per
+    # destination. They are two different facts - see the note above update_egress_window/3 - so
+    # the verdict is judged on the first and the second is published beside it.
+    egress = update_egress_window(route_id, updated_at, sink_stats)
+    {egress_10s, egress_destination} = egress.loss
+    {egress_retx_10s, egress_retx_destination} = egress.retx
+    egress_streak = egress.streak
 
     # Sustained loss over ~10 s plus the consecutive-report streak that gates `warning`
     # (see Blackgate.RouteHealth). Both are published in the stats map so the dashboard and
@@ -95,6 +147,13 @@ defmodule Blackgate.RouteStatsRegistry do
       stats
       |> Map.put("loss-window-10s-pct", loss_10s)
       |> Map.put("loss-streak", streak)
+      |> Map.put("egress-loss-10s-pct", egress_10s)
+      |> Map.put("egress-streak", egress_streak)
+      |> Map.put("egress-loss-destination", egress_destination)
+      |> Map.put("egress-retx-10s-pct", egress_retx_10s)
+      |> Map.put("egress-retx-destination", egress_retx_destination)
+      |> Map.put("egress-loss-cumulative-pct", egress_cumulative_pct(sink_stats))
+      |> Map.put("egress-retx-cumulative-pct", egress_retx_cumulative_pct(sink_stats))
 
     eval_stats =
       stats
@@ -180,6 +239,141 @@ defmodule Blackgate.RouteStatsRegistry do
     )
 
     {loss_10s, streak, burst_log?}
+  end
+
+  # Egress LOSS and egress RETRANSMISSION are two different facts, and this release stops
+  # merging them.
+  #
+  # `packets-sent-lost` is libsrt's `pktSndLossTotal`: packets the PEER reported missing. SRT
+  # sends them again inside the negotiated latency and they arrive, so the figure is a link
+  # COST, not damage. Measured on this box against a LAN client 0.2-3.2 ms away with 0.00 % ICMP
+  # loss, `packets-sent-lost` and `packets-sent-retransmitted` were the same number packet for
+  # packet (33,900/33,900 on one destination, 36,006/36,006 on another) while both players showed
+  # nothing wrong. Judged on that counter a fully delivered stream wore an "Egress Loss 9.29 %"
+  # badge, which is a label that lies to whoever reads it.
+  #
+  # The verdict is therefore judged on `packets-sent-dropped` (libsrt `pktSndDropTotal`): packets
+  # the SENDER gave up on, which nothing recovers and the viewer loses. The retransmission ratio
+  # is published beside it as its own number, so an operator can see what the link costs without
+  # reading it as damage.
+  #
+  # The history lives under its own ETS key ({:egress_window, route_id}) for the same reason the
+  # ingest window does: it must not leak into the stats map served to the UI, and it must be
+  # dropped with the route.
+  defp update_egress_window(route_id, now, sink_stats) do
+    current =
+      Map.new(sink_stats, fn %{sink_index: index, stats: s} ->
+        {index,
+         %{
+           sent: s["packets-sent"] || 0,
+           dropped: s["packets-sent-dropped"] || 0,
+           retx: s["packets-sent-retransmitted"] || 0
+         }}
+      end)
+
+    state =
+      case :ets.lookup(@table_name, {:egress_window, route_id}) do
+        [{_, state, _}] -> state
+        _ -> %{samples: [], streak: 0}
+      end
+
+    samples =
+      (state.samples ++ [{now, current}])
+      |> Enum.filter(fn {ts, _} -> now - ts <= @loss_window_ms end)
+      |> Enum.take(-@loss_history_limit)
+
+    %{loss: {lost_pct, lost_destination}, retx: {retx_pct, retx_destination}} =
+      egress_ratios(samples, current)
+
+    streak =
+      if is_number(lost_pct) and lost_pct >= Blackgate.RouteHealth.egress_threshold(),
+        do: state.streak + 1,
+        else: 0
+
+    :ets.insert(
+      @table_name,
+      {{:egress_window, route_id}, %{samples: samples, streak: streak}, now}
+    )
+
+    %{
+      loss: {lost_pct, lost_destination},
+      retx: {retx_pct, retx_destination},
+      streak: streak
+    }
+  end
+
+  # Worst destination over the window, for the dropped ratio and for the retransmission ratio,
+  # each with the destination that held it.
+  defp egress_ratios(samples, current) do
+    case samples do
+      # One sample is a point, not a window: reporting 0.0 % there would claim a measurement
+      # that has not happened yet.
+      [{_, first} | _] when length(samples) > 1 and map_size(current) > 0 ->
+        per_destination =
+          samples
+          |> Enum.flat_map(fn {_ts, latest} -> Map.keys(latest) end)
+          |> Enum.uniq()
+          |> Enum.map(fn index ->
+            before = Map.get(first, index, %{sent: 0, dropped: 0, retx: 0})
+            latest = Map.get(current, index, before)
+
+            d_sent = max(0, latest.sent - before.sent)
+            d_dropped = max(0, latest.dropped - before.dropped)
+            d_retx = max(0, latest.retx - before.retx)
+
+            {index, ratio_pct(d_dropped, d_sent + d_dropped), ratio_pct(d_retx, d_sent)}
+          end)
+
+        %{
+          loss: worst_destination(per_destination, fn {_index, lost, _retx} -> lost end),
+          retx: worst_destination(per_destination, fn {_index, _lost, retx} -> retx end)
+        }
+
+      _ ->
+        %{loss: {nil, nil}, retx: {nil, nil}}
+    end
+  end
+
+  defp ratio_pct(_numerator, 0), do: 0.0
+  defp ratio_pct(numerator, denominator), do: numerator / denominator * 100
+
+  defp worst_destination(per_destination, pick) do
+    per_destination
+    |> Enum.map(fn entry -> {pick.(entry), elem(entry, 0)} end)
+    |> Enum.max_by(&elem(&1, 0), fn -> {nil, nil} end)
+    |> case do
+      {pct, index} when is_number(pct) and is_integer(index) ->
+        {Float.round(pct, 3), "destination #{index + 1}"}
+
+      _ ->
+        {nil, nil}
+    end
+  end
+
+  # Lifetime ratios across destinations: not the verdict, only the evidence beside it, so an
+  # operator can see "3 s ago it was clean, lifetime 0.4 %". Dropped is loss, retx is cost.
+  defp egress_cumulative_pct(sink_stats) do
+    sink_stats
+    |> Enum.map(fn %{stats: s} ->
+      sent = s["packets-sent"] || 0
+      dropped = s["packets-sent-dropped"] || 0
+
+      if sent + dropped > 0, do: dropped / (sent + dropped) * 100, else: 0.0
+    end)
+    |> Enum.max(fn -> 0.0 end)
+    |> Float.round(3)
+  end
+
+  defp egress_retx_cumulative_pct(sink_stats) do
+    sink_stats
+    |> Enum.map(fn %{stats: s} ->
+      sent = s["packets-sent"] || 0
+      retx = s["packets-sent-retransmitted"] || 0
+
+      if sent > 0, do: retx / sent * 100, else: 0.0
+    end)
+    |> Enum.max(fn -> 0.0 end)
+    |> Float.round(3)
   end
 
   @doc """
@@ -294,7 +488,7 @@ defmodule Blackgate.RouteStatsRegistry do
   @doc """
   Get secondary-source stats for a route. Returns the raw stats map or nil.
   Unlike get_stats/1, this returns the bare map (no wrapping) because
-  secondary stats skip the per-sink drop / health-evaluation pipeline.
+  secondary stats skip the SDI-drop / health-evaluation pipeline.
   """
   def get_secondary_stats(route_id) when is_binary(route_id) do
     case :ets.lookup(@table_name, {:secondary, route_id}) do
@@ -311,6 +505,7 @@ defmodule Blackgate.RouteStatsRegistry do
     # The rolling loss history lives beside the stats row; drop it with the route so a
     # restarted route does not inherit a stale 10 s window or streak.
     :ets.delete(@table_name, {:loss_window, route_id})
+    :ets.delete(@table_name, {:egress_window, route_id})
     :ok
   end
 
@@ -393,7 +588,7 @@ defmodule Blackgate.RouteStatsRegistry do
           "Appliance buffer overflow / socket limit detected (local packet loss)"
 
         "network_loss_egress" ->
-          "Egress transmission packet loss detected on output client connections"
+          "Egress packets dropped on output client connections (SRT gave up, viewers lost them)"
 
         "warning" ->
           "Route health degraded to warning"
@@ -453,12 +648,21 @@ defmodule Blackgate.RouteStatsRegistry do
   # Human-readable basis for a health verdict, appended to every health event.
   defp health_evidence(stats) do
     streak = stats["loss-streak"] || 0
+    egress = stats["egress-loss-10s-pct"]
 
     [
-      is_number(stats["loss-window-10s-pct"]) && "10 s loss #{stats["loss-window-10s-pct"]}%",
-      is_number(stats["loss-window-pct"]) && "last 1 s window #{stats["loss-window-pct"]}%",
+      is_number(egress) and egress > 0 and
+        "egress loss #{egress}% over 10 s on #{stats["egress-loss-destination"]} " <>
+          "(packets the sender dropped, nothing can recover them; " <>
+          "lifetime #{stats["egress-loss-cumulative-pct"]}%)",
+      is_number(stats["egress-retx-10s-pct"]) and stats["egress-retx-10s-pct"] > 0 and
+        "SRT resent #{stats["egress-retx-10s-pct"]}% on #{stats["egress-retx-destination"]} " <>
+          "(retransmitted inside the latency, so recovered; " <>
+          "lifetime #{stats["egress-retx-cumulative-pct"]}%)",
+      is_number(stats["loss-window-10s-pct"]) and "10 s loss #{stats["loss-window-10s-pct"]}%",
+      is_number(stats["loss-window-pct"]) and "last 1 s window #{stats["loss-window-pct"]}%",
       "cumulative loss #{cumulative_loss_pct(stats)}%",
-      is_number(stats["rtt-ms"]) && "RTT #{stats["rtt-ms"]} ms",
+      is_number(stats["rtt-ms"]) and "RTT #{stats["rtt-ms"]} ms",
       streak > 1 && "above threshold for #{streak} consecutive reports"
     ]
     |> Enum.filter(&is_binary/1)

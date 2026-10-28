@@ -143,6 +143,8 @@ defmodule Blackgate.RouteHealthTest do
       "packets-received-lost" => 0,
       "rtt-ms" => 10.0,
       "warning_count" => 0,
+      "egress-loss-10s-pct" => 3.0,
+      "egress-streak" => 3,
       "sink_stats" => [
         %{
           sink_index: 0,
@@ -156,5 +158,61 @@ defmodule Blackgate.RouteHealthTest do
     }
 
     assert RouteHealth.evaluate(stats) == "network_loss_egress"
+  end
+
+  test "evaluate/1 ignores the sink lifetime ratio the badge used to fire on" do
+    # The srtsink counters are lifetime figures and `packets-sent-lost` is SRT's reported loss,
+    # mostly retransmitted inside the latency. A 3 % lifetime ratio with a clean window is not
+    # a degraded route: the operator's VLC played without an artefact while the badge said
+    # "Egress Loss".
+    stats = %{
+      "receive-rate-mbps" => 5.5,
+      "packets-received" => 1000,
+      "packets-received-lost" => 0,
+      "rtt-ms" => 10.0,
+      "warning_count" => 0,
+      "egress-loss-10s-pct" => 0.05,
+      "egress-streak" => 0,
+      "sink_stats" => [
+        %{
+          sink_index: 0,
+          stats: %{"packets-sent" => 970, "packets-sent-lost" => 30}
+        }
+      ]
+    }
+
+    assert RouteHealth.evaluate(stats) == "healthy"
+  end
+
+  test "evaluate/1 does not degrade on a single lossy egress second" do
+    stats = %{
+      "receive-rate-mbps" => 5.5,
+      "packets-received" => 1000,
+      "packets-received-lost" => 0,
+      "rtt-ms" => 10.0,
+      "warning_count" => 0,
+      "egress-loss-10s-pct" => 4.0,
+      "egress-streak" => 2
+    }
+
+    assert RouteHealth.evaluate(stats) == "healthy"
+    refute RouteHealth.egress_loss?(4.0, 2)
+    assert RouteHealth.egress_loss?(4.0, 3)
+  end
+
+  test "evaluate/1 severe egress loss fires without waiting for the streak" do
+    stats = %{
+      "receive-rate-mbps" => 5.5,
+      "packets-received" => 1000,
+      "packets-received-lost" => 0,
+      "rtt-ms" => 10.0,
+      "warning_count" => 0,
+      "egress-loss-10s-pct" => 12.0,
+      "egress-streak" => 0
+    }
+
+    assert RouteHealth.evaluate(stats) == "network_loss_egress"
+    assert RouteHealth.egress_loss?(12.0, 0)
+    refute RouteHealth.egress_loss?(nil, 9)
   end
 end
