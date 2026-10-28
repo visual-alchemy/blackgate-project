@@ -5,7 +5,8 @@ import {
     UserOutlined,
     TeamOutlined,
     SyncOutlined,
-    WifiOutlined
+    WifiOutlined,
+    WarningOutlined
 } from '@ant-design/icons';
 import { routesApi } from '../utils/api';
 
@@ -117,6 +118,23 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
         const sendRate = destStats['send-rate-mbps'] || 0;
         const rtt = destStats['rtt-ms'] || 0;
         const bytesSent = destStats['bytes-sent-total'] || 0;
+        // Three counters, and they do not mean the same thing:
+        //   dropped - the sender gave up; nothing recovers it, so the viewer loses it
+        //   retx    - SRT sent it again because the receiver reported a gap; it is recovered
+        //             inside the negotiated latency, so this is what the link costs, not damage
+        //   sent    - the denominator for both
+        // `packets-sent-lost` is what the peer reported missing and is essentially the retx count
+        // (measured equal to it packet for packet on this gateway), which is why it is NOT the
+        // loss figure: it showed "9.29 % lost" over a stream both players rendered without a flaw.
+        const packetsSent = destStats['packets-sent'] || 0;
+        const packetsDropped = destStats['packets-sent-dropped'] || 0;
+        const packetsRetransmitted = destStats['packets-sent-retransmitted'] || 0;
+        const lifetimeLossPct =
+            packetsSent + packetsDropped > 0
+                ? (packetsDropped / (packetsSent + packetsDropped)) * 100
+                : 0;
+        const lifetimeRetxPct =
+            packetsSent > 0 ? (packetsRetransmitted / packetsSent) * 100 : 0;
 
         // Access schema_options for nested properties
         const schemaOpts = dest.schema_options || {};
@@ -170,6 +188,20 @@ const DestinationStats = ({ routeId, isRunning, destinations = [] }) => {
                             <Space>
                                 <ArrowUpOutlined />
                                 <Text>{formatBytes(bytesSent)}</Text>
+                            </Space>
+                        </Tooltip>
+                        <Tooltip title="Packets the sender gave up on: they were not delivered and SRT could not recover them, so the viewer lost them.">
+                            <Space>
+                                <WarningOutlined style={{ color: packetsDropped > 0 ? '#ff4d4f' : '#52c41a' }} />
+                                <Text>{packetsDropped.toLocaleString()} dropped</Text>
+                                <Text type="secondary">({lifetimeLossPct.toFixed(2)}%)</Text>
+                            </Space>
+                        </Tooltip>
+                        <Tooltip title="Packets SRT sent again because the receiver reported a gap. They are recovered inside the negotiated latency: this is what the link costs, not lost video.">
+                            <Space>
+                                <SyncOutlined />
+                                <Text>{packetsRetransmitted.toLocaleString()} retx</Text>
+                                <Text type="secondary">({lifetimeRetxPct.toFixed(2)}%)</Text>
                             </Space>
                         </Tooltip>
                         {mode === 'listener' && (

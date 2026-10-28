@@ -81,6 +81,7 @@ defmodule BlackgateWeb.Router do
     # License management
     get "/license", LicenseController, :show
     post "/license/activate", LicenseController, :activate
+    post "/license/sync", LicenseController, :sync
     delete "/license/deactivate", LicenseController, :deactivate
   end
 

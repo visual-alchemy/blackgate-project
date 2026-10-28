@@ -45,7 +45,7 @@ const RouteNameCell = ({ record }) => {
       statusText = 'Appliance Issue';
     } else if (health === 'network_loss_egress') {
       dotStatus = 'warning';
-      statusText = 'Egress Loss';
+      statusText = 'Egress Dropped';
     } else if (health === 'healthy') {
       dotStatus = 'success';
       statusText = 'Healthy';
@@ -60,7 +60,9 @@ const RouteNameCell = ({ record }) => {
     // Build rich tooltip content
     const bitrate = stats ? (stats['receive-rate-mbps'] || stats['send-rate-mbps'] || 0).toFixed(2) : '0.00';
     const rtt = stats ? (stats['rtt-ms'] || 0).toFixed(0) : '—';
-    const loss = stats ? (stats['packets-received-lost'] || stats['packets-sent-lost'] || 0) : '0';
+    // Dropped, not sent-lost: `packets-sent-lost` is the peer's missing-packet report, which SRT
+    // retransmits (measured equal to the retx count), so it is not lost video.
+    const loss = stats ? (stats['packets-received-lost'] || stats['packets-sent-dropped'] || 0) : '0';
 
     tooltipTitle = (
       <div style={{ padding: '4px' }}>
@@ -71,7 +73,7 @@ const RouteNameCell = ({ record }) => {
           <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.85)' }}>
             <div>Bitrate: {bitrate} Mbps</div>
             <div>RTT: {rtt} ms</div>
-            <div>Packet Loss: {loss}</div>
+            <div>Packets Dropped: {loss}</div>
           </div>
         ) : (
           <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)' }}>
@@ -221,9 +223,12 @@ const Routes = () => {
         throw new Error(result.error);
       }
 
-      // Update the specific route in the routes array
+      // Update the specific route in the routes array. The body may not carry `data` (an error
+      // shape, or an empty reply), so fall back to the status the action implies rather than
+      // reading `.status` off undefined.
+      const nextStatus = result?.data?.status || (action === 'stop' ? 'stopped' : 'started');
       setRoutes(routes.map(route =>
-        route.id === id ? { ...route, status: result.data.status } : route
+        route.id === id ? { ...route, status: nextStatus } : route
       ));
 
       messageApi.success(`Route ${action}ed successfully`);
@@ -240,8 +245,12 @@ const Routes = () => {
     setBulkLoading(true);
     try {
       const result = await routesApi.bulkAction(action, selectedRowKeys);
-      const successCount = result.data.filter(r => r.status && !r.error).length;
-      const failCount = result.data.filter(r => r.error).length;
+      // `data` is only present on success; a refusal throws in the api layer now, so reaching
+      // here means the array is real. Guard anyway: a partial/older server must not turn into
+      // "Cannot read properties of undefined".
+      const results = Array.isArray(result?.data) ? result.data : [];
+      const successCount = results.filter(r => r.status && !r.error).length;
+      const failCount = results.filter(r => r.error).length;
 
       if (failCount > 0) {
         messageApi.warning(`${successCount} routes ${action}ed, ${failCount} failed`);

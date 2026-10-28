@@ -9,8 +9,9 @@ import {
     ExclamationCircleOutlined,
     CloseCircleOutlined,
     DeleteOutlined,
+    SyncOutlined,
 } from '@ant-design/icons';
-import { licenseApi } from '../utils/api';
+import { licenseApi, routesApi } from '../utils/api';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -19,6 +20,10 @@ const License = () => {
     const [license, setLicense] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activating, setActivating] = useState(false);
+    const [syncing, setSyncing] = useState(false);
+    // null while unknown: the licence is judged by what is RUNNING, so a page that shows a capacity without the
+    // running count beside it is how an operator ends up surprised by a refused start.
+    const [routesRunning, setRoutesRunning] = useState(null);
     const [licenseKey, setLicenseKey] = useState('');
     const [modal, modalContextHolder] = Modal.useModal();
     const [messageApi, messageContextHolder] = message.useMessage();
@@ -34,9 +39,45 @@ const License = () => {
         }
     };
 
+    const fetchRunningRoutes = async () => {
+        try {
+            const response = await routesApi.getAll();
+            const routes = Array.isArray(response?.data) ? response.data : [];
+            setRoutesRunning(routes.filter((route) => route.status === 'started' || route.status === 'running').length);
+        } catch (error) {
+            console.error('Failed to count running routes:', error);
+            setRoutesRunning(null);
+        }
+    };
+
     useEffect(() => {
         fetchLicense();
+        fetchRunningRoutes();
     }, []);
+
+    const capacityText = () => {
+        if (!license) return '—';
+        if (license.status === 'trial') return `${license.max_routes} (trial)`;
+        if (license.max_routes >= 999999) return 'unlimited routes';
+        return `${license.max_routes} routes`;
+    };
+
+    // The heartbeat asks the server every 6 hours, so a key that was extended, replaced or revoked on the server
+    // can otherwise take that long to arrive. This asks now - and it is also the only way to find out whether the
+    // server is reachable at all, since a failed heartbeat only reaches the log.
+    const handleSync = async () => {
+        setSyncing(true);
+        try {
+            const response = await licenseApi.sync();
+            messageApi.success(response.message || 'Licence re-checked with the server');
+            await fetchLicense();
+            await fetchRunningRoutes();
+        } catch (error) {
+            messageApi.error(error.message);
+        } finally {
+            setSyncing(false);
+        }
+    };
 
     const handleActivate = async () => {
         if (!licenseKey.trim()) {
@@ -146,16 +187,26 @@ const License = () => {
                             <Title level={4} style={{ margin: 0 }}>License Status</Title>
                             {getStatusTag()}
                         </Space>
-                        {license?.status === 'licensed' && (
+                        <Space>
                             <Button
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={handleDeactivate}
+                                icon={<SyncOutlined />}
+                                onClick={handleSync}
+                                loading={syncing}
                                 size="small"
                             >
-                                Deactivate
+                                Sync license now
                             </Button>
-                        )}
+                            {license?.status === 'licensed' && (
+                                <Button
+                                    danger
+                                    icon={<DeleteOutlined />}
+                                    onClick={handleDeactivate}
+                                    size="small"
+                                >
+                                    Deactivate
+                                </Button>
+                            )}
+                        </Space>
                     </div>
 
                     {license?.expired && (
@@ -214,12 +265,20 @@ const License = () => {
                             />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Issued" value={license?.issued_at || '—'} />
+                            <Statistic title="Issued" value={license?.issued_at?.slice(0, 10) || '—'} />
                         </Col>
                         <Col xs={12} sm={8} md={6}>
-                            <Statistic title="Expires" value={license?.expires_at || '—'} />
+                            <Statistic title="Expires" value={license?.expires_at?.slice(0, 10) || '—'} />
                         </Col>
                     </Row>
+
+                    {/* The capacity on its own does not say whether there is room: these are the two numbers the
+                        gateway judges a start by, side by side. */}
+                    <Text type="secondary">
+                        {routesRunning === null
+                            ? `Running routes: unknown (could not read the route list). This licence covers ${capacityText()}.`
+                            : `${routesRunning} route${routesRunning === 1 ? '' : 's'} running now; this licence covers ${capacityText()}.`}
+                    </Text>
                 </Space>
             </Card>
 

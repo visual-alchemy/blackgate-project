@@ -552,6 +552,12 @@ defmodule Blackgate.RouteHandler do
       count = data.reconnect_count + 1
       Logger.info("RouteHandler: Reconnect attempt ##{count} (#{div(elapsed, 1000)}s elapsed)")
 
+      # Nothing from the previous attempt may survive into this one. `trigger_restart/1` clears the
+      # handles on its own path, but any path that builds a pipeline without going through it leaves
+      # the OS process alive — blocked on an SRT listener nobody reads, still holding its port.
+      # Close first, then build.
+      data = close_recorded_handles(data)
+
       try do
         # Re-fetch route from DB so destinations added/edited after route start
         # are included in the new pipeline. The in-memory data.route is stale.
@@ -1436,6 +1442,34 @@ defmodule Blackgate.RouteHandler do
       {~c"BLACKGATE_STATS_SOCKET", String.to_charlist(Blackgate.stats_socket_path())}
     ]
 
+    # Port.open is given an explicit env, so the engine inherits nothing from this process: an
+    # override only reaches it when it is passed here. Bounded in the engine as well, so a typo
+    # cannot reintroduce the 50 MB buffer that cost ~47 MB of RSS.
+    engine_env =
+      Enum.reduce(
+        [{"BLACKGATE_SINK_QUEUE_SECONDS", 600}, {"BLACKGATE_SINK_QUEUE_MB", 256}],
+        engine_env,
+        fn {key, max}, acc ->
+          case System.get_env(key) do
+            nil ->
+              acc
+
+            raw ->
+              case Integer.parse(String.trim(raw)) do
+                {value, _} when value >= 0 ->
+                  acc ++
+                    [
+                      {String.to_charlist(key),
+                       String.to_charlist(Integer.to_string(min(value, max)))}
+                    ]
+
+                _ ->
+                  acc
+              end
+          end
+        end
+      )
+
     engine_env =
       if is_binary(route["gstDebug"]) do
         engine_env ++ [{~c"GST_DEBUG", ~c"#{route["gstDebug"]}"}]
@@ -1502,6 +1536,28 @@ defmodule Blackgate.RouteHandler do
         Logger.error("RouteHandler: send_initial_command failed: #{inspect(error)}")
         {:error, error}
     end
+  end
+
+  @doc false
+  # Close whatever handles are recorded in the state, then clear them.
+  #
+  # A reconnect builds a fresh engine and a fresh sidecar. Any handle still recorded from the
+  # previous attempt must die first: `Port.close/1` alone does not reliably reap a child that is
+  # blocked writing into an SRT listener nobody reads, and an unclosed handle is how a restart
+  # storm turned into eleven orphaned ffmpeg processes holding eleven ports for a day on a live
+  # gateway. `trigger_restart/1` clears the handles on its own path; this makes that true for every
+  # path, including the ones that build a pipeline directly.
+  # Public so the regression test can assert the OS process is actually gone, not merely dropped.
+  def close_recorded_handles(data) do
+    Enum.each([data[:port], data[:ffmpeg_port]], fn
+      port when is_port(port) ->
+        if Port.info(port), do: close_port(port)
+
+      _ ->
+        :ok
+    end)
+
+    %{data | port: nil, ffmpeg_port: nil}
   end
 
   defp close_port(port) do
@@ -1805,8 +1861,18 @@ defmodule Blackgate.RouteHandler do
         []
       end
 
+    # HLS only: pace the output at 1x. `-re` reads the input at its native frame rate, which turns
+    # the segment bursts into a steady stream. Without it ffmpeg forwards each segment the instant
+    # it lands, and the receiver starves between segments.
+    #
+    # Deliberately NOT applied to RTMP: that source is already continuous (measured: 6 idle seconds
+    # of 44, versus 23-24 for HLS), and `-re` on a live source would only add latency.
+    hls? = hls_source?(url)
+    readrate = if hls?, do: ["-re"], else: []
+
     ["-hide_banner", "-loglevel", "warning"] ++
       reconnect ++
+      readrate ++
       [
         "-i",
         url,
@@ -1820,6 +1886,16 @@ defmodule Blackgate.RouteHandler do
         "mpegts",
         "srt://127.0.0.1:#{internal_port}?mode=listener&latency=500000"
       ]
+  end
+
+  @doc false
+  # The control plane labels HLS, RTMP and plain HTTP sources with one schema, so the URL decides.
+  # The playlist is the last path segment (`.m3u8`, possibly followed by a query string); a path
+  # that merely *contains* ".m3u8" is not a playlist.
+  def hls_source?(url) do
+    lower = String.downcase(url)
+    path = lower |> String.split(["?", "#"]) |> List.first() || ""
+    String.ends_with?(path, ".m3u8")
   end
 
   defp find_available_port do

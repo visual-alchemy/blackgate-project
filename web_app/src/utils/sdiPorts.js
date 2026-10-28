@@ -17,6 +17,12 @@ export const SDI_PORT_OPTIONS = [
   { label: 'SDI 4', value: 3 },
 ];
 
+// A save on a RUNNING route restarts it, and that restart can be refused by the server because a
+// listening port or an SDI connector is already taken. The refusal arrives as `restart_error` beside the
+// saved record ("SDI 1 is in use by <route>"), which is the same sentence the Start button shows. One
+// copy of the pattern, so RouteItem's conflict toast and the edit forms cannot drift apart.
+export const RESTART_CONFLICT_RE = /(SDI \d+|port \d+) is in use by/;
+
 // The card's duplex profile is not configurable here: the engine pins every SDI sink to
 // `two-sub-devices-half`, which is what makes all four connectors usable as outputs. A profile the
 // card cannot run fails its SDI sink, so there is nothing for an operator to choose.

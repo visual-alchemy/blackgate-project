@@ -47,8 +47,8 @@ const HEALTH_CONFIG = {
   network_loss_egress: {
     color: 'warning',
     icon: <WarningOutlined />,
-    label: 'Egress Loss',
-    tooltip: 'Video stream is healthy inside Blackgate, but output SRT client transmission is experiencing packet loss.',
+    label: 'Egress Dropped',
+    tooltip: 'Output SRT has been dropping packets it cannot recover for several seconds running: those never reach the destination. A route whose packets are merely retransmitted — recovered inside the negotiated latency — stays healthy, so compare dropped against retx in Destination Statistics.',
   },
 };
 

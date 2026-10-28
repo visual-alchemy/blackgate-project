@@ -220,12 +220,28 @@ export const routesApi = {
   // Stop a route
   stop: async (id) => {
     const response = await authFetch(`/api/routes/${id}/stop`);
+
+    // Stop used to return the body whatever the status was, so a 422 `{"error":":not_found"}`
+    // came back looking like success. The caller then read `result.data.status` off an object
+    // with no `data`, and the operator saw "Failed to stop route: Cannot read properties of
+    // undefined (reading 'status')" instead of "this route was already stopped".
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Stop failed (${response.status})`);
+    }
+
     return response.json();
   },
 
   // Restart a route
   restart: async (id) => {
     const response = await authFetch(`/api/routes/${id}/restart`);
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Restart failed (${response.status})`);
+    }
+
     return response.json();
   },
 
@@ -247,6 +263,17 @@ export const routesApi = {
       method: 'POST',
       body: JSON.stringify({ action, route_ids: routeIds }),
     });
+
+    // Same trap `stop` fell into: returning the body whatever the status was meant a refusal
+    // (422 `{"error":":not_found"}`, or a 400 for a malformed request) came back looking like
+    // success. The caller then read `result.data.filter(...)` off an object with no `data`, and
+    // the operator saw "Cannot read properties of undefined (reading 'filter')" instead of the
+    // reason the server gave.
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `Bulk ${action} failed (${response.status})`);
+    }
+
     return response.json();
   },
 
@@ -440,6 +467,19 @@ export const licenseApi = {
       method: 'POST',
       body: JSON.stringify({ key }),
     });
+    return response.json();
+  },
+
+  // Re-check the licence against the server now. Same rule as the other calls: a refusal has to reach the caller as
+  // an error it can show, rather than a body that reads like success.
+  sync: async () => {
+    const response = await authFetch('/api/license/sync', { method: 'POST' });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || body.error || `License sync failed (${response.status})`);
+    }
+
     return response.json();
   },
 

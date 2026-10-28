@@ -10,7 +10,7 @@ import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, routesApi, networkApi } from '../../utils/api';
-import { SDI_PORT_OPTIONS } from '../../utils/sdiPorts';
+import { SDI_PORT_OPTIONS, RESTART_CONFLICT_RE } from '../../utils/sdiPorts';
 import React from 'react';
 
 const { Title } = Typography;
@@ -150,7 +150,16 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 savePromise
                     .then(data => {
                         loadingMessage();
-                        if (destId !== 'new' && data?.data?.restarted) {
+                        // A restart can be refused (a listening port or an SDI connector another route holds). The
+                        // server now says so, so the toast must not report a restart that never happened.
+                        const restartError = data?.data?.restart_error;
+                        if (restartError) {
+                            messageApi.warning(
+                                RESTART_CONFLICT_RE.test(restartError)
+                                    ? `Saved, but the route could not restart: ${restartError}`
+                                    : `Saved, but the route did not restart: ${restartError}`
+                            );
+                        } else if (destId !== 'new' && data?.data?.restarted) {
                             messageApi.success('Destination saved — route restarted');
                         } else if (destId === 'new' && data?.data?.restarted) {
                             messageApi.success('Destination created — route restarted');

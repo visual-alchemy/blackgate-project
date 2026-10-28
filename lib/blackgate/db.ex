@@ -19,9 +19,18 @@ defmodule Blackgate.Db do
     else
       other ->
         delete_route(id)
-        Logger.error("Failed to create route: #{inspect(other)}")
+        log_create_failure(other)
         normalize_error(other)
     end
+  end
+
+  # A destination entry that is not an object is the operator's input, not a storage fault, and the
+  # journal should not read like a bug for it (the same rule the sibling branch set for a refused
+  # destination schema). Everything else is a real failure and is logged.
+  defp log_create_failure({:error, {:invalid_destination, _destination}}), do: :ok
+
+  defp log_create_failure(other) do
+    Logger.error("Failed to create route: #{inspect(other)}")
   end
 
   @spec get_route(String.t(), boolean) :: {:ok, map} | {:error, any}

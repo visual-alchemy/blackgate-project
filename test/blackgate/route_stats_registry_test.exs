@@ -156,6 +156,121 @@ defmodule Blackgate.RouteStatsRegistryTest do
 
     RouteStatsRegistry.delete_stats(route_id)
     assert :ets.lookup(:route_stats, {:loss_window, route_id}) == []
+    assert :ets.lookup(:route_stats, {:egress_window, route_id}) == []
+  end
+
+  test "egress loss is judged over the window, not on the sink lifetime counters" do
+    # The symptom the operator reported: viewers play without artefacts while the route keeps
+    # an "Egress Loss" badge. The sink counters are lifetime figures, so the burst from when the
+    # client connected stayed in the ratio (9.1 % lifetime here) while the last ten seconds grew
+    # clean (0.5 %): 5 dropped of 1,000 packets sent in the window.
+    route_id = unique_route_id()
+    t0 = System.system_time(:millisecond) - 10_000
+
+    put_sink(route_id, 0, 1000, 200, 200, 200)
+    RouteStatsRegistry.put_stats(route_id, base_stats(0, 0), t0)
+
+    put_sink(route_id, 0, 2000, 205, 205, 205)
+    RouteStatsRegistry.put_stats(route_id, base_stats(50_000, 0), t0 + 10_000)
+
+    assert %{stats: stats} = RouteStatsRegistry.get_stats(route_id)
+    assert stats["egress-loss-10s-pct"] < 2.0
+    assert stats["egress-loss-cumulative-pct"] > 9.0
+    assert stats["egress-loss-destination"] == "destination 1"
+    assert stats["health"] == "healthy"
+
+    RouteStatsRegistry.delete_stats(route_id)
+  end
+
+  test "retransmissions alone never degrade a route: SRT recovered them inside the latency" do
+    # The field numbers that started this: 33,900 lost / 33,900 retx (9.29 %) on one destination
+    # and 36,006 / 36,006 (9.50 %) on another, over a LAN path with 0.00 % ICMP loss, while both
+    # players rendered clean video. Nothing was dropped, so nothing was lost: `packets-sent-lost`
+    # is the peer's missing-packet report and SRT answers it with a retransmission.
+    route_id = unique_route_id()
+    t0 = System.system_time(:millisecond) - 60_000
+
+    put_sink(route_id, 0, 100_000, 0, 30_000, 30_000)
+    RouteStatsRegistry.put_stats(route_id, base_stats(0, 0), t0)
+
+    for i <- 1..4 do
+      put_sink(route_id, 0, 100_000 + i * 10_000, 0, 30_000 + i * 1_000, 30_000 + i * 1_000)
+      RouteStatsRegistry.put_stats(route_id, base_stats(i * 50_000, 0), t0 + i * 1_000)
+    end
+
+    assert [{^route_id, stats, _}] = :ets.lookup(:route_stats, route_id)
+
+    # No loss at all, in the window or over the lifetime ...
+    assert stats["egress-loss-10s-pct"] == 0.0
+    assert stats["egress-loss-cumulative-pct"] == 0.0
+    assert stats["egress-streak"] == 0
+    assert stats["health"] == "healthy"
+
+    # ... while the retransmission cost is published as its own number, which is what an operator
+    # needs to judge the link: 1,000 of the last 10,000 packets were sent twice.
+    assert stats["egress-retx-10s-pct"] == 10.0
+    assert stats["egress-retx-destination"] == "destination 1"
+    assert stats["egress-retx-cumulative-pct"] > 24.0
+    assert stats["egress-retx-cumulative-pct"] < 25.0
+
+    RouteStatsRegistry.delete_stats(route_id)
+  end
+
+  test "sustained egress loss degrades health only after three consecutive reports" do
+    name = "EgressStreak-#{System.unique_integer([:positive])}"
+    {:ok, route} = Blackgate.Db.create_route(%{"name" => name})
+    route_id = route["id"]
+    t0 = System.system_time(:millisecond) - 60_000
+
+    put_sink(route_id, 0, 10_000, 0, 0, 0)
+    RouteStatsRegistry.put_stats(route_id, base_stats(0, 0), t0)
+
+    # 3.1 % of the egress packets DROPPED - given up on, not retransmitted - report after report.
+    put_sink(route_id, 0, 20_000, 310, 0, 310)
+    RouteStatsRegistry.put_stats(route_id, base_stats(10_000, 0), t0 + 1_000)
+    put_sink(route_id, 0, 30_000, 620, 0, 620)
+    RouteStatsRegistry.put_stats(route_id, base_stats(20_000, 0), t0 + 2_000)
+
+    assert [{^route_id, after_two, _}] = :ets.lookup(:route_stats, route_id)
+    assert after_two["health"] == "healthy"
+    assert after_two["egress-streak"] == 2
+
+    put_sink(route_id, 0, 40_000, 930, 0, 930)
+    RouteStatsRegistry.put_stats(route_id, base_stats(30_000, 0), t0 + 3_000)
+
+    # The injected `now` is in the past, so read the row itself: get_stats/1 would call it
+    # stale and report "disconnected" regardless of the verdict.
+    assert [{^route_id, stats, _}] = :ets.lookup(:route_stats, route_id)
+    assert stats["health"] == "network_loss_egress"
+    assert stats["egress-loss-destination"] == "destination 1"
+
+    # The event names the leg and the destination whose numbers tripped it, so an operator with
+    # a clean ingest side is not left staring at ingest figures that look fine.
+    assert Enum.any?(Blackgate.EventLog.get_events(limit: 20), fn event ->
+             event.type == "health_changed" and event.metadata[:route_name] == name and
+               String.contains?(event.message, "egress loss") and
+               String.contains?(event.message, "destination 1") and
+               String.contains?(event.message, "packets the sender dropped")
+           end)
+
+    RouteStatsRegistry.delete_stats(route_id)
+    Blackgate.Db.delete_route(route_id)
+  end
+
+  # `packets-sent` and `packets-sent-dropped` are the two the loss verdict is computed from;
+  # `packets-sent-retransmitted` is the recovered cost published beside it, and
+  # `packets-sent-lost` is carried because the engine sends it - it must not drive the verdict.
+  defp put_sink(route_id, index, sent, dropped, retx, lost) do
+    :ets.insert(
+      :route_stats,
+      {{route_id, :sink, index},
+       %{
+         "packets-sent" => sent,
+         "packets-sent-dropped" => dropped,
+         "packets-sent-retransmitted" => retx,
+         "packets-sent-lost" => lost
+       }, System.system_time(:millisecond)}
+    )
   end
 
   defp base_stats(received, lost) do

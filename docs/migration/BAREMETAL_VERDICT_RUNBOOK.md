@@ -31,8 +31,9 @@ Does NOT travel (re-create on the new machine):
   the repo and must be typed in again.
 - **`scripts/sudoers.d/blackgate-dev`** — machine-specific, intentionally not committed.
   `sudo` on the new machine will be password-gated the same way.
-- **sysctl buffers** — set them on the new machine (below). The appliance's
-  `iso-builder/files/blackgate-firstboot.sh` already does this persistently.
+- **sysctl buffers** — `make install` writes `/etc/sysctl.d/90-blackgate.conf` and applies it
+  (step 7), and warns if the values are still low. Nothing to copy; verify with
+  `sysctl -n net.core.rmem_max net.core.wmem_max` after install.
 
 ## Steps
 
@@ -51,7 +52,8 @@ git checkout rust-migration
 #    installs both; on a host prepared earlier: sudo apt-get install -y libgnutls28-dev nettle-dev
 make install
 
-# 2. SRT receive/send buffers: without this, high-bitrate SRT drops packets.
+# 2. SRT receive/send buffers. `make install` already did this (step 7) and warns if it
+#    could not; this line is the manual equivalent and is safe to re-run.
 sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
 
 # 3. Build both engines. The C oracle is the archived blackgate-lite engine; `verify`
