@@ -377,9 +377,8 @@ fn apply_source_stats_structure(s: &gst::Structure, tag: &str, stats: &mut Sourc
     }
 }
 
-/// C collect_sink_stats: fixed keys in fixed order.
-pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
-    let mut out = SinkStats {
+fn empty_sink_stats(sink_index: i32) -> SinkStats {
+    SinkStats {
         sink_index,
         bytes_sent_total: 0,
         packets_sent: 0,
@@ -393,7 +392,110 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
         negotiated_latency_ms: 0,
         connected_callers: 0,
         callers: Vec::new(),
-    };
+    }
+}
+
+/// Read one numeric field out of a caller entry. GStreamer types these counters
+/// inconsistently (gint64 on one field, guint64 on the next), which is the same
+/// trap that made the C engine's `gst_structure_get_int64` return 0 for the loss
+/// counters, so accept both.
+fn caller_i64(c: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<i64> {
+    let n = c.get(key)?.as_number()?;
+    n.as_i64()
+        .or_else(|| n.as_u64().map(|u| i64::try_from(u).unwrap_or(i64::MAX)))
+}
+
+fn caller_f64(c: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<f64> {
+    c.get(key)?.as_f64()
+}
+
+/// Sum a caller field across every connected client, trying each accepted field
+/// name in turn (GStreamer is not consistent: the top level says
+/// `packets-retransmitted`, some builds say `packets-sent-retransmitted`).
+fn caller_sum_i64(callers: &[serde_json::Map<String, serde_json::Value>], keys: &[&str]) -> i64 {
+    callers
+        .iter()
+        .filter_map(|c| keys.iter().find_map(|k| caller_i64(c, k)))
+        .sum()
+}
+
+fn caller_sum_f64(callers: &[serde_json::Map<String, serde_json::Value>], key: &str) -> f64 {
+    callers.iter().filter_map(|c| caller_f64(c, key)).sum()
+}
+
+fn caller_max_f64(callers: &[serde_json::Map<String, serde_json::Value>], key: &str) -> f64 {
+    callers
+        .iter()
+        .filter_map(|c| caller_f64(c, key))
+        .fold(0.0f64, f64::max)
+}
+
+/// C fallback for the sink side, mirroring `apply_source_stats_structure`:
+/// a listener srtsink keeps its per-connection counters inside `callers[]` and
+/// reports **only** `bytes-sent-total` at the top level (`packets-sent`,
+/// `packets-sent-lost`, `packets-retransmitted`, `rtt-ms`, `send-rate-mbps` and
+/// `bandwidth-mbps` all read 0 even with a client attached, measured on the
+/// production engine). Every egress figure the dashboard shows and every egress
+/// verdict `RouteStatsRegistry`/`RouteHealth` reach — throughput, RTT, lost,
+/// retransmitted, and `egress-loss-10s-pct` — is read from those top-level keys,
+/// so a listener egress leg measured nothing at all: `0 Mbps` / `0.0 ms` on
+/// screen and an egress-loss badge that could never light up, loss or no loss.
+///
+/// Aggregate the callers only when the top level is empty, so a sink in caller
+/// mode keeps GStreamer's own totals unchanged.
+fn apply_sink_caller_fallbacks(out: &mut SinkStats) {
+    if out.callers.is_empty() {
+        return;
+    }
+
+    if out.bytes_sent_total == 0 {
+        let total = caller_sum_i64(&out.callers, &["bytes-sent"]);
+        if total > 0 {
+            out.bytes_sent_total = total as u64;
+        }
+    }
+    if out.packets_sent <= 0 {
+        out.packets_sent = caller_sum_i64(&out.callers, &["packets-sent"]);
+    }
+    if out.packets_sent_lost <= 0 {
+        out.packets_sent_lost = caller_sum_i64(&out.callers, &["packets-sent-lost"]);
+    }
+    if out.packets_sent_dropped <= 0 {
+        out.packets_sent_dropped = caller_sum_i64(&out.callers, &["packets-sent-dropped"]);
+    }
+    if out.packets_sent_retransmitted <= 0 {
+        out.packets_sent_retransmitted = caller_sum_i64(
+            &out.callers,
+            &["packets-retransmitted", "packets-sent-retransmitted"],
+        );
+    }
+    if out.rtt_ms <= 0.0 {
+        // Max, not sum: RTT is a per-path figure, so the worst client is what a
+        // "is egress healthy?" verdict should see (same choice as the source leg).
+        out.rtt_ms = caller_max_f64(&out.callers, "rtt-ms");
+    }
+    if out.send_rate_mbps <= 0.0 {
+        out.send_rate_mbps = caller_sum_f64(&out.callers, "send-rate-mbps");
+    }
+    if out.bandwidth_mbps <= 0.0 {
+        out.bandwidth_mbps = caller_sum_f64(&out.callers, "bandwidth-mbps");
+    }
+    if out.negotiated_latency_ms <= 0 {
+        let max = out
+            .callers
+            .iter()
+            .filter_map(|c| caller_i64(c, "negotiated-latency-ms"))
+            .max()
+            .unwrap_or(0);
+        if max > 0 {
+            out.negotiated_latency_ms = i32::try_from(max).unwrap_or(i32::MAX);
+        }
+    }
+}
+
+/// C collect_sink_stats: fixed keys in fixed order.
+pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
+    let mut out = empty_sink_stats(sink_index);
 
     let Some(s) = stats_structure(element) else {
         return out;
@@ -420,6 +522,8 @@ pub fn build_sink_stats(element: &gst::Element, sink_index: i32) -> SinkStats {
     let (n, callers) = extract_callers(&s);
     out.connected_callers = n;
     out.callers = callers;
+
+    apply_sink_caller_fallbacks(&mut out);
 
     out
 }
@@ -841,4 +945,157 @@ mod tests {
         assert_eq!(hevc_profile_name(1, 1, 10), "Main 10");
         assert_eq!(hevc_profile_name(1, 1, 8), "Main");
     }
+
+    /// A caller entry exactly as the production engine emitted it for a listener
+    /// srtsink with one connected client (captured from an isolated probe).
+    fn caller_entry() -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({
+            "caller-address": "127.0.0.1:46360",
+            "bytes-sent": 2907680u64,
+            "bytes-retransmitted": 0,
+            "packets-sent": 2138,
+            "packets-sent-lost": 0,
+            "packets-sent-dropped": 0,
+            "packets-retransmitted": 0,
+            "rtt-ms": 0.068,
+            "send-rate-mbps": 1.6624938937863671,
+            "bandwidth-mbps": 1474.5,
+            "negotiated-latency-ms": 2000,
+            "packet-ack-received": 209,
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    /// A listener srtsink reports ONLY bytes-sent-total at the top level: with a
+    /// client attached, packets-sent / lost / retransmitted / rtt-ms /
+    /// send-rate-mbps all read 0. The dashboard read those zeroes and showed
+    /// `0 Mbps`, `0.0 ms`, `0 lost`, `0 retx` next to a moving byte total, and
+    /// every egress verdict was judged on them.
+    #[test]
+    fn listener_sink_takes_its_numbers_from_the_connected_caller() {
+        let mut out = empty_sink_stats(0);
+        out.bytes_sent_total = 2813608;
+        out.callers = vec![caller_entry()];
+        out.connected_callers = 1;
+
+        apply_sink_caller_fallbacks(&mut out);
+
+        assert_eq!(out.packets_sent, 2138, "the panel's sent counter");
+        assert_eq!(out.packets_sent_lost, 0, "peer-reported loss");
+        assert_eq!(out.packets_sent_retransmitted, 0, "retransmits");
+        assert_eq!(out.rtt_ms, 0.068, "the RTT the operator asked about");
+        assert!(
+            (out.send_rate_mbps - 1.6624938937863671).abs() < 1e-9,
+            "send rate"
+        );
+        assert_eq!(out.bandwidth_mbps, 1474.5);
+        assert_eq!(out.negotiated_latency_ms, 2000);
+        // The top level's own total is real and must not be replaced by the caller sum.
+        assert_eq!(out.bytes_sent_total, 2813608);
+    }
+
+    /// A sink in caller mode (connecting out to a listener) is populated by
+    /// GStreamer itself, so the fallback must stay out of the way.
+    #[test]
+    fn caller_mode_sink_keeps_gstreamers_own_totals() {
+        let mut out = empty_sink_stats(1);
+        out.bytes_sent_total = 999;
+        out.packets_sent = 500;
+        out.packets_sent_lost = 7;
+        out.packets_sent_retransmitted = 3;
+        out.rtt_ms = 1.5;
+        out.send_rate_mbps = 9.0;
+        out.negotiated_latency_ms = 120;
+        out.callers = vec![caller_entry()];
+        out.connected_callers = 1;
+
+        apply_sink_caller_fallbacks(&mut out);
+
+        assert_eq!(out.packets_sent, 500);
+        assert_eq!(out.packets_sent_lost, 7);
+        assert_eq!(out.packets_sent_retransmitted, 3);
+        assert_eq!(out.rtt_ms, 1.5);
+        assert_eq!(out.send_rate_mbps, 9.0);
+        assert_eq!(out.negotiated_latency_ms, 120);
+    }
+
+    /// Two viewers: counters and rates are per connection, so they add up; RTT is
+    /// a per-path figure, so the worst client is what the verdict has to see.
+    #[test]
+    fn multiple_callers_sum_counters_and_worst_rtt_wins() {
+        let mut second = caller_entry();
+        second.insert("packets-sent".into(), serde_json::Value::from(1000i64));
+        second.insert("packets-sent-lost".into(), serde_json::Value::from(5i64));
+        second.insert(
+            "packets-retransmitted".into(),
+            serde_json::Value::from(2i64),
+        );
+        second.insert("rtt-ms".into(), serde_json::Value::from(31.25f64));
+        second.insert("send-rate-mbps".into(), serde_json::Value::from(4.0f64));
+        second.insert(
+            "negotiated-latency-ms".into(),
+            serde_json::Value::from(5000i64),
+        );
+
+        let mut out = empty_sink_stats(0);
+        out.callers = vec![caller_entry(), second];
+        out.connected_callers = 2;
+
+        apply_sink_caller_fallbacks(&mut out);
+
+        assert_eq!(out.packets_sent, 3138);
+        assert_eq!(out.packets_sent_lost, 5);
+        assert_eq!(out.packets_sent_retransmitted, 2);
+        assert_eq!(out.rtt_ms, 31.25, "worst path, not the sum");
+        assert!((out.send_rate_mbps - 5.662493893786367).abs() < 1e-9);
+        assert_eq!(out.negotiated_latency_ms, 5000);
+    }
+
+    /// No client connected: there is nothing to aggregate, and the engine must not
+    /// invent numbers to fill the gaps.
+    #[test]
+    fn listener_sink_without_clients_stays_empty() {
+        let mut out = empty_sink_stats(0);
+        out.bytes_sent_total = 2813608;
+
+        apply_sink_caller_fallbacks(&mut out);
+
+        assert_eq!(out.packets_sent, 0);
+        assert_eq!(out.packets_sent_lost, 0);
+        assert_eq!(out.rtt_ms, 0.0);
+        assert_eq!(out.send_rate_mbps, 0.0);
+    }
+
+    /// The aggregated retransmit count must still reach the registry under the
+    /// name it reads, `packets-sent-retransmitted` — the caller entry calls the
+    /// same figure `packets-retransmitted`.
+    #[test]
+    fn aggregated_retransmits_reach_the_wire_under_the_key_the_controller_reads() {
+        let mut caller = caller_entry();
+        caller.insert(
+            "packets-retransmitted".into(),
+            serde_json::Value::from(42i64),
+        );
+        caller.insert("packets-sent".into(), serde_json::Value::from(100i64));
+        caller.insert("packets-sent-lost".into(), serde_json::Value::from(6i64));
+
+        let mut out = empty_sink_stats(0);
+        out.callers = vec![caller];
+        out.connected_callers = 1;
+
+        apply_sink_caller_fallbacks(&mut out);
+
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["packets-sent-retransmitted"], 42);
+        assert_eq!(v["packets-sent"], 100);
+        assert_eq!(v["packets-sent-lost"], 6);
+        // ...and the figure the egress window divides is a ratio between two
+        // non-zero counters now, instead of 0/(0+0).
+        let lost = v["packets-sent-lost"].as_i64().unwrap() as f64;
+        let sent = v["packets-sent"].as_i64().unwrap() as f64;
+        assert!(lost / (sent + lost) > 0.0);
+    }
+
 }
