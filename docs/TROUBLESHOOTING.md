@@ -145,6 +145,12 @@ ping -c 200 -i 0.02 <gateway-ip>           # the same, to the router: should be 
 
 If the router is clean and the player is not, the loss is on the last hop or at the player.
 
+**No viewer connected**: egress figures read `—` rather than 0, because a destination that sends
+nothing has no loss rate to report. A listener srtsink keeps its last counters after the client goes
+away and goes on counting drops for a socket nobody reads, which made the ratio read 100 % and pinned
+the route to "Egress Dropped" long after the viewer had left (measured on this box). An idle leg is
+not a lossy leg: the verdict needs packets actually being sent across the window.
+
 ---
 
 ## 🟡 High CPU or Memory Usage
