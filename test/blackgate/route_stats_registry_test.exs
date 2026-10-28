@@ -257,6 +257,53 @@ defmodule Blackgate.RouteStatsRegistryTest do
     Blackgate.Db.delete_route(route_id)
   end
 
+  test "a destination with no transfer is not reported as loss" do
+    # Measured live on this box after the listener aggregation went in: the viewer went away,
+    # the sink kept its last counters and went on counting drops for a socket nobody read, so
+    # `dropped / (sent + dropped)` read 100 % and pinned SPOTV2 to "Egress Dropped" with a frozen
+    # sent=4213 and dropped climbing ~85/s. No packet sent in the window means there is nothing
+    # to judge, so the window publishes nothing instead of a fabricated 100 %.
+    route_id = unique_route_id()
+    t0 = System.system_time(:millisecond) - 10_000
+
+    put_sink(route_id, 0, 4213, 449, 0, 0)
+    RouteStatsRegistry.put_stats(route_id, base_stats(0, 0), t0)
+
+    for i <- 1..4 do
+      put_sink(route_id, 0, 4213, 449 + i * 800, 0, 0)
+      RouteStatsRegistry.put_stats(route_id, base_stats(i * 500, 0), t0 + i * 1_000)
+    end
+
+    assert [{^route_id, stats, _}] = :ets.lookup(:route_stats, route_id)
+    assert stats["egress-loss-10s-pct"] == nil
+    assert stats["egress-streak"] == 0
+    assert stats["health"] == "healthy"
+
+    RouteStatsRegistry.delete_stats(route_id)
+  end
+
+  test "an idle destination cannot outvote a lossy one" do
+    # `nil` sorts above every number in Erlang term order, so without the filter in
+    # worst_destination the idle destination won the comparison and hid the 5 % on the other.
+    route_id = unique_route_id()
+    t0 = System.system_time(:millisecond) - 10_000
+
+    put_sink(route_id, 0, 1000, 0, 0, 0)
+    put_sink(route_id, 1, 5000, 0, 0, 0)
+    RouteStatsRegistry.put_stats(route_id, base_stats(0, 0), t0)
+
+    # destination 1 sends nothing at all; destination 2 sends and drops 5 %.
+    put_sink(route_id, 0, 1000, 900, 0, 0)
+    put_sink(route_id, 1, 6000, 50, 0, 0)
+    RouteStatsRegistry.put_stats(route_id, base_stats(50_000, 0), t0 + 1_000)
+
+    assert [{^route_id, stats, _}] = :ets.lookup(:route_stats, route_id)
+    assert stats["egress-loss-10s-pct"] > 4.0
+    assert stats["egress-loss-destination"] == "destination 2"
+
+    RouteStatsRegistry.delete_stats(route_id)
+  end
+
   # `packets-sent` and `packets-sent-dropped` are the two the loss verdict is computed from;
   # `packets-sent-retransmitted` is the recovered cost published beside it, and
   # `packets-sent-lost` is carried because the engine sends it - it must not drive the verdict.

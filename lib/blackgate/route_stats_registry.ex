@@ -321,7 +321,17 @@ defmodule Blackgate.RouteStatsRegistry do
             d_dropped = max(0, latest.dropped - before.dropped)
             d_retx = max(0, latest.retx - before.retx)
 
-            {index, ratio_pct(d_dropped, d_sent + d_dropped), ratio_pct(d_retx, d_sent)}
+            # No packet sent across the whole window means there is no transfer to judge: a
+            # destination whose client went away keeps its last counters and goes on counting
+            # drops for a socket nobody reads, so `dropped / (sent + dropped)` reads 100 % and
+            # would pin an idle destination to "Egress Dropped" indefinitely (measured on this
+            # box: SPOTV2 stayed at 100 % with a frozen sent=4213 and dropped climbing 85/s
+            # after the viewer disconnected). An idle leg is not a lossy leg.
+            if d_sent == 0 do
+              {index, nil, nil}
+            else
+              {index, ratio_pct(d_dropped, d_sent + d_dropped), ratio_pct(d_retx, d_sent)}
+            end
           end)
 
         %{
@@ -340,6 +350,10 @@ defmodule Blackgate.RouteStatsRegistry do
   defp worst_destination(per_destination, pick) do
     per_destination
     |> Enum.map(fn entry -> {pick.(entry), elem(entry, 0)} end)
+    # `nil` sorts ABOVE every number in Erlang term order, so an idle destination (nil ratio)
+    # would win this comparison and hide a real loss on another destination. Judge only the
+    # destinations that had a measurement.
+    |> Enum.filter(fn {pct, _index} -> is_number(pct) end)
     |> Enum.max_by(&elem(&1, 0), fn -> {nil, nil} end)
     |> case do
       {pct, index} when is_number(pct) and is_integer(index) ->
