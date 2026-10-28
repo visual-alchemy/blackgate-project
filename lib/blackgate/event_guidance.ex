@@ -40,6 +40,9 @@ defmodule Blackgate.EventGuidance do
       "check the source encoder — the gateway is receiving corrupt frames",
     "sdi_failed" =>
       "the route keeps streaming but has no SDI output, and the engine does not retry: check the Blackmagic Desktop Video driver and the card's devices, then restart the route",
+    "sdi_playout_abandoned" =>
+      "the SDI output stayed dark through every automatic restart, so the gateway stopped restarting the route (its SRT output keeps running). Check the Blackmagic driver, the card's devices and the cable, then restart the route by hand",
+    "sdi_playout_recovered" => "none — SDI playout is back and automatic recovery is re-armed",
     "sdi_audio_silent" =>
       "check the audio in the source; the gateway restarts the pipeline automatically while SDI audio stays silent",
     "sdi_audio_source_silent" =>

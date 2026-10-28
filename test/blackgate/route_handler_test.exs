@@ -485,6 +485,125 @@ defmodule Blackgate.RouteHandlerTest do
     assert elem(res, 1) == :reconnecting
   end
 
+  # A frozen playout that survives a restart used to restart the route again immediately, forever:
+  # six restarts in 48 minutes on a live route, each one cutting the SRT egress that was healthy.
+  # The recovery budget spaces the attempts out, then stops.
+  test "watchdog waits out the backoff before restarting a still-frozen SDI playout" do
+    now = System.monotonic_time(:millisecond)
+
+    data = %{
+      id: "test_route_sdi",
+      route: %{
+        "id" => "test_route_sdi",
+        "destinations" => [%{"schema" => "SDI", "device-number" => 2}]
+      },
+      port: nil,
+      ffmpeg_port: nil,
+      reconnect_timer: nil,
+      reconnect_started_at: nil,
+      reconnect_count: 0,
+      last_bytes_received: 100,
+      last_bytes_changed_at: now,
+      last_sdi_frames: %{2 => 500},
+      last_sdi_frames_changed_at: now - 70_000,
+      started_at: now - 80_000,
+      consecutive_startup_crashes: 0,
+      # one restart already spent, 30s ago — the next one costs 120s
+      sdi_playout_restarts: 1,
+      sdi_playout_last_restart_at: now - 30_000,
+      sdi_playout_gave_up: false
+    }
+
+    stats = %{
+      "total-bytes-received" => 100,
+      "sdi_video_stats" => [%{"device_number" => 2, "video_frames" => 500}]
+    }
+
+    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
+
+    res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+    assert elem(res, 0) == :keep_state_and_data
+  end
+
+  test "watchdog abandons SDI restarts once the budget is spent and keeps the route running" do
+    now = System.monotonic_time(:millisecond)
+
+    data = %{
+      id: "test_route_sdi",
+      route: %{
+        "id" => "test_route_sdi",
+        "destinations" => [%{"schema" => "SDI", "device-number" => 2}]
+      },
+      port: nil,
+      ffmpeg_port: nil,
+      reconnect_timer: nil,
+      reconnect_started_at: nil,
+      reconnect_count: 0,
+      last_bytes_received: 100,
+      last_bytes_changed_at: now,
+      last_sdi_frames: %{2 => 500},
+      last_sdi_frames_changed_at: now - 900_000,
+      started_at: now - 1_000_000,
+      consecutive_startup_crashes: 0,
+      sdi_playout_restarts: 4,
+      sdi_playout_last_restart_at: now - 700_000,
+      sdi_playout_gave_up: false
+    }
+
+    stats = %{
+      "total-bytes-received" => 100,
+      "sdi_video_stats" => [%{"device_number" => 2, "video_frames" => 500}]
+    }
+
+    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
+
+    res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+
+    # No restart: the route stays :started so its SRT egress survives.
+    assert elem(res, 0) == :keep_state
+    assert elem(res, 1).sdi_playout_gave_up
+  end
+
+  test "watchdog re-arms SDI recovery when playout comes back" do
+    now = System.monotonic_time(:millisecond)
+
+    data = %{
+      id: "test_route_sdi",
+      route: %{
+        "id" => "test_route_sdi",
+        "destinations" => [%{"schema" => "SDI", "device-number" => 2}]
+      },
+      port: nil,
+      ffmpeg_port: nil,
+      reconnect_timer: nil,
+      reconnect_started_at: nil,
+      reconnect_count: 0,
+      last_bytes_received: 100,
+      last_bytes_changed_at: now,
+      last_sdi_frames: %{2 => 500},
+      last_sdi_frames_changed_at: now - 900_000,
+      started_at: now - 1_000_000,
+      consecutive_startup_crashes: 0,
+      sdi_playout_restarts: 2,
+      sdi_playout_last_restart_at: now - 700_000,
+      sdi_playout_gave_up: true
+    }
+
+    stats = %{
+      "total-bytes-received" => 100,
+      "sdi_video_stats" => [%{"device_number" => 2, "video_frames" => 510}]
+    }
+
+    Blackgate.RouteStatsRegistry.put_stats("test_route_sdi", stats)
+
+    res = RouteHandler.handle_event({:timeout, :watchdog}, :check, :started, data)
+
+    assert elem(res, 0) == :keep_state
+    updated = elem(res, 1)
+    assert updated.sdi_playout_restarts == 0
+    refute updated.sdi_playout_gave_up
+  end
+
   # =========================================================================
   # FAILOVER HELPER TESTS
   # =========================================================================

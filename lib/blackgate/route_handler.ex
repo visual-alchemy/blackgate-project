@@ -23,6 +23,18 @@ defmodule Blackgate.RouteHandler do
   # Don't check for first 30 seconds after start
   @watchdog_grace_period_ms 30_000
 
+  # SDI playout freeze recovery is BOUNDED. A frozen playout is either transient (a device error
+  # that clears when the pipeline is rebuilt) or permanent (the engine dropped the SDI branch and
+  # keeps streaming without it: "SDI sink N failed — continuing without SDI output"). Restarting
+  # cannot fix the permanent case, and every restart also takes down the SRT egress that was
+  # healthy — measured on a live route: six restarts in 48 minutes, each one blinding the SDI
+  # output for the operator while the CDN feed kept being cut. So attempts are spaced out and then
+  # abandoned: the route keeps running without SDI and says so, once, instead of flapping forever.
+  @sdi_playout_max_restarts 4
+  # Wait required before the 2nd, 3rd and 4th restart. The first one fires as soon as the freeze
+  # threshold is crossed, because a transient freeze is exactly the case a restart does fix.
+  @sdi_playout_backoff_ms [120_000, 300_000, 600_000]
+
   # SDI audio desync auto-recovery (RTMP/HTTP/HLS only)
   # Minimum total audio buffers before we treat a silence event as a hardware desync.
   # If total_buffers < this, the source itself likely has no audio — do not restart.
@@ -58,6 +70,11 @@ defmodule Blackgate.RouteHandler do
       last_bytes_changed_at: nil,
       last_sdi_frames: %{},
       last_sdi_frames_changed_at: nil,
+      # SDI playout freeze recovery budget: restarts already spent on the current streak, when the
+      # last one happened, and whether we gave up. Reset when playout is healthy again.
+      sdi_playout_restarts: 0,
+      sdi_playout_last_restart_at: nil,
+      sdi_playout_gave_up: false,
       started_at: nil,
       consecutive_startup_crashes: 0,
       # Tracks last time we auto-restarted due to SDI audio desync.
@@ -375,39 +392,140 @@ defmodule Blackgate.RouteHandler do
               }
             )
 
-            trigger_restart(data)
+            # A network-stall restart rebuilds the pipeline, which retries the SDI device too: the
+            # playout-freeze budget starts over. Otherwise a stale budget would abandon SDI recovery
+            # on a route whose stream is now healthy.
+            trigger_restart(reset_sdi_playout_budget(data))
 
           sdi_stall_duration >= @watchdog_stall_threshold_ms ->
-            Logger.warning(
-              "RouteHandler: Watchdog detected SDI playout freeze (#{div(sdi_stall_duration, 1000)}s no frames), restarting route"
-            )
-
-            Blackgate.EventLog.log(
-              :warning,
-              "watchdog_restart",
-              "SDI playout frozen for #{div(sdi_stall_duration, 1000)}s, restarting route",
-              %{
-                route_id: data.id,
-                route_name: get_in(data, [:route, "name"]) || data.id
-              }
-            )
-
-            trigger_restart(data)
+            handle_sdi_playout_freeze(data, sdi_stall_duration, now)
 
           true ->
-            updated_data = %{
-              data
-              | last_bytes_received: last_bytes_received,
-                last_bytes_changed_at: last_bytes_changed_at,
-                last_sdi_frames: last_sdi_frames,
-                last_sdi_frames_changed_at: last_sdi_frames_changed_at
-            }
+            updated_data =
+              %{
+                data
+                | last_bytes_received: last_bytes_received,
+                  last_bytes_changed_at: last_bytes_changed_at,
+                  last_sdi_frames: last_sdi_frames,
+                  last_sdi_frames_changed_at: last_sdi_frames_changed_at
+              }
+              |> note_sdi_playout_recovery()
 
             {:keep_state, updated_data,
              {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
         end
       end
     end
+  end
+
+  # SDI playout is frozen while the source is still delivering bytes: the SDI branch died, the
+  # decoder cannot keep up, or the card hiccupped. Restarting fixes the transient cases, so the
+  # first attempt is immediate; after that each attempt costs a wait, and once the budget is spent
+  # the route is left RUNNING so its SRT egress survives, with one critical event explaining why the
+  # SDI output is dark. Without the bound this looped: six restarts in 48 minutes on a live route.
+  defp handle_sdi_playout_freeze(data, sdi_stall_duration, now) do
+    attempts = Map.get(data, :sdi_playout_restarts, 0)
+    last_restart_at = Map.get(data, :sdi_playout_last_restart_at)
+    gave_up? = Map.get(data, :sdi_playout_gave_up, false)
+    stalled_for = div(sdi_stall_duration, 1000)
+
+    cond do
+      gave_up? ->
+        # Already reported. Keep checking so a self-clearing freeze still resets the budget.
+        {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+
+      attempts >= @sdi_playout_max_restarts ->
+        Logger.error(
+          "RouteHandler: SDI playout frozen for #{stalled_for}s after #{attempts} restart(s) — " <>
+            "giving up automatic restarts; the route keeps streaming without SDI output"
+        )
+
+        Blackgate.EventLog.log(
+          :critical,
+          "sdi_playout_abandoned",
+          "SDI playout frozen after #{attempts} automatic restart(s); route left running without SDI output",
+          %{
+            route_id: data.id,
+            route_name: get_in(data, [:route, "name"]) || data.id
+          }
+        )
+
+        {:keep_state, Map.put(data, :sdi_playout_gave_up, true),
+         {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+
+      sdi_restart_wait_ms(attempts) > elapsed_since(last_restart_at, now) ->
+        # Inside the backoff window: wait it out instead of hammering the pipeline.
+        {:keep_state_and_data, {{:timeout, :watchdog}, @watchdog_check_interval_ms, :check}}
+
+      true ->
+        Logger.warning(
+          "RouteHandler: Watchdog detected SDI playout freeze (#{stalled_for}s no frames), " <>
+            "restarting route (attempt #{attempts + 1}/#{@sdi_playout_max_restarts})"
+        )
+
+        Blackgate.EventLog.log(
+          :warning,
+          "watchdog_restart",
+          "SDI playout frozen for #{stalled_for}s, restarting route",
+          %{
+            route_id: data.id,
+            route_name: get_in(data, [:route, "name"]) || data.id
+          }
+        )
+
+        data
+        |> Map.put(:sdi_playout_restarts, attempts + 1)
+        |> Map.put(:sdi_playout_last_restart_at, now)
+        |> Map.put(:sdi_playout_gave_up, false)
+        |> trigger_restart()
+    end
+  end
+
+  defp sdi_restart_wait_ms(0), do: 0
+
+  defp sdi_restart_wait_ms(attempts) when attempts > 0 do
+    Enum.at(
+      @sdi_playout_backoff_ms,
+      min(attempts - 1, length(@sdi_playout_backoff_ms) - 1)
+    )
+  end
+
+  defp elapsed_since(nil, _now), do: :infinity
+
+  defp elapsed_since(then, now) when is_integer(then), do: now - then
+
+  # Playout is advancing again: the budget is available for the next freeze, and an abandoned
+  # recovery is reported as recovered so the operator knows the SDI output is back.
+  defp note_sdi_playout_recovery(data) do
+    attempts = Map.get(data, :sdi_playout_restarts, 0)
+    gave_up? = Map.get(data, :sdi_playout_gave_up, false)
+
+    if attempts > 0 or gave_up? do
+      Logger.info(
+        "RouteHandler: SDI playout recovered after #{attempts} restart(s); automatic recovery re-armed"
+      )
+
+      Blackgate.EventLog.log(
+        :info,
+        "sdi_playout_recovered",
+        "SDI playout recovered after #{attempts} automatic restart(s)",
+        %{
+          route_id: data.id,
+          route_name: get_in(data, [:route, "name"]) || data.id
+        }
+      )
+
+      reset_sdi_playout_budget(data)
+    else
+      data
+    end
+  end
+
+  defp reset_sdi_playout_budget(data) do
+    data
+    |> Map.put(:sdi_playout_restarts, 0)
+    |> Map.put(:sdi_playout_last_restart_at, nil)
+    |> Map.put(:sdi_playout_gave_up, false)
   end
 
   # Pipeline process exited — enter reconnecting state
