@@ -127,7 +127,13 @@ defmodule Blackgate.ProcessMonitorTest do
 
         assert ProcessMonitor.engine_pid?(os_pid)
       after
+        # `Port.close/1` does NOT reap this child: the shell never reads its stdin, so it survives as an orphan
+        # (PPID 1) running the loop with "blackgate-engine" in its command line. One accumulated per full suite
+        # run - 324 of them on this box when it was measured - and they then appear in Settings > System >
+        # Pipelines as engines with no route attached (the process monitor lists by that same string). Kill the
+        # OS process explicitly.
         Port.close(port)
+        System.cmd("kill", ["-KILL", Integer.to_string(os_pid)], stderr_to_stdout: true)
       end
     end
   end
